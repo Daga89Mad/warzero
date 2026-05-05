@@ -1,0 +1,234 @@
+// lib/models/lobby_model.dart
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+// ── Estado de un jugador dentro del lobby ─────────────────────
+class LobbyJugador {
+  final String uid;
+  final String alias;
+  final int? ejercitoId;
+  final bool listo;
+
+  const LobbyJugador({
+    required this.uid,
+    required this.alias,
+    this.ejercitoId,
+    this.listo = false,
+  });
+
+  factory LobbyJugador.fromMap(Map<String, dynamic> d) => LobbyJugador(
+        uid: d['uid'] as String? ?? '',
+        alias: d['alias'] as String? ?? 'Jugador',
+        ejercitoId: (d['ejercitoId'] as num?)?.toInt(),
+        listo: d['listo'] as bool? ?? false,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'uid': uid,
+        'alias': alias,
+        'ejercitoId': ejercitoId,
+        'listo': listo,
+      };
+
+  LobbyJugador copyWith({
+    String? uid,
+    String? alias,
+    int? ejercitoId,
+    bool? listo,
+  }) =>
+      LobbyJugador(
+        uid: uid ?? this.uid,
+        alias: alias ?? this.alias,
+        ejercitoId: ejercitoId ?? this.ejercitoId,
+        listo: listo ?? this.listo,
+      );
+}
+
+// ── Stats de partida por jugador (energies, PC) ───────────────
+/// Se guarda en el campo `statsPartida` del documento Partida.
+/// Estructura Firestore: { uid: { energies: int, pc: int } }
+class StatsPartidaJugador {
+  final int energies;
+  final int pc;
+
+  const StatsPartidaJugador({this.energies = 0, this.pc = 0});
+
+  factory StatsPartidaJugador.fromMap(Map<String, dynamic> d) =>
+      StatsPartidaJugador(
+        energies: (d['energies'] as num?)?.toInt() ?? 0,
+        pc: (d['pc'] as num?)?.toInt() ?? 0,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'energies': energies,
+        'pc': pc,
+      };
+
+  StatsPartidaJugador sumar({required int energies, required int pc}) =>
+      StatsPartidaJugador(
+        energies: this.energies + energies,
+        pc: this.pc + pc,
+      );
+}
+
+// ── Modo de fin de turno ─────────────────────────────────────
+enum ModoTurno { rapida, diario }
+
+// ── Estado general del lobby ──────────────────────────────────
+enum LobbyEstado { esperando, enCurso, finalizada }
+
+class LobbyModel {
+  final String id;
+  final String nombre;
+  final String hostUid;
+  final bool esPrivada;
+  final String contrasena;
+  final int maxJugadores;
+  final List<LobbyJugador> jugadores;
+  final LobbyEstado estado;
+  final DateTime creadoEn;
+  final ModoTurno modoTurno;
+  final int turnoActual;
+  final List<String> cerradoPor;
+
+  /// Estadísticas de combate por jugador: uid → StatsPartidaJugador
+  final Map<String, StatsPartidaJugador> statsPartida;
+
+  /// Log del último combate resuelto (para mostrar resultados en pantalla).
+  final List<Map<String, dynamic>> ultimoCombateLog;
+
+  /// ID del documento en la colección `Mapas`.
+  /// Null si la partida no tiene mapa asignado (se usa terreno por defecto: todo land).
+  final String? mapaId;
+
+  const LobbyModel({
+    required this.id,
+    required this.nombre,
+    required this.hostUid,
+    required this.esPrivada,
+    required this.contrasena,
+    required this.maxJugadores,
+    required this.jugadores,
+    required this.estado,
+    required this.creadoEn,
+    this.modoTurno = ModoTurno.rapida,
+    this.turnoActual = 1,
+    this.cerradoPor = const [],
+    this.statsPartida = const {},
+    this.ultimoCombateLog = const [],
+    this.mapaId,
+  });
+
+  bool get estaLleno => jugadores.length >= maxJugadores;
+  bool get todosListos =>
+      jugadores.isNotEmpty && jugadores.every((j) => j.listo);
+  bool get todosCerraronTurno =>
+      jugadores.isNotEmpty &&
+      jugadores.every((j) => cerradoPor.contains(j.uid));
+
+  /// Devuelve las stats de un jugador, o vacías si aún no tiene.
+  StatsPartidaJugador statsDeJugador(String uid) =>
+      statsPartida[uid] ?? const StatsPartidaJugador();
+
+  factory LobbyModel.fromFirestore(DocumentSnapshot doc) {
+    final d = doc.data() as Map<String, dynamic>;
+
+    // Parsear statsPartida
+    final rawStats = d['statsPartida'] as Map<String, dynamic>? ?? {};
+    final stats = rawStats.map(
+      (uid, v) => MapEntry(
+        uid,
+        StatsPartidaJugador.fromMap(Map<String, dynamic>.from(v as Map)),
+      ),
+    );
+
+    // Parsear ultimoCombateLog
+    final rawLog = d['ultimoCombateLog'] as List<dynamic>? ?? [];
+    final combateLog =
+        rawLog.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+
+    return LobbyModel(
+      id: doc.id,
+      nombre: d['nombre'] as String? ?? 'Partida',
+      hostUid: d['hostUid'] as String? ?? '',
+      esPrivada: d['esPrivada'] as bool? ?? false,
+      contrasena: d['contrasena'] as String? ?? '',
+      maxJugadores: (d['maxJugadores'] as num?)?.toInt() ?? 4,
+      jugadores: ((d['jugadores'] as List<dynamic>?) ?? [])
+          .map((j) => LobbyJugador.fromMap(j as Map<String, dynamic>))
+          .toList(),
+      estado: _parseEstado(d['estado'] as String?),
+      creadoEn: (d['creadoEn'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      modoTurno: _parseModoTurno(d['modoTurno'] as String?),
+      turnoActual: (d['turnoActual'] as num?)?.toInt() ?? 1,
+      cerradoPor: List<String>.from(d['cerradoPor'] as List? ?? []),
+      statsPartida: stats,
+      ultimoCombateLog: combateLog,
+      mapaId: d['mapaId'] as String?,
+    );
+  }
+
+  static LobbyEstado _parseEstado(String? s) {
+    switch (s) {
+      case 'en_curso':
+        return LobbyEstado.enCurso;
+      case 'finalizada':
+        return LobbyEstado.finalizada;
+      default:
+        return LobbyEstado.esperando;
+    }
+  }
+
+  static ModoTurno _parseModoTurno(String? s) =>
+      s == 'diario' ? ModoTurno.diario : ModoTurno.rapida;
+
+  Map<String, dynamic> toMap() => {
+        'nombre': nombre,
+        'hostUid': hostUid,
+        'esPrivada': esPrivada,
+        'contrasena': contrasena,
+        'maxJugadores': maxJugadores,
+        'jugadores': jugadores.map((j) => j.toMap()).toList(),
+        'estado': _estadoStr(estado),
+        'creadoEn': Timestamp.fromDate(creadoEn),
+        'modoTurno': modoTurno == ModoTurno.diario ? 'diario' : 'rapida',
+        'turnoActual': turnoActual,
+        'cerradoPor': cerradoPor,
+        'statsPartida': statsPartida.map((uid, s) => MapEntry(uid, s.toMap())),
+        'ultimoCombateLog': ultimoCombateLog,
+        if (mapaId != null) 'mapaId': mapaId,
+      };
+
+  static String _estadoStr(LobbyEstado e) {
+    switch (e) {
+      case LobbyEstado.enCurso:
+        return 'en_curso';
+      case LobbyEstado.finalizada:
+        return 'finalizada';
+      default:
+        return 'esperando';
+    }
+  }
+}
+
+// ── Modelo de ejército disponible ─────────────────────────────
+class EjercitoInfo {
+  final int id;
+  final String nombre;
+  final String descripcion;
+  final String icono;
+
+  const EjercitoInfo({
+    required this.id,
+    required this.nombre,
+    required this.descripcion,
+    required this.icono,
+  });
+}
+
+const List<EjercitoInfo> kEjercitos = [
+  EjercitoInfo(id: 1, nombre: 'Humanos', descripcion: '', icono: '⚔️'),
+  EjercitoInfo(id: 2, nombre: 'Biónicos', descripcion: '', icono: '🛡️'),
+  EjercitoInfo(id: 3, nombre: 'Demonios', descripcion: '', icono: '⚓'),
+  EjercitoInfo(id: 4, nombre: 'Robots', descripcion: '', icono: '🌒'),
+];

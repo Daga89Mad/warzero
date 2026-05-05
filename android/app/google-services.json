@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "37803276260",
+    "project_id": "warzero-6fe4d",
+    "storage_bucket": "warzero-6fe4d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:37803276260:android:a1ebfcdf62a3af20cef9f1",
+        "android_client_info": {
+          "package_name": "com.example.warzero"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBpPjctiAsaHJ_6UJxXZO8R8Ch9sqWvLag"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
