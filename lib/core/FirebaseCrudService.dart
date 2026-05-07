@@ -7,42 +7,109 @@ class FirebaseCrudService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  // ─────────────────────────────────────────────────────────────
+  // Configuración del perfil inicial de un jugador nuevo
+  // ─────────────────────────────────────────────────────────────
+
+  /// Cartas iniciales que recibe el jugador en su colección personal.
+  /// Cantidad por defecto: 2 de cada una.
+  static const List<String> _cartasInicialesIds = [
+    '8KZtDtblcypCtFfDSF08',
+    'k1ExDeLkxEvUtDPUUJvt',
+    'kKJl1PyTsfIytyfOkfiS',
+    'piqdzNbXTy1xt2ibg8Oi',
+    'xPcw2Adpdfdb8TMp4Uiy',
+  ];
+
+  /// Cartas que componen el mazo inicial de Ejército 1 (Humanos).
+  /// Cantidad por defecto: 2 de cada una.
+  static const List<String> _cartasMazoHumanosIds = [
+    '8KZtDtblcypCtFfDSF08',
+    'xPcw2Adpdfdb8TMp4Uiy',
+    'k1ExDeLkxEvUtDPUUJvt',
+    'kKJl1PyTsfIytyfOkfiS',
+    'piqdzNbXTy1xt2ibg8Oi',
+  ];
+
+  static const int _cantidadInicialPorCarta = 2;
+
+  /// Constructor por defecto, sin parámetros
   FirebaseCrudService();
 
-  // ─────────────────────────────────────────────────────────
-  // AUTENTICACIÓN
-  // ─────────────────────────────────────────────────────────
+  // Helper que convierte cualquier raw a double
+  double _parseDouble(dynamic raw) {
+    if (raw == null) return 0.0;
+    if (raw is num) return raw.toDouble();
+    return double.tryParse(raw.toString()) ?? 0.0;
+  }
 
-  /// Registra un usuario con email/password y crea su perfil en Firestore.
-  /// Devuelve el UserCredential creado.
+  /// Registra un usuario con email y contraseña, y crea su perfil
+  /// inicial en Firestore (documento + cartas iniciales + mazo humano).
+  ///
+  /// Lanza Exception con mensaje legible si hay error.
   Future<UserCredential> registerWithEmail({
     required String email,
     required String password,
-    required String alias,
   }) async {
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
+      final cred = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
 
-      // Actualizar displayName en Firebase Auth
-      await credential.user?.updateDisplayName(alias);
+      final uid = cred.user?.uid;
+      if (uid != null) {
+        await _crearPerfilInicialJugador(uid);
+      }
 
-      // Crear toda la estructura en Firestore
-      await crearEstructuraJugador(
-        uid: credential.user!.uid,
-        alias: alias,
-        email: email,
-      );
-
-      return credential;
+      return cred;
     } on FirebaseAuthException catch (e) {
       throw Exception(_mapAuthError(e));
     }
   }
 
-  /// Inicia sesión con email y contraseña.
+  /// Crea de forma atómica todo el perfil inicial de un jugador:
+  /// - `Jugadores/{uid}` con los valores por defecto.
+  /// - `Jugadores/{uid}/Cartas/*` con las cartas iniciales (Cantidad = 2).
+  /// - `Jugadores/{uid}/Mazos/{autoId}` con un mazo de Humanos
+  ///   y su subcolección `Cartas/*` (Cantidad = 2).
+  Future<void> _crearPerfilInicialJugador(String uid) async {
+    final batch = _db.batch();
+
+    // 1. Documento principal del jugador
+    //    Campos en minúscula/camelCase según captura de Firestore
+    final jugadorRef = _db.collection('Jugadores').doc(uid);
+    batch.set(jugadorRef, {
+      'alias': 'Jugador Zero',
+      'dinero': 500,
+      'experiencia': 0,
+      'imagenPerfil': '',
+      'nivel': 1,
+    });
+
+    // 2. Subcolección Cartas del jugador
+    for (final cartaId in _cartasInicialesIds) {
+      final cartaRef = jugadorRef.collection('Cartas').doc(cartaId);
+      batch.set(cartaRef, {'Cantidad': _cantidadInicialPorCarta});
+    }
+
+    // 3. Mazo inicial del Ejército 1 (Humanos)
+    final mazoRef = jugadorRef.collection('Mazos').doc();
+    batch.set(mazoRef, {
+      'ejercito': 1,
+      'nombre': 'Mazo Humanos',
+    });
+
+    // 4. Subcolección Cartas del mazo
+    for (final cartaId in _cartasMazoHumanosIds) {
+      final cartaMazoRef = mazoRef.collection('Cartas').doc(cartaId);
+      batch.set(cartaMazoRef, {'Cantidad': _cantidadInicialPorCarta});
+    }
+
+    await batch.commit();
+  }
+
+  /// Inicia sesión con email y contraseña
   Future<UserCredential> signInWithEmail({
     required String email,
     required String password,
@@ -57,100 +124,7 @@ class FirebaseCrudService {
     }
   }
 
-  // ─────────────────────────────────────────────────────────
-  // CREACIÓN DE ESTRUCTURA DEL JUGADOR
-  // ─────────────────────────────────────────────────────────
-
-  /// Crea el documento raíz del jugador y todos los documentos
-  /// iniciales de sus subcolecciones.
-  ///
-  /// Llama con SetOptions(merge: true) para que sea idempotente:
-  /// si el jugador ya existe (re-instalación) no machaca sus datos.
-  Future<void> crearEstructuraJugador({
-    required String uid,
-    required String alias,
-    required String email,
-  }) async {
-    final batch = _db.batch();
-    final jugadorRef = _db.collection('Jugadores').doc(uid);
-    final ahora = FieldValue.serverTimestamp();
-
-    // ── 1. Documento raíz ─────────────────────────────────
-    batch.set(
-      jugadorRef,
-      {
-        'alias': alias,
-        'email': email,
-        'imagenPerfil': '',
-        'nivel': 1,
-        'experiencia': 0,
-        'dinero': 0,
-        'fechaRegistro': ahora,
-        'ultimaConexion': ahora,
-      },
-      SetOptions(merge: true), // idempotente
-    );
-
-    // ── 2. Estadísticas iniciales ──────────────────────────
-    // Subcolección Estadisticas / resumen
-    // Al tener un documento inicial, la subcolección ya es visible
-    // en la consola aunque el jugador no haya jugado ninguna partida.
-    final statsRef = jugadorRef.collection('Estadisticas').doc('resumen');
-    batch.set(
-      statsRef,
-      {
-        'partidasJugadas': 0,
-        'partidasGanadas': 0,
-        'cartasDestruidas': 0,
-        'energiesTotales': 0,
-        'turnosJugados': 0,
-        'ultimaActualizacion': ahora,
-      },
-      SetOptions(merge: true),
-    );
-
-    // ── 3. Mazos y Colección ───────────────────────────────
-    // No se crean documentos iniciales: los mazos y las cartas
-    // se añaden en el flujo normal del juego. Firestore no permite
-    // subcolecciones vacías, así que se crearán solas al primer uso.
-
-    await batch.commit();
-  }
-
-  /// Actualiza los campos editables del perfil (alias e imagenPerfil).
-  Future<void> actualizarPerfil({
-    required String uid,
-    required String alias,
-    required String imagenPerfil,
-  }) async {
-    await _db.collection('Jugadores').doc(uid).update({
-      'alias': alias,
-      'imagenPerfil': imagenPerfil,
-      'ultimaConexion': FieldValue.serverTimestamp(),
-    });
-
-    // Sync con Firebase Auth displayName
-    await _auth.currentUser?.updateDisplayName(alias);
-  }
-
-  /// Verifica si el documento de perfil ya existe (para el flujo
-  /// de login: si el jugador borra la app y vuelve a entrar,
-  /// no se re-crea el perfil con datos por defecto).
-  Future<bool> perfilExiste(String uid) async {
-    final doc = await _db.collection('Jugadores').doc(uid).get();
-    return doc.exists;
-  }
-
-  // ─────────────────────────────────────────────────────────
-  // HELPERS
-  // ─────────────────────────────────────────────────────────
-
-  double _parseDouble(dynamic raw) {
-    if (raw == null) return 0.0;
-    if (raw is num) return raw.toDouble();
-    return double.tryParse(raw.toString()) ?? 0.0;
-  }
-
+  /// Mapea los códigos de FirebaseAuthException a mensajes legibles
   String _mapAuthError(FirebaseAuthException e) {
     switch (e.code) {
       case 'invalid-email':
@@ -163,10 +137,24 @@ class FirebaseCrudService {
         return 'Ya existe una cuenta registrada con ese correo.';
       case 'weak-password':
         return 'La contraseña debe tener al menos 6 caracteres.';
+      default:
+        return e.message ?? 'Ocurrió un error de autenticación.';
+    }
+  }
+
+  /// Traduce códigos de FirebaseAuthException a mensajes legibles
+  String _translateErrorCode(FirebaseAuthException e) {
+    switch (e.code) {
+      case 'invalid-email':
+        return 'El correo electrónico no es válido.';
+      case 'email-already-in-use':
+        return 'Ya existe una cuenta con ese correo.';
+      case 'weak-password':
+        return 'La contraseña es demasiado débil.';
       case 'operation-not-allowed':
         return 'Operación no permitida. Contacta al soporte.';
       default:
-        return e.message ?? 'Ocurrió un error de autenticación.';
+        return e.message ?? 'Error desconocido de autenticación.';
     }
   }
 }
