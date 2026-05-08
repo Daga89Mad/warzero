@@ -7,109 +7,47 @@ class FirebaseCrudService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
-  // ─────────────────────────────────────────────────────────────
-  // Configuración del perfil inicial de un jugador nuevo
-  // ─────────────────────────────────────────────────────────────
-
-  /// Cartas iniciales que recibe el jugador en su colección personal.
-  /// Cantidad por defecto: 2 de cada una.
-  static const List<String> _cartasInicialesIds = [
-    '8KZtDtblcypCtFfDSF08',
-    'k1ExDeLkxEvUtDPUUJvt',
-    'kKJl1PyTsfIytyfOkfiS',
-    'piqdzNbXTy1xt2ibg8Oi',
-    'xPcw2Adpdfdb8TMp4Uiy',
-  ];
-
-  /// Cartas que componen el mazo inicial de Ejército 1 (Humanos).
-  /// Cantidad por defecto: 2 de cada una.
-  static const List<String> _cartasMazoHumanosIds = [
-    '8KZtDtblcypCtFfDSF08',
-    'xPcw2Adpdfdb8TMp4Uiy',
-    'k1ExDeLkxEvUtDPUUJvt',
-    'kKJl1PyTsfIytyfOkfiS',
-    'piqdzNbXTy1xt2ibg8Oi',
-  ];
-
-  static const int _cantidadInicialPorCarta = 2;
-
-  /// Constructor por defecto, sin parámetros
   FirebaseCrudService();
 
-  // Helper que convierte cualquier raw a double
+  String? get currentUid => _auth.currentUser?.uid;
+
   double _parseDouble(dynamic raw) {
     if (raw == null) return 0.0;
     if (raw is num) return raw.toDouble();
     return double.tryParse(raw.toString()) ?? 0.0;
   }
 
-  /// Registra un usuario con email y contraseña, y crea su perfil
-  /// inicial en Firestore (documento + cartas iniciales + mazo humano).
-  ///
-  /// Lanza Exception con mensaje legible si hay error.
   Future<UserCredential> registerWithEmail({
     required String email,
     required String password,
+    required String alias,
   }) async {
     try {
       final cred = await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
-
       final uid = cred.user?.uid;
+      final aliasFinal = alias.trim().isEmpty ? 'Jugador' : alias.trim();
       if (uid != null) {
-        await _crearPerfilInicialJugador(uid);
+        await _db.collection('Jugadores').doc(uid).set({
+          'alias': aliasFinal,
+          'dinero': 0,
+          'imagenPerfil': '',
+          'nivel': 1,
+          'experiencia': 0,
+          'fechaRegistro': FieldValue.serverTimestamp(),
+        });
+        try {
+          await cred.user?.updateDisplayName(aliasFinal);
+        } catch (_) {}
       }
-
       return cred;
     } on FirebaseAuthException catch (e) {
       throw Exception(_mapAuthError(e));
     }
   }
 
-  /// Crea de forma atómica todo el perfil inicial de un jugador:
-  /// - `Jugadores/{uid}` con los valores por defecto.
-  /// - `Jugadores/{uid}/Cartas/*` con las cartas iniciales (Cantidad = 2).
-  /// - `Jugadores/{uid}/Mazos/{autoId}` con un mazo de Humanos
-  ///   y su subcolección `Cartas/*` (Cantidad = 2).
-  Future<void> _crearPerfilInicialJugador(String uid) async {
-    final batch = _db.batch();
-
-    // 1. Documento principal del jugador
-    //    Campos en minúscula/camelCase según captura de Firestore
-    final jugadorRef = _db.collection('Jugadores').doc(uid);
-    batch.set(jugadorRef, {
-      'alias': 'Jugador Zero',
-      'dinero': 500,
-      'experiencia': 0,
-      'imagenPerfil': '',
-      'nivel': 1,
-    });
-
-    // 2. Subcolección Cartas del jugador
-    for (final cartaId in _cartasInicialesIds) {
-      final cartaRef = jugadorRef.collection('Cartas').doc(cartaId);
-      batch.set(cartaRef, {'Cantidad': _cantidadInicialPorCarta});
-    }
-
-    // 3. Mazo inicial del Ejército 1 (Humanos)
-    final mazoRef = jugadorRef.collection('Mazos').doc();
-    batch.set(mazoRef, {
-      'ejercito': 1,
-      'nombre': 'Mazo Humanos',
-    });
-
-    // 4. Subcolección Cartas del mazo
-    for (final cartaId in _cartasMazoHumanosIds) {
-      final cartaMazoRef = mazoRef.collection('Cartas').doc(cartaId);
-      batch.set(cartaMazoRef, {'Cantidad': _cantidadInicialPorCarta});
-    }
-
-    await batch.commit();
-  }
-
-  /// Inicia sesión con email y contraseña
   Future<UserCredential> signInWithEmail({
     required String email,
     required String password,
@@ -124,7 +62,54 @@ class FirebaseCrudService {
     }
   }
 
-  /// Mapea los códigos de FirebaseAuthException a mensajes legibles
+  Future<void> signOut() => _auth.signOut();
+
+  Future<void> actualizarPerfil({
+    String? uid,
+    String? alias,
+    String? imagenPerfil,
+    int? dinero,
+    int? nivel,
+    int? experiencia,
+  }) async {
+    final targetUid = uid ?? currentUid;
+    if (targetUid == null || targetUid.isEmpty) {
+      throw Exception('No hay un usuario autenticado.');
+    }
+    final updates = <String, dynamic>{};
+    if (alias != null && alias.trim().isNotEmpty)
+      updates['alias'] = alias.trim();
+    if (imagenPerfil != null) updates['imagenPerfil'] = imagenPerfil;
+    if (dinero != null) updates['dinero'] = dinero;
+    if (nivel != null) updates['nivel'] = nivel;
+    if (experiencia != null) updates['experiencia'] = experiencia;
+    if (updates.isEmpty) return;
+    try {
+      await _db.collection('Jugadores').doc(targetUid).set(
+            updates,
+            SetOptions(merge: true),
+          );
+      if (updates.containsKey('alias') && targetUid == currentUid) {
+        try {
+          await _auth.currentUser
+              ?.updateDisplayName(updates['alias'] as String);
+        } catch (_) {}
+      }
+    } on FirebaseException catch (e) {
+      throw Exception('No se pudo actualizar el perfil: ${e.message}');
+    }
+  }
+
+  Future<void> cambiarPassword(String nuevaPassword) async {
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('No hay un usuario autenticado.');
+    try {
+      await user.updatePassword(nuevaPassword);
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_mapAuthError(e));
+    }
+  }
+
   String _mapAuthError(FirebaseAuthException e) {
     switch (e.code) {
       case 'invalid-email':
@@ -137,24 +122,10 @@ class FirebaseCrudService {
         return 'Ya existe una cuenta registrada con ese correo.';
       case 'weak-password':
         return 'La contraseña debe tener al menos 6 caracteres.';
+      case 'requires-recent-login':
+        return 'Por seguridad, vuelve a iniciar sesión para realizar este cambio.';
       default:
         return e.message ?? 'Ocurrió un error de autenticación.';
-    }
-  }
-
-  /// Traduce códigos de FirebaseAuthException a mensajes legibles
-  String _translateErrorCode(FirebaseAuthException e) {
-    switch (e.code) {
-      case 'invalid-email':
-        return 'El correo electrónico no es válido.';
-      case 'email-already-in-use':
-        return 'Ya existe una cuenta con ese correo.';
-      case 'weak-password':
-        return 'La contraseña es demasiado débil.';
-      case 'operation-not-allowed':
-        return 'Operación no permitida. Contacta al soporte.';
-      default:
-        return e.message ?? 'Error desconocido de autenticación.';
     }
   }
 }

@@ -2,26 +2,44 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+/// Lee un campo aceptando tanto la clave en lowercase (nueva)
+/// como en PascalCase (legado), para mantener retrocompatibilidad.
+T? _pickField<T>(Map<String, dynamic> d, List<String> keys) {
+  for (final k in keys) {
+    final v = d[k];
+    if (v != null) return v as T?;
+  }
+  return null;
+}
+
 class JugadorDatos {
   final String uid;
   final String alias;
   final int dinero;
   final String imagenPerfil;
+  final int nivel;
+  final int experiencia;
 
   const JugadorDatos({
     required this.uid,
     required this.alias,
     required this.dinero,
     required this.imagenPerfil,
+    this.nivel = 1,
+    this.experiencia = 0,
   });
 
   factory JugadorDatos.fromFirestore(String uid, DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
     return JugadorDatos(
       uid: uid,
-      alias: d['Alias'] as String? ?? 'Jugador',
-      dinero: (d['Dinero'] as num?)?.toInt() ?? 0,
-      imagenPerfil: d['ImagenPerfil'] as String? ?? '',
+      alias: _pickField<String>(d, ['alias', 'Alias']) ?? 'Jugador',
+      dinero: (_pickField<num>(d, ['dinero', 'Dinero']))?.toInt() ?? 0,
+      imagenPerfil:
+          _pickField<String>(d, ['imagenPerfil', 'ImagenPerfil']) ?? '',
+      nivel: (_pickField<num>(d, ['nivel', 'Nivel']))?.toInt() ?? 1,
+      experiencia:
+          (_pickField<num>(d, ['experiencia', 'Experiencia']))?.toInt() ?? 0,
     );
   }
 }
@@ -40,9 +58,15 @@ class JugadorEstadisticas {
   factory JugadorEstadisticas.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>? ?? {};
     return JugadorEstadisticas(
-      victorias: (d['Victorias'] as num?)?.toInt() ?? 0,
-      derrotas: (d['Derrotas'] as num?)?.toInt() ?? 0,
-      retiradas: (d['Retiradas'] as num?)?.toInt() ?? 0,
+      victorias: (d['Victorias'] as num?)?.toInt() ??
+          (d['victorias'] as num?)?.toInt() ??
+          0,
+      derrotas: (d['Derrotas'] as num?)?.toInt() ??
+          (d['derrotas'] as num?)?.toInt() ??
+          0,
+      retiradas: (d['Retiradas'] as num?)?.toInt() ??
+          (d['retiradas'] as num?)?.toInt() ??
+          0,
     );
   }
 }
