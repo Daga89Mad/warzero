@@ -4,16 +4,28 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'firebase_options.dart'; // ← generado por: flutterfire configure
 import 'views/loginBody.dart';
 import 'views/menu.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
 
-  // Activar persistencia offline de Firestore:
-  // los documentos se cachean localmente y la app funciona
-  // aunque la conexión inicial tarde (emuladores lentos).
+  // Inicializa Firebase con opciones explícitas para cada plataforma.
+  // Esto evita que iOS falle silenciosamente si el GoogleService-Info.plist
+  // no está correctamente embebido en el target de Xcode.
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    // Si Firebase no arranca, mostramos una pantalla de error
+    // en lugar de quedarnos en blanco.
+    runApp(_ErrorApp(message: 'Error al inicializar Firebase:\n$e'));
+    return;
+  }
+
+  // Activar persistencia offline de Firestore
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
     cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
@@ -22,6 +34,7 @@ void main() async {
   runApp(const WarZeroApp());
 }
 
+// ─── App principal ──────────────────────────────────────────
 class WarZeroApp extends StatelessWidget {
   const WarZeroApp({super.key});
 
@@ -76,40 +89,49 @@ class WarZeroApp extends StatelessWidget {
           side: const BorderSide(color: Color(0xFF7A5A18)),
         ),
       ),
-      // ── Auth gate: show login or game depending on session ──
       home: const _AuthGate(),
     );
   }
 }
 
-/// Listens to Firebase auth state and routes accordingly.
+// ─── Auth gate ───────────────────────────────────────────────
+/// Escucha el estado de autenticación con un timeout de 8 segundos.
+/// Si Firebase tarda más (o se cuelga), redirige al login directamente.
 class _AuthGate extends StatelessWidget {
   const _AuthGate();
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
+      // Timeout: si en 8 s no llega ningún evento, tratamos como no logueado.
+      stream: FirebaseAuth.instance.authStateChanges().timeout(
+            const Duration(seconds: 8),
+            onTimeout: (sink) => sink.add(null),
+          ),
       builder: (context, snapshot) {
-        // Still checking
+        // Cargando → splash
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const _SplashScreen();
         }
 
-        final user = snapshot.data;
-
-        // Not logged in → show login
-        if (user == null) {
+        // Error de stream → ir al login igualmente
+        if (snapshot.hasError) {
           return const LoginBody();
         }
 
-        // Logged in → go to menu
+        // No logueado → login
+        if (snapshot.data == null) {
+          return const LoginBody();
+        }
+
+        // Logueado → menú
         return const MenuScreen();
       },
     );
   }
 }
 
+// ─── Splash ──────────────────────────────────────────────────
 class _SplashScreen extends StatelessWidget {
   const _SplashScreen();
 
@@ -134,6 +156,56 @@ class _SplashScreen extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Pantalla de error de inicio ─────────────────────────────
+/// Solo aparece si Firebase.initializeApp() lanza una excepción.
+/// Muestra el mensaje en lugar de dejar la pantalla en blanco.
+class _ErrorApp extends StatelessWidget {
+  final String message;
+  const _ErrorApp({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: const Color(0xFF030810),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.error_outline,
+                    color: Color(0xFFC04040), size: 48),
+                const SizedBox(height: 20),
+                const Text(
+                  'ERROR DE INICIO',
+                  style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 16,
+                    color: Color(0xFFC04040),
+                    letterSpacing: 3,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF8A6060),
+                    height: 1.6,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
