@@ -17,6 +17,10 @@ class FirebaseCrudService {
     return double.tryParse(raw.toString()) ?? 0.0;
   }
 
+  // ───────────────────────────────────────────────────────────
+  // REGISTRO
+  // ───────────────────────────────────────────────────────────
+
   Future<UserCredential> registerWithEmail({
     required String email,
     required String password,
@@ -30,6 +34,7 @@ class FirebaseCrudService {
       final uid = cred.user?.uid;
       final aliasFinal = alias.trim().isEmpty ? 'Jugador' : alias.trim();
       if (uid != null) {
+        // Crear el doc principal del jugador
         await _db.collection('Jugadores').doc(uid).set({
           'alias': aliasFinal,
           'dinero': 0,
@@ -41,6 +46,9 @@ class FirebaseCrudService {
         try {
           await cred.user?.updateDisplayName(aliasFinal);
         } catch (_) {}
+
+        // Crear las subcolecciones iniciales
+        await _initSubcolecciones(uid);
       }
       return cred;
     } on FirebaseAuthException catch (e) {
@@ -48,19 +56,163 @@ class FirebaseCrudService {
     }
   }
 
+  // ───────────────────────────────────────────────────────────
+  // LOGIN
+  // ───────────────────────────────────────────────────────────
+
   Future<UserCredential> signInWithEmail({
     required String email,
     required String password,
   }) async {
     try {
-      return await _auth.signInWithEmailAndPassword(
+      final cred = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
+      // Asegurar que cuentas antiguas (sin subcolecciones) las tengan
+      final uid = cred.user?.uid;
+      if (uid != null) {
+        try {
+          await _ensureSubcolecciones(uid);
+        } catch (_) {
+          // No bloqueamos el login si falla
+        }
+      }
+      return cred;
     } on FirebaseAuthException catch (e) {
       throw Exception(_mapAuthError(e));
     }
   }
+
+  // ───────────────────────────────────────────────────────────
+  // ESTRUCTURA INICIAL DE SUBCOLECCIONES
+  // ───────────────────────────────────────────────────────────
+
+  /// Crea las 3 subcolecciones con su documento inicial.
+  /// Usado en el registro (usuario nuevo, no hay nada aún).
+  Future<void> _initSubcolecciones(String uid) async {
+    final jugadorRef = _db.collection('Jugadores').doc(uid);
+
+    // ── Estadisticas → doc 'Resultados' ──────────────────────
+    // Estructura vista en Firestore: { Victorias: 0, Derrotas: 0 }
+    await jugadorRef.collection('Estadisticas').doc('Resultados').set({
+      'Victorias': 0,
+      'Derrotas': 0,
+    });
+
+    // ── Coleccion → placeholder hasta que el jugador obtenga cartas ──
+    // Cada doc real tiene: { cantidad, fechaObtenida,
+    //   skinSeleccionada, skinsDesbloqueadas[] }
+    // El ID del doc es el mismo ID de la carta en la colección global Cartas.
+    // Al registrarse no hay cartas todavía; el placeholder hace que la
+    // subcolección sea visible en la consola de Firestore.
+    await jugadorRef.collection('Coleccion').doc('_init').set({
+      'placeholder': true,
+      'creadoEn': FieldValue.serverTimestamp(),
+    });
+
+    // ── Mazos → mazo vacío inicial ────────────────────────────
+    // Estructura del doc mazo: { nombre, ejercitoId, esPrincipal,
+    //   cartaIds, total, creadoEn }
+    // Cada mazo tiene una sub-subcolección 'Cartas' donde el ID de
+    // cada doc es el ID de la carta y el campo es { Cantidad: int }.
+    // Al registrarse el mazo empieza sin cartas.
+    await jugadorRef.collection('Mazos').add({
+      'nombre': 'Mazo 1',
+      'ejercitoId': 1,
+      'esPrincipal': true,
+      'cartaIds': <String>[],
+      'total': 0,
+      'creadoEn': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Versión idempotente para cuentas antiguas: solo crea lo que falta.
+  /// Se llama en cada login; no toca nada que ya exista.
+  Future<void> _ensureSubcolecciones(String uid) async {
+    final jugadorRef = _db.collection('Jugadores').doc(uid);
+
+    // Estadisticas/Resultados
+    final estSnap =
+        await jugadorRef.collection('Estadisticas').doc('Resultados').get();
+    if (!estSnap.exists) {
+      await jugadorRef.collection('Estadisticas').doc('Resultados').set({
+        'Victorias': 0,
+        'Derrotas': 0,
+      });
+    }
+
+    // Coleccion: si está completamente vacía, sembrar placeholder
+    final colSnap = await jugadorRef.collection('Coleccion').limit(1).get();
+    if (colSnap.docs.isEmpty) {
+      await jugadorRef.collection('Coleccion').doc('_init').set({
+        'placeholder': true,
+        'creadoEn': FieldValue.serverTimestamp(),
+      });
+    }
+
+    // Mazos: si no tiene ninguno, crear el mazo inicial
+    final mazosSnap = await jugadorRef.collection('Mazos').limit(1).get();
+    if (mazosSnap.docs.isEmpty) {
+      await jugadorRef.collection('Mazos').add({
+        'nombre': 'Mazo 1',
+        'ejercitoId': 1,
+        'esPrincipal': true,
+        'cartaIds': <String>[],
+        'total': 0,
+        'creadoEn': FieldValue.serverTimestamp(),
+      });
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // COLECCION DE CARTAS DEL JUGADOR
+  // ───────────────────────────────────────────────────────────
+
+  /// Añade una carta a la Coleccion del jugador o incrementa su cantidad.
+  ///
+  /// [cartaId] es el ID del doc en la colección global 'Cartas'.
+  /// [skinInicial] es la skin que se asigna la primera vez.
+  ///
+  /// Al añadir la primera carta real se elimina automáticamente el
+  /// placeholder '_init' si sigue ahí.
+  Future<void> agregarCartaAColeccion({
+    required String uid,
+    required String cartaId,
+    String skinInicial = 'default',
+  }) async {
+    final colRef = _db.collection('Jugadores').doc(uid).collection('Coleccion');
+    final cartaRef = colRef.doc(cartaId);
+    final snap = await cartaRef.get();
+
+    if (snap.exists && snap.data()?['placeholder'] != true) {
+      // El jugador ya tiene la carta: sumar una copia
+      final cantidadActual =
+          int.tryParse(snap.data()?['cantidad']?.toString() ?? '1') ?? 1;
+      await cartaRef.update({'cantidad': '${cantidadActual + 1}'});
+    } else {
+      // Primera copia
+      await cartaRef.set({
+        'cantidad': '1',
+        'fechaObtenida': FieldValue.serverTimestamp(),
+        'skinSeleccionada': skinInicial,
+        'skinsDesbloqueadas': [skinInicial],
+      });
+
+      // Borrar placeholder _init si todavía existe
+      try {
+        final initRef = colRef.doc('_init');
+        final initSnap = await initRef.get();
+        if (initSnap.exists && initSnap.data()?['placeholder'] == true) {
+          await initRef.delete();
+        }
+      } catch (_) {}
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // PERFIL
+  // ───────────────────────────────────────────────────────────
 
   Future<void> signOut() => _auth.signOut();
 
@@ -109,6 +261,10 @@ class FirebaseCrudService {
       throw Exception(_mapAuthError(e));
     }
   }
+
+  // ───────────────────────────────────────────────────────────
+  // HELPERS
+  // ───────────────────────────────────────────────────────────
 
   String _mapAuthError(FirebaseAuthException e) {
     switch (e.code) {

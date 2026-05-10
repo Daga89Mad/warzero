@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../models/board_state.dart';
+import '../models/carta_model.dart';
 import '../models/game_config.dart';
 import 'cell_widget.dart' show ownerColor;
 import 'card_detail_overlay.dart';
@@ -28,6 +29,21 @@ class CellSidebar extends StatefulWidget {
   /// uid → color para colorear cartas por jugador
   final Map<String, Color> playerColors;
 
+  // ── Sistema de evoluciones ───────────────────────────────
+  /// Energías disponibles del jugador local (para el botón EVOLUCIONAR).
+  final int? energiasDisponibles;
+
+  /// Resuelve la carta de evolución por su id.
+  final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
+
+  /// Callback al confirmar evolución de una carta local.
+  /// Recibe la coord de la celda, el índice de la carta y la evolución.
+  final Future<void> Function(
+    String coord,
+    int indice,
+    CartaModel evolucion,
+  )? onEvolucionar;
+
   static const double width = 220;
 
   const CellSidebar({
@@ -41,6 +57,9 @@ class CellSidebar extends StatefulWidget {
     this.localUid,
     this.onMoveSelected,
     this.playerColors = const {},
+    this.energiasDisponibles,
+    this.resolveEvolucion,
+    this.onEvolucionar,
   });
 
   @override
@@ -53,7 +72,6 @@ class _CellSidebarState extends State<CellSidebar> {
   @override
   void didUpdateWidget(CellSidebar old) {
     super.didUpdateWidget(old);
-    // Limpiar al cambiar de celda o al cerrar
     if (old.coord != widget.coord || (!widget.isOpen && old.isOpen)) {
       setState(() => _selected.clear());
     }
@@ -75,7 +93,6 @@ class _CellSidebarState extends State<CellSidebar> {
     final localCount = cards.where((c) => c.ownerUid == widget.localUid).length;
     final total = widget.isEnemyObelisco ? null : widget.celda?.fuerzaTotal;
 
-    // Movimiento mínimo entre cartas seleccionadas
     int? minMov;
     if (_selected.isNotEmpty) {
       minMov = _selected
@@ -102,20 +119,21 @@ class _CellSidebarState extends State<CellSidebar> {
               total: total,
               onClose: widget.onClose),
           const Divider(color: Color(0x30503214), height: 1),
-
           Expanded(
             child: _Body(
               celda: widget.celda,
+              coord: widget.coord,
               terrain: widget.terrain,
               isEnemyObelisco: widget.isEnemyObelisco,
               localUid: widget.localUid,
               selected: _selected,
               onToggle: _toggle,
               playerColors: widget.playerColors,
+              energiasDisponibles: widget.energiasDisponibles,
+              resolveEvolucion: widget.resolveEvolucion,
+              onEvolucionar: widget.onEvolucionar,
             ),
           ),
-
-          // Botón MOVER solo cuando hay cartas propias y onMoveSelected definido
           if (!widget.isEnemyObelisco &&
               hasLocal &&
               widget.onMoveSelected != null)
@@ -258,6 +276,7 @@ class _Header extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _Body extends StatelessWidget {
   final CeldaState? celda;
+  final String? coord;
   final TerrainType? terrain;
   final bool isEnemyObelisco;
   final String? localUid;
@@ -265,14 +284,24 @@ class _Body extends StatelessWidget {
   final void Function(int) onToggle;
   final Map<String, Color> playerColors;
 
+  // Evolución
+  final int? energiasDisponibles;
+  final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
+  final Future<void> Function(String coord, int indice, CartaModel evolucion)?
+      onEvolucionar;
+
   const _Body({
     required this.celda,
+    required this.coord,
     required this.terrain,
     required this.isEnemyObelisco,
     required this.localUid,
     required this.selected,
     required this.onToggle,
     this.playerColors = const {},
+    this.energiasDisponibles,
+    this.resolveEvolucion,
+    this.onEvolucionar,
   });
 
   @override
@@ -341,10 +370,15 @@ class _Body extends StatelessWidget {
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (_, i) => _CardTile(
         entry: cards[i],
+        indice: i,
+        coord: coord,
         isLocal: cards[i].ownerUid == localUid,
         isChecked: selected.contains(i),
         onToggle: cards[i].ownerUid == localUid ? () => onToggle(i) : null,
         playerColors: playerColors,
+        energiasDisponibles: energiasDisponibles,
+        resolveEvolucion: resolveEvolucion,
+        onEvolucionar: onEvolucionar,
       ),
     );
   }
@@ -355,17 +389,30 @@ class _Body extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _CardTile extends StatelessWidget {
   final CartaEnCelda entry;
+  final int indice;
+  final String? coord;
   final bool isLocal;
   final bool isChecked;
   final VoidCallback? onToggle;
   final Map<String, Color> playerColors;
 
+  // Evolución
+  final int? energiasDisponibles;
+  final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
+  final Future<void> Function(String coord, int indice, CartaModel evolucion)?
+      onEvolucionar;
+
   const _CardTile({
     required this.entry,
+    required this.indice,
+    required this.coord,
     required this.isLocal,
     required this.isChecked,
     required this.onToggle,
     this.playerColors = const {},
+    this.energiasDisponibles,
+    this.resolveEvolucion,
+    this.onEvolucionar,
   });
 
   String _ownerLabel(String zone) {
@@ -382,6 +429,23 @@ class _CardTile extends StatelessWidget {
     return m[zone] ?? zone.toUpperCase();
   }
 
+  void _abrirDetalle(BuildContext ctx) {
+    final puedeEvolucionar = isLocal &&
+        onEvolucionar != null &&
+        coord != null &&
+        entry.carta.puedeEvolucionar;
+
+    showCardDetail(
+      ctx,
+      entry.carta,
+      resolveEvolucion: resolveEvolucion,
+      energiasDisponibles: puedeEvolucionar ? energiasDisponibles : null,
+      onEvolucionar: puedeEvolucionar
+          ? (evolucion) => onEvolucionar!(coord!, indice, evolucion)
+          : null,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final carta = entry.carta;
@@ -394,7 +458,7 @@ class _CardTile extends StatelessWidget {
     return Builder(
       builder: (ctx) => GestureDetector(
         onTap: onToggle,
-        onLongPress: () => showCardDetail(ctx, entry.carta),
+        onLongPress: () => _abrirDetalle(ctx),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
           padding: const EdgeInsets.all(9),
@@ -488,6 +552,12 @@ class _CardTile extends StatelessWidget {
                         const SizedBox(width: 4),
                         _Chip(
                             label: _ownerLabel(entry.ownerZone), color: color),
+                        if (carta.puedeEvolucionar) ...[
+                          const SizedBox(width: 4),
+                          _Chip(
+                              label: 'EVOL ${carta.evolucion}⚡',
+                              color: const Color(0xFFC060E0)),
+                        ],
                       ]),
                     ]),
               ),

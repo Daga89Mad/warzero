@@ -23,6 +23,14 @@ class CartaModel {
   ///   1 → Terrestre  2 → Volador  3 → Marino
   final int tipo;
 
+  /// ID de la carta que se obtiene al evolucionar.
+  /// Cadena vacía si la carta no puede evolucionar.
+  final String idEvolucion;
+
+  /// Coste en energías para evolucionar esta carta.
+  /// 0 si la carta no puede evolucionar.
+  final int evolucion;
+
   const CartaModel({
     required this.id,
     required this.nombre,
@@ -35,7 +43,12 @@ class CartaModel {
     required this.imagen,
     required this.movimiento,
     this.tipo = 1,
+    this.idEvolucion = '',
+    this.evolucion = 0,
   });
+
+  /// True si esta carta tiene una evolución configurada.
+  bool get puedeEvolucionar => idEvolucion.isNotEmpty && evolucion > 0;
 
   // ── Parseo robusto ────────────────────────────────────────
   /// Convierte int, double o String a int. Devuelve [fallback] si null.
@@ -52,6 +65,11 @@ class CartaModel {
           {int fallback = 0}) =>
       _parseInt(d[pascal] ?? d[snake], fallback: fallback);
 
+  /// Lee un campo string probando primero PascalCase y luego camelCase.
+  static String _fieldStr(Map<String, dynamic> d, String pascal, String camel,
+          {String fallback = ''}) =>
+      (d[pascal] ?? d[camel])?.toString() ?? fallback;
+
   // ── Desde la colección Cartas de Firestore (siempre PascalCase) ──
   factory CartaModel.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
@@ -67,6 +85,8 @@ class CartaModel {
       imagen: d['Imagen']?.toString() ?? '',
       movimiento: _parseInt(d['Movimiento'], fallback: 1),
       tipo: _parseInt(d['Tipo'], fallback: 1),
+      idEvolucion: d['IdEvolucion']?.toString() ?? '',
+      evolucion: _parseInt(d['Evolucion']),
     );
   }
 
@@ -85,6 +105,8 @@ class CartaModel {
         imagen: (d['Imagen'] ?? d['imagen'])?.toString() ?? '',
         movimiento: _field(d, 'Movimiento', 'movimiento', fallback: 1),
         tipo: _field(d, 'Tipo', 'tipo', fallback: 1),
+        idEvolucion: _fieldStr(d, 'IdEvolucion', 'idEvolucion'),
+        evolucion: _field(d, 'Evolucion', 'evolucion'),
       );
 
   // ── Serialización ─────────────────────────────────────────
@@ -102,6 +124,8 @@ class CartaModel {
         'Imagen': imagen,
         'Movimiento': movimiento,
         'Tipo': tipo,
+        'IdEvolucion': idEvolucion,
+        'Evolucion': evolucion,
       };
 
   CartaModel copyWith({
@@ -116,6 +140,8 @@ class CartaModel {
     String? imagen,
     int? movimiento,
     int? tipo,
+    String? idEvolucion,
+    int? evolucion,
   }) =>
       CartaModel(
         id: id ?? this.id,
@@ -129,6 +155,8 @@ class CartaModel {
         imagen: imagen ?? this.imagen,
         movimiento: movimiento ?? this.movimiento,
         tipo: tipo ?? this.tipo,
+        idEvolucion: idEvolucion ?? this.idEvolucion,
+        evolucion: evolucion ?? this.evolucion,
       );
 
   String get tipoLabel {
