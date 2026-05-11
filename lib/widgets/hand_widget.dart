@@ -9,11 +9,16 @@ class HandWidget extends StatelessWidget {
   final int? selectedIndex;
   final Function(int) onCardTap;
 
+  /// Resolver carta de evolución (para preview al hacer long press).
+  /// Si es null, el overlay se abre sin flecha de evolución.
+  final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
+
   const HandWidget({
     super.key,
     required this.cartas,
     required this.selectedIndex,
     required this.onCardTap,
+    this.resolveEvolucion,
   });
 
   @override
@@ -46,7 +51,14 @@ class HandWidget extends StatelessWidget {
           carta: cartas[i],
           isActive: i == selectedIndex,
           onTap: () => onCardTap(i),
-          onLongPress: () => showCardDetail(context, cartas[i]),
+          onLongPress: () => showCardDetail(
+            context,
+            cartas[i],
+            resolveEvolucion: resolveEvolucion,
+            // Sin energiasDisponibles ni onEvolucionar:
+            // desde la mano solo se puede previsualizar la evolución,
+            // no confirmarla (la carta aún no está en el tablero).
+          ),
         ),
       ),
     );

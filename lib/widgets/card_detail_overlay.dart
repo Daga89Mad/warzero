@@ -7,9 +7,7 @@ import '../models/carta_model.dart';
 /// Muestra la carta en grande al centro de la pantalla.
 ///
 /// Parámetros opcionales para el sistema de evoluciones:
-/// - [resolveEvolucion]: dado un `idEvolucion`, devuelve la `CartaModel`
-///   correspondiente. Si la carta tiene evolución (`carta.puedeEvolucionar`)
-///   aparece una FLECHA fuera de la carta a la derecha.
+/// - [resolveEvolucion]: dado un `idEvolucion`, devuelve la `CartaModel`.
 /// - [energiasDisponibles]: energías del jugador. `null` → sin botón.
 /// - [onEvolucionar]: callback al confirmar evolución. `null` → sin botón.
 Future<void> showCardDetail(
@@ -82,6 +80,14 @@ class _CardDetailPageState extends State<_CardDetailPage>
       duration: const Duration(milliseconds: 520),
       vsync: this,
     );
+    // ── DEBUG: borrar después ──
+    debugPrint('🔍 puedeEvolucionar=${widget.carta.puedeEvolucionar} '
+        'idEvolucion="${widget.carta.idEvolucion}" '
+        'evolucion=${widget.carta.evolucion} '
+        'resolveEvolucion=${widget.resolveEvolucion != null} '
+        'tieneEvolucion=$_tieneEvolucion');
+    // ────────────────────────────
+    if (_tieneEvolucion) _loadEvolucion();
     if (_tieneEvolucion) _loadEvolucion();
   }
 
@@ -128,8 +134,30 @@ class _CardDetailPageState extends State<_CardDetailPage>
     }
   }
 
+  // ── Calcular dimensiones de la carta según pantalla y flecha ──
+  Size _cardSize(BuildContext context) {
+    final mq = MediaQuery.of(context).size;
+    const double aspect = 1.5;
+    // Reservar espacio para la flecha si hay evolución (48 + 12 gap)
+    final double arrowSpace = _tieneEvolucion ? 64.0 : 0.0;
+    final double usableWidth = mq.width - arrowSpace;
+
+    final double maxW = (usableWidth * 0.92).clamp(300.0, 420.0);
+    final double maxH = (mq.height * 0.84).clamp(480.0, 720.0);
+
+    double cardW = maxW;
+    double cardH = cardW * aspect;
+    if (cardH > maxH) {
+      cardH = maxH;
+      cardW = cardH / aspect;
+    }
+    return Size(cardW, cardH);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final sz = _cardSize(context);
+
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
       behavior: HitTestBehavior.opaque,
@@ -148,6 +176,8 @@ class _CardDetailPageState extends State<_CardDetailPage>
                     controller: _flipCtrl,
                     front: widget.carta,
                     back: _evolucion,
+                    cardWidth: sz.width,
+                    cardHeight: sz.height,
                   ),
                   if (_tieneEvolucion) ...[
                     const SizedBox(width: 12),
@@ -182,18 +212,21 @@ class _CardDetailPageState extends State<_CardDetailPage>
 }
 
 // ─────────────────────────────────────────────────────────────
-// FLIPPING CARD — rotación 3D en eje Y. A los 90° se intercambia
-// la cara visible (front → back).
+// FLIPPING CARD
 // ─────────────────────────────────────────────────────────────
 class _FlippingCard extends StatelessWidget {
   final AnimationController controller;
   final CartaModel front;
   final CartaModel? back;
+  final double cardWidth;
+  final double cardHeight;
 
   const _FlippingCard({
     required this.controller,
     required this.front,
-    required this.back,
+    required this.cardWidth,
+    required this.cardHeight,
+    this.back,
   });
 
   @override
@@ -213,11 +246,17 @@ class _FlippingCard extends StatelessWidget {
               ? Transform(
                   alignment: Alignment.center,
                   transform: Matrix4.identity()..rotateY(math.pi),
-                  child: back != null
-                      ? _CardFace(carta: back!)
-                      : _CardFace(carta: front),
+                  child: _CardFace(
+                    carta: back ?? front,
+                    cardWidth: cardWidth,
+                    cardHeight: cardHeight,
+                  ),
                 )
-              : _CardFace(carta: front),
+              : _CardFace(
+                  carta: front,
+                  cardWidth: cardWidth,
+                  cardHeight: cardHeight,
+                ),
         );
       },
     );
@@ -225,7 +264,7 @@ class _FlippingCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FLECHA DE EVOLUCIÓN (fuera de la carta, lado derecho)
+// FLECHA DE EVOLUCIÓN
 // ─────────────────────────────────────────────────────────────
 class _EvolutionArrow extends StatelessWidget {
   final bool enabled;
@@ -316,7 +355,7 @@ class _EvolutionArrow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// BOTÓN EVOLUCIONAR (debajo de la carta)
+// BOTÓN EVOLUCIONAR
 // ─────────────────────────────────────────────────────────────
 class _EvolveButton extends StatelessWidget {
   final int cost;
@@ -391,32 +430,24 @@ class _EvolveButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CARTA FÍSICA (RESPONSIVE)
+// CARTA FÍSICA (RESPONSIVE — tamaño recibido del padre)
 // ─────────────────────────────────────────────────────────────
 class _CardFace extends StatelessWidget {
   final CartaModel carta;
-  const _CardFace({required this.carta});
+  final double cardWidth;
+  final double cardHeight;
+
+  const _CardFace({
+    required this.carta,
+    required this.cardWidth,
+    required this.cardHeight,
+  });
 
   @override
   Widget build(BuildContext context) {
-    // Tamaño dinámico: manteniendo aspecto ~2:3.
-    // Ancho reducido ligeramente para dejar sitio a la flecha EVOL.
-    final mq = MediaQuery.of(context).size;
-    const double aspect = 1.5;
-
-    final double maxW = (mq.width * 0.78).clamp(260.0, 340.0);
-    final double maxH = (mq.height * 0.86).clamp(440.0, 600.0);
-
-    double cardW = maxW;
-    double cardH = cardW * aspect;
-    if (cardH > maxH) {
-      cardH = maxH;
-      cardW = cardH / aspect;
-    }
-
     return Container(
-      width: cardW,
-      height: cardH,
+      width: cardWidth,
+      height: cardHeight,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
         gradient: const LinearGradient(
@@ -446,10 +477,8 @@ class _CardFace extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         child: Stack(
           children: [
-            // ── Fondo decorativo ──────────────────────────────
             Positioned.fill(child: _CardBackground()),
 
-            // ── Badges en esquinas de la CARTA ────────────────
             // Sup-izquierda: COSTE
             Positioned(
               top: 8,
@@ -491,11 +520,11 @@ class _CardFace extends StatelessWidget {
                 value: '${carta.defensa}',
                 label: 'DEFENSA',
                 icon: Icons.shield_outlined,
-                color: const Color(0xFF4090D0),
+                color: const Color(0xFF40B070),
               ),
             ),
 
-            // ── Nombre centrado entre COSTE y FUERZA ──────────
+            // Nombre
             Positioned(
               top: 0,
               left: 68,
@@ -519,14 +548,15 @@ class _CardFace extends StatelessWidget {
               ),
             ),
 
-            // ── Contenido principal ───────────────────────
+            // Contenido
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 52, 14, 56),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ── Imagen ────────────────────────────────
+                  // Imagen (flex:5 — ~55 % del espacio)
                   Expanded(
+                    flex: 5,
                     child: Container(
                       width: double.infinity,
                       decoration: BoxDecoration(
@@ -560,74 +590,82 @@ class _CardFace extends StatelessWidget {
 
                   const SizedBox(height: 8),
 
-                  // ── Descripción + Evolución ───────────────
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.30),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          carta.descripcion.isNotEmpty
-                              ? carta.descripcion
-                              : 'Sin descripción.',
-                          maxLines: 5,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Color(0xFFB0A090),
-                            height: 1.5,
-                            fontFamily: 'Georgia',
-                            decoration: TextDecoration.none,
-                          ),
+                  // Descripción + Evolución (flex:4 — ~45 % del espacio)
+                  Expanded(
+                    flex: 4,
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF060E14),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: const Color(0xFFC8A860).withOpacity(0.10),
+                          width: 0.5,
                         ),
-                        const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'EVOLUCIÓN',
-                              style: TextStyle(
-                                fontSize: 8,
-                                color: Color(0xFF7A6A40),
-                                fontFamily: 'Cinzel',
-                                letterSpacing: 1.5,
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color:
-                                    const Color(0xFFA040C0).withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                    color: const Color(0xFFA040C0)
-                                        .withOpacity(0.40),
-                                    width: 0.8),
-                              ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: SingleChildScrollView(
                               child: Text(
-                                '${carta.evolucion}',
+                                carta.descripcion.isNotEmpty
+                                    ? carta.descripcion
+                                    : 'Sin descripción.',
                                 style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFFC060E0),
-                                  fontFamily: 'Cinzel',
+                                  fontSize: 10,
+                                  color: Color(0xFFB0A090),
+                                  height: 1.5,
+                                  fontFamily: 'Georgia',
+                                  decoration: TextDecoration.none,
                                 ),
                               ),
                             ),
-                          ],
-                        ),
-                      ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'EVOLUCIÓN',
+                                style: TextStyle(
+                                  fontSize: 8,
+                                  color: Color(0xFF7A6A40),
+                                  fontFamily: 'Cinzel',
+                                  letterSpacing: 1.5,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color:
+                                      const Color(0xFFA040C0).withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                      color: const Color(0xFFA040C0)
+                                          .withOpacity(0.40),
+                                      width: 0.8),
+                                ),
+                                child: Text(
+                                  '${carta.evolucion}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFFC060E0),
+                                    fontFamily: 'Cinzel',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
 
                   const SizedBox(height: 8),
 
-                  // ── Ejército ──────────────────────────────
                   Center(
                     child: Text(
                       'EJÉRCITO ${carta.ejercito}',
@@ -649,8 +687,6 @@ class _CardFace extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// BADGE (stat en esquina de la carta)
 // ─────────────────────────────────────────────────────────────
 class _Badge extends StatelessWidget {
   final String value;
@@ -709,8 +745,6 @@ class _Badge extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FONDO DECORATIVO
-// ─────────────────────────────────────────────────────────────
 class _CardBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
@@ -726,16 +760,9 @@ class _CardBgPainter extends CustomPainter {
       ..strokeWidth = 0.5
       ..style = PaintingStyle.stroke;
 
-    canvas.drawLine(
-      Offset(20, 40),
-      Offset(size.width - 20, 40),
-      paint,
-    );
-    canvas.drawLine(
-      Offset(20, size.height - 40),
-      Offset(size.width - 20, size.height - 40),
-      paint,
-    );
+    canvas.drawLine(Offset(20, 40), Offset(size.width - 20, 40), paint);
+    canvas.drawLine(Offset(20, size.height - 40),
+        Offset(size.width - 20, size.height - 40), paint);
 
     final cornerPaint = Paint()
       ..color = const Color(0x25C8A860)
@@ -749,15 +776,9 @@ class _CardBgPainter extends CustomPainter {
       (size.width, size.height, -1.0, -1.0),
     ]) {
       canvas.drawLine(
-        Offset(cx + sx * 10, cy),
-        Offset(cx + sx * 28, cy),
-        cornerPaint,
-      );
+          Offset(cx + sx * 10, cy), Offset(cx + sx * 28, cy), cornerPaint);
       canvas.drawLine(
-        Offset(cx, cy + sy * 10),
-        Offset(cx, cy + sy * 28),
-        cornerPaint,
-      );
+          Offset(cx, cy + sy * 10), Offset(cx, cy + sy * 28), cornerPaint);
     }
   }
 
@@ -765,8 +786,6 @@ class _CardBgPainter extends CustomPainter {
   bool shouldRepaint(_CardBgPainter _) => false;
 }
 
-// ─────────────────────────────────────────────────────────────
-// PLACEHOLDER DE IMAGEN
 // ─────────────────────────────────────────────────────────────
 class _ImagePlaceholder extends StatelessWidget {
   @override

@@ -434,11 +434,28 @@ class _GameScreenState extends State<GameScreen> {
           // Cargar obeliscos en background — no bloquea la carga del juego
           _assignObeliscos().catchError((_) {});
 
+// Intentar restaurar la mano guardada en statsPartida
+          List<CartaModel> manoFinal = manoRestante;
+          final rawSt = data['statsPartida'] as Map<String, dynamic>? ?? {};
+          if (rawSt.containsKey(widget.localPlayerUid)) {
+            final myS =
+                Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
+            final manoGuardada = myS['mano'] as List?;
+            if (manoGuardada != null && manoGuardada.isNotEmpty) {
+              final manoIds =
+                  Set<String>.from(manoGuardada.map((e) => e.toString()));
+              // Filtrar el mazo usando solo los IDs guardados
+              final restaurada =
+                  mazo.cartas.where((c) => manoIds.contains(c.id)).toList();
+              if (restaurada.isNotEmpty) manoFinal = restaurada;
+            }
+          }
+
           setState(() {
-            _hand = manoRestante;
+            _hand = manoFinal;
             _loading = false;
             _boardStateInicial = _boardState;
-            _handInicial = List.from(manoRestante);
+            _handInicial = List.from(manoFinal);
             _cartasMovidasEsteTurno.clear();
           });
           _turnoConfirmadoStream = lobby.turnoActual;
@@ -934,6 +951,8 @@ class _GameScreenState extends State<GameScreen> {
           'IdHabilidad': carta.idHabilidad,
           'Movimiento': carta.movimiento,
           'Tipo': carta.tipo,
+          'IdEvolucion': carta.idEvolucion, // ← NUEVA
+          'Evolucion': carta.evolucion, // ← NUEVA
           'ownerUid': c.ownerUid,
           'ownerZone': c.ownerZone,
         };
@@ -996,6 +1015,16 @@ class _GameScreenState extends State<GameScreen> {
     }
 
     if (mounted) setState(() => _isSendingTurn = false);
+    // Persistir la mano actual para que al re-entrar no se recalcule
+    if (widget.lobbyId != null) {
+      FirebaseFirestore.instance
+          .collection('Partidas')
+          .doc(widget.lobbyId)
+          .update({
+        'statsPartida.${widget.localPlayerUid}.mano':
+            _hand.map((c) => c.id).toList(),
+      }).catchError((_) {}); // fire-and-forget
+    }
     _toast('Turno cerrado. Esperando a los demás…');
   }
 
@@ -1098,6 +1127,16 @@ class _GameScreenState extends State<GameScreen> {
         _cartasMovidasEsteTurno.clear();
         if (ptsGanados > 0) _localPlayer.puntos += ptsGanados;
       });
+      // Actualizar la mano guardada en Firestore tras resolver turno
+      if (widget.lobbyId != null) {
+        FirebaseFirestore.instance
+            .collection('Partidas')
+            .doc(widget.lobbyId)
+            .update({
+          'statsPartida.${widget.localPlayerUid}.mano':
+              _hand.map((c) => c.id).toList(),
+        }).catchError((_) {});
+      }
       if (_modoTurno == ModoTurno.rapida && mounted) _startTimer();
     } catch (e) {
       // Cualquier excepción en el flujo de resolución resetea el estado
@@ -1159,7 +1198,7 @@ class _GameScreenState extends State<GameScreen> {
     );
     if (confirm == true && mounted) {
       _lobbySub?.cancel();
-      Navigator.of(context).popUntil((route) => route.isFirst);
+      Navigator.of(context).pop();
     }
   }
 
@@ -1352,6 +1391,7 @@ class _GameScreenState extends State<GameScreen> {
                   cartas: _hand,
                   selectedIndex: _selectedHandIndex,
                   onCardTap: _onHandCardTap,
+                  resolveEvolucion: _resolveEvolucion,
                 ),
               ],
             ),

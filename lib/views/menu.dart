@@ -7,6 +7,8 @@ import 'package:warzero/views/loginBody.dart';
 import 'package:warzero/views/settingsScreen.dart';
 import 'package:warzero/views/lobby_screen.dart';
 import 'package:warzero/views/mazo_screen.dart';
+import 'package:warzero/views/cartas_screen.dart';
+import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/crear_carta_screen.dart';
 
 class MenuScreen extends StatelessWidget {
@@ -40,28 +42,52 @@ class MenuScreen extends StatelessWidget {
                 border: Border(
                     bottom: BorderSide(color: Color(0x20C8A860), width: 1)),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  const Text(
-                    'WARZERO',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFFC8A860),
-                      fontFamily: 'Cinzel',
-                      letterSpacing: 8,
-                      height: 1,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'WARZERO',
+                          style: TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFFC8A860),
+                            fontFamily: 'Cinzel',
+                            letterSpacing: 8,
+                            height: 1,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'BIENVENIDO, ${alias.toUpperCase()}',
+                          style: const TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF506070),
+                            fontFamily: 'Cinzel',
+                            letterSpacing: 3,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'BIENVENIDO, ${alias.toUpperCase()}',
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF506070),
-                      fontFamily: 'Cinzel',
-                      letterSpacing: 3,
+                  // Botón de acceso rápido al perfil
+                  GestureDetector(
+                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => const PerfilScreen())),
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF080D18),
+                        border: Border.all(
+                            color: const Color(0xFFC8A860).withOpacity(0.3),
+                            width: 1),
+                      ),
+                      child: const Icon(Icons.person_outline,
+                          size: 20, color: Color(0xFFC8A860)),
                     ),
                   ),
                 ],
@@ -94,6 +120,24 @@ class MenuScreen extends StatelessWidget {
                       accent: const Color(0xFFC8A860),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const MazoScreen()),
+                      ),
+                    ),
+                    _MenuTile(
+                      icon: Icons.collections_bookmark_outlined,
+                      label: 'CARTAS',
+                      sublabel: 'Colección y\npersonalización',
+                      accent: const Color(0xFFA040FF),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const CartasScreen()),
+                      ),
+                    ),
+                    _MenuTile(
+                      icon: Icons.person_outline,
+                      label: 'PERFIL',
+                      sublabel: 'Tu alias e\nimagen de perfil',
+                      accent: const Color(0xFF40C0D0),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const PerfilScreen()),
                       ),
                     ),
                     _MenuTile(

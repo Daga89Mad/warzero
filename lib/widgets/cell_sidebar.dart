@@ -30,19 +30,10 @@ class CellSidebar extends StatefulWidget {
   final Map<String, Color> playerColors;
 
   // ── Sistema de evoluciones ───────────────────────────────
-  /// Energías disponibles del jugador local (para el botón EVOLUCIONAR).
   final int? energiasDisponibles;
-
-  /// Resuelve la carta de evolución por su id.
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
-
-  /// Callback al confirmar evolución de una carta local.
-  /// Recibe la coord de la celda, el índice de la carta y la evolución.
-  final Future<void> Function(
-    String coord,
-    int indice,
-    CartaModel evolucion,
-  )? onEvolucionar;
+  final Future<void> Function(String coord, int indice, CartaModel evolucion)?
+      onEvolucionar;
 
   static const double width = 220;
 
@@ -72,6 +63,7 @@ class _CellSidebarState extends State<CellSidebar> {
   @override
   void didUpdateWidget(CellSidebar old) {
     super.didUpdateWidget(old);
+    // Limpiar al cambiar de celda o al cerrar
     if (old.coord != widget.coord || (!widget.isOpen && old.isOpen)) {
       setState(() => _selected.clear());
     }
@@ -93,6 +85,7 @@ class _CellSidebarState extends State<CellSidebar> {
     final localCount = cards.where((c) => c.ownerUid == widget.localUid).length;
     final total = widget.isEnemyObelisco ? null : widget.celda?.fuerzaTotal;
 
+    // Movimiento mínimo entre cartas seleccionadas
     int? minMov;
     if (_selected.isNotEmpty) {
       minMov = _selected
@@ -119,6 +112,7 @@ class _CellSidebarState extends State<CellSidebar> {
               total: total,
               onClose: widget.onClose),
           const Divider(color: Color(0x30503214), height: 1),
+
           Expanded(
             child: _Body(
               celda: widget.celda,
@@ -134,6 +128,8 @@ class _CellSidebarState extends State<CellSidebar> {
               onEvolucionar: widget.onEvolucionar,
             ),
           ),
+
+          // Botón MOVER solo cuando hay cartas propias y onMoveSelected definido
           if (!widget.isEnemyObelisco &&
               hasLocal &&
               widget.onMoveSelected != null)
@@ -430,6 +426,7 @@ class _CardTile extends StatelessWidget {
   }
 
   void _abrirDetalle(BuildContext ctx) {
+    // Solo evolucionar cartas propias con evolución configurada
     final puedeEvolucionar = isLocal &&
         onEvolucionar != null &&
         coord != null &&
