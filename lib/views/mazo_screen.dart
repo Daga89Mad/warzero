@@ -97,8 +97,11 @@ class _MazoScreenState extends State<MazoScreen> {
       _mazos.where((m) => m.ejercitoId == _selectedEjercitoId).toList();
 
   // ── Cartas del ejército activo ────────────────────────────
-  List<CartaModel> get _cartasDelEjercito =>
-      _todasLasCartas.where((c) => c.ejercito == _selectedEjercitoId).toList();
+  List<CartaModel> get _cartasDelEjercito => _todasLasCartas
+      .where((c) =>
+          c.ejercito == _selectedEjercitoId &&
+          !c.esEvolucion) // Evolución no se puede añadir a un mazo
+      .toList();
 
   // ── Crear mazo vacío ──────────────────────────────────────
   Future<void> _crearMazo() async {

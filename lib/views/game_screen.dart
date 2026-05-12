@@ -450,7 +450,8 @@ class _GameScreenState extends State<GameScreen> {
               if (restaurada.isNotEmpty) manoFinal = restaurada;
             }
           }
-
+          // Quitar cartas de condicion Evolución de la mano (no se reparten)
+          manoFinal = manoFinal.where((c) => !c.esEvolucion).toList();
           setState(() {
             _hand = manoFinal;
             _loading = false;
@@ -787,6 +788,20 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
     final carta = _hand[_selectedHandIndex!];
+
+    // ── Regla Estática: solo colocar donde ya hay carta propia del turno anterior ──
+    if (carta.esEstatica) {
+      final celdaInicial = _boardStateInicial.getCelda(coord);
+      final tieneCartaPropiaAnterior =
+          celdaInicial.cartas.any((c) => c.ownerUid == _localPlayer.datos.uid);
+      if (!tieneCartaPropiaAnterior) {
+        _toast(
+            '🏰 Estática: solo puedes colocarla donde ya tenías una carta del turno anterior',
+            error: true);
+        return;
+      }
+    }
+
     setState(() {
       _boardState = _boardState.placeCarta(
         coord,
@@ -799,6 +814,10 @@ class _GameScreenState extends State<GameScreen> {
       // No añadir a _cartasMovidasEsteTurno: desplegar desde la mano
       // no consume el movimiento de la carta; podrá moverse este mismo turno.
       _selectedHandIndex = null;
+      // Estáticas no pueden moverse tras colocarse
+      if (carta.esEstatica) {
+        _cartasMovidasEsteTurno.add(carta.id);
+      }
       _sidebarCoord = coord;
       _sidebarRi = ri;
       _sidebarCi = ci;
@@ -821,9 +840,19 @@ class _GameScreenState extends State<GameScreen> {
         .where((i) =>
             i < celda.cartas.length &&
             celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
-            !_cartasMovidasEsteTurno.contains(celda.cartas[i].carta.id))
+            !_cartasMovidasEsteTurno.contains(celda.cartas[i].carta.id) &&
+            !celda.cartas[i].carta.esEstatica) // Estáticas no se mueven
         .toList();
 
+    // Mensaje específico si todas eran estáticas
+    if (validIndices.isEmpty) {
+      final todasEstaticas = indices.every(
+          (i) => i < celda.cartas.length && celda.cartas[i].carta.esEstatica);
+      if (todasEstaticas) {
+        _toast('🏰 Las cartas estáticas no pueden moverse', error: true);
+        return;
+      }
+    }
     if (validIndices.isEmpty) {
       final alreadyMoved = indices.any((i) =>
           i < celda.cartas.length &&
@@ -951,8 +980,9 @@ class _GameScreenState extends State<GameScreen> {
           'IdHabilidad': carta.idHabilidad,
           'Movimiento': carta.movimiento,
           'Tipo': carta.tipo,
-          'IdEvolucion': carta.idEvolucion, // ← NUEVA
-          'Evolucion': carta.evolucion, // ← NUEVA
+          'IdEvolucion': carta.idEvolucion,
+          'Evolucion': carta.evolucion,
+          'Condicion': carta.condicion.value,
           'ownerUid': c.ownerUid,
           'ownerZone': c.ownerZone,
         };

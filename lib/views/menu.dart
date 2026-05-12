@@ -9,7 +9,7 @@ import 'package:warzero/views/lobby_screen.dart';
 import 'package:warzero/views/mazo_screen.dart';
 import 'package:warzero/views/cartas_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
-import 'package:warzero/views/crear_carta_screen.dart';
+import 'package:warzero/views/edicion_cartas_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -72,7 +72,6 @@ class MenuScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-                  // Botón de acceso rápido al perfil
                   GestureDetector(
                     onTap: () => Navigator.of(context).push(MaterialPageRoute(
                         builder: (_) => const PerfilScreen())),
@@ -141,13 +140,13 @@ class MenuScreen extends StatelessWidget {
                       ),
                     ),
                     _MenuTile(
-                      icon: Icons.add_card,
-                      label: 'CREAR CARTA',
-                      sublabel: 'Diseña nuevas\ncartas para el juego',
+                      icon: Icons.edit_note,
+                      label: 'EDICIÓN',
+                      sublabel: 'Crear y editar\ncartas del juego',
                       accent: const Color(0xFFA040C0),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(
-                            builder: (_) => const CrearCartaScreen()),
+                            builder: (_) => const EdicionCartasScreen()),
                       ),
                     ),
                     _MenuTile(
@@ -220,8 +219,6 @@ class MenuScreen extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// TILE DEL MENÚ
 // ─────────────────────────────────────────────────────────────
 class _MenuTile extends StatelessWidget {
   final IconData icon;

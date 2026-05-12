@@ -545,10 +545,19 @@ class _CardTile extends StatelessWidget {
                               fontFamily: 'Georgia')),
                       const SizedBox(height: 5),
                       Row(children: [
-                        _Chip(label: 'MOV ${carta.movimiento}', color: color),
+                        _Chip(
+                            label: 'MOV ${carta.movimientoEfectivo}',
+                            color: color),
                         const SizedBox(width: 4),
                         _Chip(
                             label: _ownerLabel(entry.ownerZone), color: color),
+                        if (carta.condicion != CondicionCarta.basica) ...[
+                          const SizedBox(width: 4),
+                          _Chip(
+                              label:
+                                  '${carta.condicion.icon} ${carta.condicion.label.toUpperCase()}',
+                              color: Color(carta.condicion.colorValue)),
+                        ],
                         if (carta.puedeEvolucionar) ...[
                           const SizedBox(width: 4),
                           _Chip(

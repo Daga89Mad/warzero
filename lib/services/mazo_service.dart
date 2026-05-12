@@ -15,11 +15,8 @@ class MazoService {
 
   // ── Cargar mazos de un jugador ─────────────────────────────
   Future<List<MazoModel>> fetchMazosDelJugador(String uid) async {
-    final snap = await _db
-        .collection('Jugadores')
-        .doc(uid)
-        .collection('Mazos')
-        .get();
+    final snap =
+        await _db.collection('Jugadores').doc(uid).collection('Mazos').get();
 
     final mazos = <MazoModel>[];
     for (final mazoDoc in snap.docs) {
@@ -55,6 +52,8 @@ class MazoService {
   /// Crea un mazo aleatorio con las primeras N cartas disponibles
   Future<MazoResuelto> crearMazoPorDefecto({int tamanio = 20}) async {
     final todasLasCartas = await fetchTodasLasCartas();
+    // Filtrar cartas de Evolución: no se incluyen en mazos
+    todasLasCartas.removeWhere((c) => c.esEvolucion);
     todasLasCartas.shuffle();
     final seleccion = todasLasCartas.take(tamanio).toList();
     return MazoResuelto(id: 'default', cartas: seleccion);

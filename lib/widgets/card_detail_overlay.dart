@@ -622,6 +622,46 @@ class _CardFace extends StatelessWidget {
                               ),
                             ),
                           ),
+                          // ── Condición (si no es básica) ──
+                          if (carta.condicion != CondicionCarta.basica) ...[
+                            const SizedBox(height: 6),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text(
+                                  'CONDICIÓN',
+                                  style: TextStyle(
+                                    fontSize: 8,
+                                    color: Color(0xFF7A6A40),
+                                    fontFamily: 'Cinzel',
+                                    letterSpacing: 1.5,
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Color(carta.condicion.colorValue)
+                                        .withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                        color: Color(carta.condicion.colorValue)
+                                            .withOpacity(0.40),
+                                        width: 0.8),
+                                  ),
+                                  child: Text(
+                                    '${carta.condicion.icon} ${carta.condicion.label}',
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(carta.condicion.colorValue),
+                                      fontFamily: 'Cinzel',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                           const SizedBox(height: 8),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
