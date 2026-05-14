@@ -72,7 +72,7 @@ class _CartasScreenState extends State<CartasScreen>
         final d = doc.data() as Map<String, dynamic>;
         coleccion[doc.id] = _ColeccionEntry(
           cartaId: doc.id,
-          cantidad: (d['cantidad'] as num?)?.toInt() ?? 1,
+          cantidad: int.tryParse(d['cantidad']?.toString() ?? '1') ?? 1,
           skinSeleccionada: d['skinSeleccionada'] as String?,
           skinsDesbloqueadas:
               List<String>.from(d['skinsDesbloqueadas'] as List? ?? []),

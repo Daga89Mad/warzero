@@ -13,7 +13,7 @@ class MazoEntrada {
   factory MazoEntrada.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
     return MazoEntrada(
-      idCarta:  doc.id,
+      idCarta: doc.id,
       cantidad: (d['Cantidad'] as num?)?.toInt() ?? 1,
     );
   }
@@ -37,4 +37,14 @@ class MazoResuelto {
   const MazoResuelto({required this.id, required this.cartas});
 
   int get total => cartas.length;
+
+  /// Devuelve un nuevo MazoResuelto con solo las cartas del ejército indicado.
+  /// Si no hay cartas del ejército (o [ejercitoId] es null) devuelve el mazo
+  /// original sin cambios.
+  MazoResuelto filtrarPorEjercito(int? ejercitoId) {
+    if (ejercitoId == null) return this;
+    final filtradas = cartas.where((c) => c.ejercito == ejercitoId).toList();
+    if (filtradas.isEmpty) return this; // fallback: no filtrar si queda vacío
+    return MazoResuelto(id: id, cartas: filtradas);
+  }
 }

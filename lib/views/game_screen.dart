@@ -54,6 +54,9 @@ class _GameScreenState extends State<GameScreen> {
   /// uid → color del obelisco asignado (se carga desde Firestore)
   Map<String, Color> _playerColors = {};
 
+  /// uid → coord del obelisco asignado (para lógica de conquista)
+  Map<String, String> _obeliscosPorJugador = {};
+
   // ── Modo turno ────────────────────────────────────────────
   ModoTurno _modoTurno = ModoTurno.rapida;
   List<String> _cerradoPor = [];
@@ -61,51 +64,44 @@ class _GameScreenState extends State<GameScreen> {
   int _segundosRestantes = 30;
   bool _timerActivo = false;
 
-  /// Guard para evitar llamar _resolverTurno más de una vez por turno.
-  /// Se resetea cuando llega el nuevo turno desde Firestore.
   bool _resolviendo = false;
-
-  /// True mientras se envía el turno.
   bool _isSendingTurn = false;
 
-  /// Último informe de batalla (combates y movimientos del turno anterior)
+  /// Jugadores eliminados (cuartel conquistado).
+  List<String> _jugadoresEliminados = [];
+
+  /// True si el jugador local fue eliminado.
+  bool _estoyEliminado = false;
+
+  /// True si la partida ha terminado (solo queda 1 jugador).
+  bool _juegoTerminado = false;
+  String? _ganadorUid;
+
   List<Map<String, dynamic>> _lastCombateLog = [];
   List<Map<String, dynamic>> _lastMovimientosLog = [];
   LobbyModel? _currentLobby;
   List<Map<String, dynamic>> _historialCombates = [];
 
-  /// Último turno cuyo informe ya se ha auto-mostrado al jugador local.
-  /// Evita que cada nuevo snapshot de Firestore vuelva a apilar el mismo
-  /// informe encima del que ya está abierto.
   int _informeMostradoTurno = 0;
-
-  /// True mientras el InformeBatallaScreen está abierto en la pila local.
-  /// Si está abierto y llega un turno nuevo, NO se auto-pushea el siguiente
-  /// informe (para no pisar lo que el usuario está leyendo). Los datos sí se
-  /// actualizan en _lastCombateLog/_lastMovimientosLog para que el botón
-  /// del tablero muestre el último al cerrar el actual.
   bool _informeAbierto = false;
-  String _hostUid =
-      ''; // guardado del stream para no necesitar red en checkRefresh
+  String _hostUid = '';
 
-  /// True solo después de que _loadGame termina completamente.
-  /// Evita que el stream de lobby dispare lógica antes de que el estado
-  /// inicial esté listo (problema en Pixel 9 con caché de Firestore).
   bool _cargaCompletada = false;
-
-  /// Último número de turno que el STREAM de Firestore confirmó y aplicó.
-  /// Independiente de _boardState.turnoActual para que el host (que actualiza
-  /// _boardState localmente en _resolverTurno) también reciba la sincronización
-  /// del tablero definitivo cuando llega el snapshot de Firestore.
   int _turnoConfirmadoStream = 0;
 
   bool get _yoCerreElTurno => _cerradoPor.contains(widget.localPlayerUid);
-  bool get _esperandoOtros =>
-      _yoCerreElTurno && _cerradoPor.length < _jugadoresEnPartida;
-  bool get _todosCerraronTurno => _cerradoPor.length >= _jugadoresEnPartida;
 
-  // ── Mano ──────────────────────────────────────────────────
+  /// Número de jugadores activos (no eliminados).
+  int get _jugadoresActivos =>
+      math.max(1, _jugadoresEnPartida - _jugadoresEliminados.length);
+
+  bool get _esperandoOtros =>
+      _yoCerreElTurno && _cerradoPor.length < _jugadoresActivos;
+  bool get _todosCerraronTurno => _cerradoPor.length >= _jugadoresActivos;
+
+  // ── Mano y mazo ───────────────────────────────────────────
   List<CartaModel> _hand = [];
+  List<CartaModel> _mazoRestante = [];
   int? _selectedHandIndex;
 
   // ── Sidebar ───────────────────────────────────────────────
@@ -115,28 +111,22 @@ class _GameScreenState extends State<GameScreen> {
   bool _sidebarOpen = false;
 
   // ── Modo movimiento ───────────────────────────────────────
-  /// Celda de origen desde la que se van a mover cartas
   String? _moveFromCoord;
-
-  /// Índices de las cartas seleccionadas en _moveFromCoord
   List<int> _moveCardIndices = [];
-
-  /// Celdas alcanzables (azul) basadas en min(movimiento) + terreno
   Set<String> _movableCoords = {};
-
   bool get _inMoveMode => _moveFromCoord != null;
 
-  // ── Snapshot inicial del turno (estado Firebase) ──────────
+  // ── Snapshot inicial del turno ─────────────────────────────
   BoardState _boardStateInicial = const BoardState();
   List<CartaModel> _handInicial = [];
-
-  /// IDs de cartas que ya se han movido o colocado este turno.
   final Set<String> _cartasMovidasEsteTurno = {};
-
   bool get _hayCambiosPendientes => _cartasMovidasEsteTurno.isNotEmpty;
 
   bool _loading = true;
   String? _error;
+
+  // ── Tamaño inicial de la mano al arrancar la partida ───────
+  static const int _initialHandSize = 5;
 
   // ─────────────────────────────────────────────────────────
   @override
@@ -181,6 +171,12 @@ class _GameScreenState extends State<GameScreen> {
       );
       final all = await service.getObeliscos(widget.lobbyId!);
       if (!mounted) return;
+      final colors = <String, Color>{};
+      final obeliscos = <String, String>{};
+      all.forEach((uid, coord) {
+        colors[uid] = _obeliscoColor(coord);
+        obeliscos[uid] = coord;
+      });
       setState(() {
         _obeliscoLocal = assigned;
         _obeliscoOponente = all.entries
@@ -188,6 +184,8 @@ class _GameScreenState extends State<GameScreen> {
                 orElse: () => const MapEntry('', ''))
             .value
             .nullIfEmpty;
+        _playerColors = colors;
+        _obeliscosPorJugador = obeliscos;
       });
     } else {
       coords.shuffle(math.Random());
@@ -213,7 +211,7 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
-// ── Resolver carta de evolución desde Cartas/{id} ─────────
+  // ── Resolver carta de evolución desde Cartas/{id} ─────────
   Future<CartaModel?> _resolveEvolucion(String idEvolucion) async {
     if (idEvolucion.isEmpty) return null;
     try {
@@ -230,10 +228,6 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   // ── Evolucionar una carta en una celda ────────────────────
-  /// Sustituye la carta en [coord][indice] por [evolucion], descuenta el
-  /// coste de las energías del jugador local (statsPartida.{uid}.energies)
-  /// y persiste la deducción en Firestore. La carta evolucionada viaja
-  /// como parte del tablero en `cerrarTurno()`, igual que un movimiento.
   Future<void> _evolucionarCarta(
       String coord, int indice, CartaModel evolucion) async {
     if (_yoCerreElTurno) {
@@ -257,7 +251,6 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
 
-    // 1. Reemplazo local en la misma posición (manteniendo owner)
     final nuevaCarta = CartaEnCelda(
       carta: evolucion,
       ownerUid: original.ownerUid,
@@ -270,12 +263,9 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       _boardState = _boardState.setCelda(coord, nuevaCelda);
       _localPlayer.puntos -= coste;
-      // La carta evolucionada cuenta como acción del turno: la marcamos
-      // como movida para que no pueda volver a moverse este turno.
       _cartasMovidasEsteTurno.add(evolucion.id);
     });
 
-    // 2. Persistir descuento de energías en Firestore (atómico)
     if (widget.lobbyId != null) {
       try {
         await FirebaseFirestore.instance
@@ -286,7 +276,6 @@ class _GameScreenState extends State<GameScreen> {
               FieldValue.increment(-coste),
         }).timeout(const Duration(seconds: 8));
       } catch (e) {
-        // Si falla, revertir el cambio local.
         if (!mounted) return;
         setState(() {
           _boardState = _boardState.setCelda(coord, celda);
@@ -301,14 +290,44 @@ class _GameScreenState extends State<GameScreen> {
     _toast('${original.carta.nombre} → ${evolucion.nombre}  (-$coste⚡)');
   }
 
-  // ── Helper para reconstruir un CartaModel desde un mapa Firestore ──
-  // CartaModel.fromMap acepta PascalCase y snake_case (compatibilidad Firestore)
+  // ── Helper para reconstruir un CartaModel desde un mapa ───
   CartaModel _cartaFromMap(Map<String, dynamic> c, {String? fallbackId}) {
     final carta = CartaModel.fromMap(c);
     if (fallbackId != null && fallbackId.isNotEmpty && carta.id.isEmpty) {
       return carta.copyWith(id: fallbackId);
     }
     return carta;
+  }
+
+  // ── Restaurar lista de cartas desde IDs (respeta duplicados) ──
+  /// Dado una lista de IDs (puede tener repetidos), extrae del [pool] las
+  /// cartas correspondientes en orden, consumiendo cada instancia una vez.
+  List<CartaModel> _restoreCartasFromIds(
+      List<String> ids, List<CartaModel> pool) {
+    final disponibles = List<CartaModel>.from(pool);
+    final result = <CartaModel>[];
+    for (final id in ids) {
+      final idx = disponibles.indexWhere((c) => c.id == id);
+      if (idx != -1) {
+        result.add(disponibles[idx]);
+        disponibles.removeAt(idx);
+      }
+    }
+    return result;
+  }
+
+  // ── Persistir mano y mazo restante en Firestore ───────────
+  void _saveHandAndDeck() {
+    if (widget.lobbyId == null) return;
+    FirebaseFirestore.instance
+        .collection('Partidas')
+        .doc(widget.lobbyId)
+        .update({
+      'statsPartida.${widget.localPlayerUid}.mano':
+          _hand.map((c) => c.id).toList(),
+      'statsPartida.${widget.localPlayerUid}.mazoRestante':
+          _mazoRestante.map((c) => c.id).toList(),
+    }).catchError((_) {}); // fire-and-forget
   }
 
   // ── Cargar terreno desde la coleccion Mapas ──────────────
@@ -318,181 +337,236 @@ class _GameScreenState extends State<GameScreen> {
           .aplicarTerrenoAConfig(mapaId, _config)
           .timeout(const Duration(seconds: 8));
       if (mounted) setState(() => _config = config);
-    } catch (_) {
-      // Si la carga del terreno falla o tarda demasiado, continuar
-      // con el terreno por defecto (todo land) para no bloquear la carga.
-    }
+    } catch (_) {}
   }
 
   Future<void> _loadGame() async {
     try {
-      // Carga crítica en paralelo: mazo + datos del lobby.
-      // Los obeliscos se cargan en background tras mostrar el juego.
-      final futures = <Future>[
-        MazoService().obtenerMazoParaJuego(widget.localPlayerUid),
-        if (widget.lobbyId != null)
-          FirebaseFirestore.instance
+      // ── 1. Cargar datos del lobby en paralelo con el mazo base ──
+      final lobbyFuture = widget.lobbyId != null
+          ? FirebaseFirestore.instance
               .collection('Partidas')
               .doc(widget.lobbyId)
-              .get(),
-      ];
-      final results = await Future.wait(futures);
+              .get()
+          : null;
+      final lobbyDoc = lobbyFuture != null ? await lobbyFuture : null;
       if (!mounted) return;
-      final mazo = results[0] as MazoResuelto;
 
-      if (widget.lobbyId != null && results.length > 1) {
-        final doc = results[1] as DocumentSnapshot;
-        if (doc.exists) {
-          final lobby = LobbyModel.fromFirestore(doc);
-          final data = doc.data() as Map<String, dynamic>;
+      // ── 2. Extraer ejercitoId del lobby para filtrar el mazo ──
+      int? ejercitoId;
+      LobbyModel? lobby;
+      Map<String, dynamic> data = {};
 
-          setState(() {
-            _modoTurno = lobby.modoTurno;
-            _jugadoresEnPartida = lobby.jugadores.length;
-            _cerradoPor = List<String>.from(lobby.cerradoPor);
+      if (lobbyDoc != null && lobbyDoc.exists) {
+        lobby = LobbyModel.fromFirestore(lobbyDoc);
+        data = lobbyDoc.data() as Map<String, dynamic>;
+        final myJugador = lobby.jugadores.cast<LobbyJugador?>().firstWhere(
+            (j) => j?.uid == widget.localPlayerUid,
+            orElse: () => null);
+        ejercitoId = myJugador?.ejercitoId;
+      }
+
+      // ── 3. Cargar mazo filtrado por ejército ──────────────────
+      final mazo = await MazoService()
+          .obtenerMazoParaJuego(widget.localPlayerUid, ejercitoId: ejercitoId);
+      if (!mounted) return;
+
+      if (lobby != null) {
+        // ── 4. Configurar estado del lobby ────────────────────────
+        setState(() {
+          _modoTurno = lobby!.modoTurno;
+          _jugadoresEnPartida = lobby.jugadores.length;
+          _cerradoPor = List<String>.from(lobby.cerradoPor);
+        });
+
+        if (lobby.mapaId != null) {
+          await _aplicarTerreno(lobby.mapaId!);
+          if (!mounted) return;
+        }
+
+        // Logs y stats
+        final loadedCombateLog =
+            (data['ultimoCombateLog'] as List<dynamic>? ?? [])
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+        final loadedMovLog =
+            (data['ultimosMovimientos'] as List<dynamic>? ?? [])
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+        final rawStats = data['statsPartida'] as Map<String, dynamic>? ?? {};
+        int puntosRestaurados = 0;
+        if (rawStats.containsKey(widget.localPlayerUid)) {
+          final myS =
+              Map<String, dynamic>.from(rawStats[widget.localPlayerUid] as Map);
+          puntosRestaurados = (myS['energies'] as num?)?.toInt() ?? 0;
+        }
+        final loadedHistorial =
+            (data['historialCombates'] as List<dynamic>? ?? [])
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+
+        // Jugadores eliminados
+        final rawElim = data['jugadoresEliminados'] as List? ?? [];
+        final eliminados = List<String>.from(rawElim);
+
+        // Obeliscos
+        final obeliscosData = data['obeliscos'] as Map<String, dynamic>? ?? {};
+        final colors = <String, Color>{};
+        final obeliscosMap = <String, String>{};
+        obeliscosData.forEach((uid, coord) {
+          colors[uid] = _obeliscoColor(coord as String);
+          obeliscosMap[uid] = coord;
+        });
+
+        // Estado del juego
+        final juegoTerminado = lobby.estado == LobbyEstado.finalizada;
+
+        setState(() {
+          _currentLobby = lobby;
+          _lastCombateLog = loadedCombateLog;
+          _lastMovimientosLog = loadedMovLog;
+          _historialCombates = loadedHistorial;
+          _localPlayer.puntos = puntosRestaurados;
+          _playerColors = colors;
+          _obeliscosPorJugador = obeliscosMap;
+          _jugadoresEliminados = eliminados;
+          _estoyEliminado = eliminados.contains(widget.localPlayerUid);
+          _juegoTerminado = juegoTerminado;
+          _ganadorUid = lobby!.ganadorUid;
+        });
+
+        // ── 5. Restaurar tablero ──────────────────────────────────
+        if (data.containsKey('tablero')) {
+          final tableroRaw = TurnService.parseTablero(data);
+          var restoredBoard = const BoardState();
+          tableroRaw.forEach((coord, cartas) {
+            for (final c in cartas) {
+              restoredBoard = restoredBoard.placeCarta(
+                coord,
+                CartaEnCelda(
+                  carta: _cartaFromMap(c),
+                  ownerUid: c['ownerUid'] as String? ?? '',
+                  ownerZone: c['ownerZone'] as String? ?? '',
+                ),
+              );
+            }
           });
-
-          // ── Cargar terreno desde Mapas/{mapaId} ──────────────
-          if (lobby.mapaId != null) {
-            await _aplicarTerreno(lobby.mapaId!);
-            if (!mounted) return;
-          }
-
-          // Restaurar logs + puntos — dentro de setState para que el botón
-          // INFORME aparezca inmediatamente al cargar la partida.
-          final loadedCombateLog =
-              (data['ultimoCombateLog'] as List<dynamic>? ?? [])
-                  .map((e) => Map<String, dynamic>.from(e as Map))
-                  .toList();
-          final loadedMovLog =
-              (data['ultimosMovimientos'] as List<dynamic>? ?? [])
-                  .map((e) => Map<String, dynamic>.from(e as Map))
-                  .toList();
-          final rawStats = data['statsPartida'] as Map<String, dynamic>? ?? {};
-          int puntosRestaurados = _localPlayer.puntos;
-          if (rawStats.containsKey(widget.localPlayerUid)) {
-            final myS = Map<String, dynamic>.from(
-                rawStats[widget.localPlayerUid] as Map);
-            puntosRestaurados = (myS['energies'] as num?)?.toInt() ?? 0;
-          }
-          final loadedHistorial =
-              (data['historialCombates'] as List<dynamic>? ?? [])
-                  .map((e) => Map<String, dynamic>.from(e as Map))
-                  .toList();
           setState(() {
-            _currentLobby = lobby;
-            _lastCombateLog = loadedCombateLog;
-            _lastMovimientosLog = loadedMovLog;
-            _historialCombates = loadedHistorial;
-            _localPlayer.puntos = puntosRestaurados;
+            _boardState =
+                restoredBoard.copyWith(turnoActual: lobby!.turnoActual);
           });
+        }
 
-          if (data.containsKey('tablero')) {
-            final tableroRaw = TurnService.parseTablero(data);
-            var restoredBoard = const BoardState();
-            tableroRaw.forEach((coord, cartas) {
-              for (final c in cartas) {
-                restoredBoard = restoredBoard.placeCarta(
-                  coord,
-                  CartaEnCelda(
-                    carta: _cartaFromMap(c),
-                    ownerUid: c['ownerUid'] as String? ?? '',
-                    ownerZone: c['ownerZone'] as String? ?? '',
-                  ),
-                );
-              }
-            });
-            setState(() {
-              _boardState =
-                  restoredBoard.copyWith(turnoActual: lobby.turnoActual);
-            });
+        // ── 6. Restaurar mano y mazo (con soporte de duplicados) ──
+        List<CartaModel> manoFinal = [];
+        List<CartaModel> mazoRestanteFinal = [];
+
+        if (rawStats.containsKey(widget.localPlayerUid)) {
+          final myS =
+              Map<String, dynamic>.from(rawStats[widget.localPlayerUid] as Map);
+          final manoIds = myS['mano'] as List?;
+          final mazoIds = myS['mazoRestante'] as List?;
+
+          if (manoIds != null && manoIds.isNotEmpty) {
+            manoFinal = _restoreCartasFromIds(
+                manoIds.map((e) => e.toString()).toList(), mazo.cartas);
           }
+          if (mazoIds != null && mazoIds.isNotEmpty) {
+            mazoRestanteFinal = _restoreCartasFromIds(
+                mazoIds.map((e) => e.toString()).toList(), mazo.cartas);
+          }
+        }
 
+        // Si no hay mano guardada → repartir mano inicial
+        if (manoFinal.isEmpty && !_estoyEliminado) {
           final cartasEnTablero = _boardState.celdas.values
               .expand((c) => c.cartas)
               .where((c) => c.ownerUid == _localPlayer.datos.uid)
               .map((c) => c.carta.id)
               .toSet();
 
-          final manoRestante = mazo.cartas
-              .where((c) => !cartasEnTablero.contains(c.id))
-              .toList();
+          final pool = List<CartaModel>.from(mazo.cartas
+              .where((c) => !cartasEnTablero.contains(c.id) && !c.esEvolucion))
+            ..shuffle(math.Random());
 
-          final obeliscosData =
-              data['obeliscos'] as Map<String, dynamic>? ?? {};
-          final colors = <String, Color>{};
-          obeliscosData.forEach((uid, coord) {
-            colors[uid] = _obeliscoColor(coord as String);
-          });
-          setState(() => _playerColors = colors);
+          manoFinal = pool.take(_initialHandSize).toList();
+          mazoRestanteFinal = pool.skip(_initialHandSize).toList();
 
-          if (lobby.modoTurno == ModoTurno.rapida && lobby.cerradoPor.isEmpty) {
-            _startTimer();
-          }
-          _subscribeToLobby();
-
-          // Cargar obeliscos en background — no bloquea la carga del juego
-          _assignObeliscos().catchError((_) {});
-
-// Intentar restaurar la mano guardada en statsPartida
-          List<CartaModel> manoFinal = manoRestante;
-          final rawSt = data['statsPartida'] as Map<String, dynamic>? ?? {};
-          if (rawSt.containsKey(widget.localPlayerUid)) {
-            final myS =
-                Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
-            final manoGuardada = myS['mano'] as List?;
-            if (manoGuardada != null && manoGuardada.isNotEmpty) {
-              final manoIds =
-                  Set<String>.from(manoGuardada.map((e) => e.toString()));
-              // Filtrar el mazo usando solo los IDs guardados
-              final restaurada =
-                  mazo.cartas.where((c) => manoIds.contains(c.id)).toList();
-              if (restaurada.isNotEmpty) manoFinal = restaurada;
-            }
-          }
-          // Quitar cartas de condicion Evolución de la mano (no se reparten)
-          manoFinal = manoFinal.where((c) => !c.esEvolucion).toList();
+          // Guardar inmediatamente
           setState(() {
             _hand = manoFinal;
-            _loading = false;
-            _boardStateInicial = _boardState;
-            _handInicial = List.from(manoFinal);
-            _cartasMovidasEsteTurno.clear();
+            _mazoRestante = mazoRestanteFinal;
           });
-          _turnoConfirmadoStream = lobby.turnoActual;
-          _cargaCompletada = true;
-          // Si todos ya cerraron antes de que cargara _loadGame,
-          // el stream ya disparó pero _cargaCompletada era false.
-          // Comprobamos aquí para no perder el turno.
-          // Cualquier jugador puede resolver al volver a entrar a la partida
-          if (_todosCerraronTurno && !_resolviendo) {
-            _resolviendo = true;
-            _resolverTurno();
-          }
-          return;
+          _saveHandAndDeck();
+        } else {
+          // Filtrar evoluciones de la mano restaurada
+          manoFinal = manoFinal.where((c) => !c.esEvolucion).toList();
         }
+
+        setState(() {
+          _hand = manoFinal;
+          _mazoRestante = mazoRestanteFinal;
+          _loading = false;
+          _boardStateInicial = _boardState;
+          _handInicial = List.from(manoFinal);
+          _cartasMovidasEsteTurno.clear();
+        });
+        _turnoConfirmadoStream = lobby.turnoActual;
+        _cargaCompletada = true;
+
+        if (lobby.modoTurno == ModoTurno.rapida && lobby.cerradoPor.isEmpty) {
+          _startTimer();
+        }
+        _subscribeToLobby();
+        _assignObeliscos().catchError((_) {});
+
+        if (_todosCerraronTurno && !_resolviendo) {
+          _resolviendo = true;
+          _resolverTurno();
+        }
+
+        // Mostrar pantallas de fin de juego si procede
+        if (_juegoTerminado || _estoyEliminado) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            if (_estoyEliminado && !_juegoTerminado) {
+              _showEliminadoDialog();
+            } else if (_juegoTerminado) {
+              _showFinPartidaDialog();
+            }
+          });
+        }
+        return;
       }
 
-      final fullHand = List<CartaModel>.from(mazo.cartas)..shuffle();
+      // ── Modo offline (sin lobby) ──────────────────────────────
+      final fullHand = List<CartaModel>.from(
+          mazo.cartas.where((c) => !c.esEvolucion).toList())
+        ..shuffle();
+      final manoInicial = fullHand.take(_initialHandSize).toList();
+      final mazoOff = fullHand.skip(_initialHandSize).toList();
       setState(() {
-        _hand = fullHand;
+        _hand = manoInicial;
+        _mazoRestante = mazoOff;
         _loading = false;
         _boardStateInicial = _boardState;
-        _handInicial = List.from(fullHand);
+        _handInicial = List.from(manoInicial);
         _cartasMovidasEsteTurno.clear();
       });
     } on TimeoutException catch (_) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = 'La conexión tardó demasiado.\nPulsa Reintentar.';
           _loading = false;
         });
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = 'Error: ${e.toString()}';
           _loading = false;
         });
+      }
     }
   }
 
@@ -509,24 +583,52 @@ class _GameScreenState extends State<GameScreen> {
       final lobby = LobbyModel.fromFirestore(doc);
       final data = doc.data() as Map<String, dynamic>;
 
+      // ── Actualizar obeliscos ──────────────────────────────────
       final obelData = data['obeliscos'] as Map<String, dynamic>? ?? {};
       final streamColors = <String, Color>{};
+      final streamObeliscos = <String, String>{};
       obelData.forEach((uid, coord) {
         streamColors[uid] = _obeliscoColor(coord as String);
+        streamObeliscos[uid] = coord;
       });
+
+      // ── Actualizar eliminados ─────────────────────────────────
+      final rawElim = data['jugadoresEliminados'] as List? ?? [];
+      final nuevosEliminados = List<String>.from(rawElim);
+      final yaEliminadoAntes = _estoyEliminado;
+      final ahoraEliminado = nuevosEliminados.contains(widget.localPlayerUid);
+
+      // ── Estado fin de partida ─────────────────────────────────
+      final juegoTerminado = lobby.estado == LobbyEstado.finalizada;
+
       setState(() {
         _cerradoPor = List<String>.from(lobby.cerradoPor);
         _jugadoresEnPartida = lobby.jugadores.length;
         _modoTurno = lobby.modoTurno;
         if (streamColors.isNotEmpty) _playerColors = streamColors;
+        if (streamObeliscos.isNotEmpty) _obeliscosPorJugador = streamObeliscos;
         _currentLobby = lobby;
         _hostUid = lobby.hostUid;
+        _jugadoresEliminados = nuevosEliminados;
+        _estoyEliminado = ahoraEliminado;
+        _juegoTerminado = juegoTerminado;
+        if (juegoTerminado) _ganadorUid = lobby.ganadorUid;
       });
 
-      // Aplicar el tablero de Firestore si el stream trae un turno que aún
-      // no hemos confirmado. Usamos _turnoConfirmadoStream en lugar de
-      // _boardState.turnoActual para que el HOST (que ya actualiza
-      // _boardState localmente en _resolverTurno) también sincronice.
+      // Mostrar diálogo de eliminación si acaba de ocurrir
+      if (!yaEliminadoAntes && ahoraEliminado) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showEliminadoDialog();
+        });
+      }
+      // Mostrar fin de partida
+      if (juegoTerminado && !_informeAbierto) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showFinPartidaDialog();
+        });
+      }
+
+      // ── Nuevo turno: aplicar tablero y robar 1 carta ──────────
       if (lobby.turnoActual > _turnoConfirmadoStream &&
           data.containsKey('tablero')) {
         final tableroRaw = TurnService.parseTablero(data);
@@ -544,35 +646,55 @@ class _GameScreenState extends State<GameScreen> {
           }
         });
         _turnoConfirmadoStream = lobby.turnoActual;
+
+        // Robar 1 carta del mazo restante (si no está eliminado)
+        CartaModel? cartaRobada;
+        final nuevoMazo = List<CartaModel>.from(_mazoRestante);
+        if (nuevoMazo.isNotEmpty && !_estoyEliminado) {
+          final idx = nuevoMazo.indexWhere((c) => !c.esEvolucion);
+          if (idx != -1) {
+            cartaRobada = nuevoMazo[idx];
+            nuevoMazo.removeAt(idx);
+          }
+        }
+        final nuevaMano = cartaRobada != null
+            ? [..._hand, cartaRobada]
+            : List<CartaModel>.from(_hand);
+
         setState(() {
           _boardState = restoredState.copyWith(turnoActual: lobby.turnoActual);
           _cerradoPor = [];
           _resolviendo = false;
-          _isSendingTurn = false; // siempre resetear al llegar nuevo turno
+          _isSendingTurn = false;
           _cargaCompletada = true;
           _boardStateInicial =
               restoredState.copyWith(turnoActual: lobby.turnoActual);
-          _handInicial = List.from(_hand);
+          _hand = nuevaMano;
+          _mazoRestante = nuevoMazo;
+          _handInicial = List.from(nuevaMano);
           _cartasMovidasEsteTurno.clear();
         });
-        // Actualizar puntos locales desde statsPartida
+
+        // Persistir mano + mazo tras robar la carta
+        _saveHandAndDeck();
+
+        // Actualizar puntos locales
         final rawSt = data['statsPartida'] as Map<String, dynamic>? ?? {};
         if (rawSt.containsKey(widget.localPlayerUid)) {
           final myS =
               Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
           final pts = (myS['energies'] as num?)?.toInt() ?? 0;
-          if (pts != _localPlayer.puntos)
+          if (pts != _localPlayer.puntos) {
             setState(() => _localPlayer.puntos = pts);
+          }
         }
         if (_modoTurno == ModoTurno.rapida) _startTimer();
 
-        // Mostrar informe de batalla a partir del turno 2.
-        // Solo se auto-mostrará si:
-        //   (1) no hemos mostrado ya el informe de este mismo turno
-        //   (2) no hay un informe abierto pisable (evitar que un nuevo turno
-        //       cubra el informe que el usuario todavía está leyendo).
-        // En ambos casos, _lastCombateLog / _lastMovimientosLog quedan
-        // actualizados para que el botón del tablero abra siempre el último.
+        if (cartaRobada != null) {
+          _toast('🃏 +1 carta para el nuevo turno');
+        }
+
+        // Informe de batalla (a partir del turno 2)
         if (lobby.turnoActual > 1 && mounted) {
           final combateLog = (data['ultimoCombateLog'] as List<dynamic>? ?? [])
               .map((e) => Map<String, dynamic>.from(e as Map))
@@ -580,7 +702,6 @@ class _GameScreenState extends State<GameScreen> {
           final movLog = (data['ultimosMovimientos'] as List<dynamic>? ?? [])
               .map((e) => Map<String, dynamic>.from(e as Map))
               .toList();
-          // Guardar para acceso posterior desde el botón del tablero
           _lastCombateLog = combateLog;
           _lastMovimientosLog = movLog;
           final historialData =
@@ -616,20 +737,14 @@ class _GameScreenState extends State<GameScreen> {
         return;
       }
 
-      // ── El host resuelve cuando todos cierran ─────────────────
-      // _cargaCompletada evita que el primer snapshot de caché (Pixel 9)
-      // dispare la resolución antes de que _loadGame haya terminado.
-      // _resolviendo evita llamadas dobles si llegan varios snapshots seguidos.
-      // Cualquier jugador puede disparar la resolución.
-      // La transacción Firestore garantiza que solo se aplique una vez.
+      // ── Resolver turno cuando todos cierran ───────────────────
       if (_cargaCompletada &&
           !_resolviendo &&
-          _cerradoPor.length >= _jugadoresEnPartida) {
+          _cerradoPor.length >= _jugadoresActivos) {
         _resolviendo = true;
         _resolverTurno();
       }
     }, onError: (e) {
-      // Errores del stream Firestore (conexión, permisos, etc.)
       if (mounted) _toast('Conexión perdida con el servidor', error: true);
     });
   }
@@ -654,8 +769,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     _lobbySub?.cancel();
-    _timerActivo =
-        false; // detener el timer para que Future.doWhile no llame setState
+    _timerActivo = false;
     super.dispose();
   }
 
@@ -679,19 +793,8 @@ class _GameScreenState extends State<GameScreen> {
     return (pa.$1 - pb.$1).abs() + (pa.$2 - pb.$2).abs();
   }
 
-  // ── BFS de movimiento con restricciones de terreno ────────
-  //
-  // Reglas según el campo `tipo` de la carta:
-  //   tipo 1 (terrestre) → solo traversa/aterriza en land y amphibious.
-  //                         Una celda de agua bloquea el paso completamente.
-  //   tipo 2 (volador)   → traversa cualquier celda, pero solo puede
-  //                         detenerse en land y amphibious.
-  //   tipo 3 (marino)    → inverso al tipo 1: solo traversa/aterriza en
-  //                         sea, deepSea y amphibious.
   Set<String> _computeMovableBFS(String from, int mov, int tipo) {
     if (mov <= 0) return {};
-
-    // visited[coord] = mínimo de pasos gastados para llegar
     final visited = <String, int>{from: 0};
     final queue = [_MoveNode(from, 0)];
     int head = 0;
@@ -700,7 +803,6 @@ class _GameScreenState extends State<GameScreen> {
     while (head < queue.length) {
       final node = queue[head++];
       if (node.steps >= mov) continue;
-
       final pos = _coordToPos(node.coord);
       if (pos == null) continue;
       final (ri, ci) = pos;
@@ -714,37 +816,26 @@ class _GameScreenState extends State<GameScreen> {
         }
         final nCoord = _config.coordLabel(nr, nc);
         final newSteps = node.steps + 1;
-
-        // Ya visitado con igual o menor coste
         if ((visited[nCoord] ?? 999) <= newSteps) continue;
-
-        // ¿Puede la unidad atravesar esta celda?
         if (!_config.canTraverse(nCoord, tipo)) continue;
-
         visited[nCoord] = newSteps;
-
-        // ¿Puede la unidad detenerse aquí?
         if (nCoord != from && _config.canLand(nCoord, tipo)) {
           result.add(nCoord);
         }
-
         if (newSteps < mov) {
           queue.add(_MoveNode(nCoord, newSteps));
         }
       }
     }
-
     return result;
   }
 
-  /// Calcula el tipo efectivo de un grupo de cartas.
-  /// Devuelve -1 si la mezcla es incompatible (terrestre + marino).
   int _tipoEfectivo(List<int> validIndices, CeldaState celda) {
     final tipos = validIndices.map((i) => celda.cartas[i].carta.tipo).toSet();
     if (tipos.length == 1) return tipos.first;
-    if (tipos.contains(1) && tipos.contains(3)) return -1; // incompatible
-    if (tipos.contains(1)) return 1; // terrestre + volador → terrestre gana
-    if (tipos.contains(3)) return 3; // marino + volador → marino gana
+    if (tipos.contains(1) && tipos.contains(3)) return -1;
+    if (tipos.contains(1)) return 1;
+    if (tipos.contains(3)) return 3;
     return 2;
   }
 
@@ -757,7 +848,6 @@ class _GameScreenState extends State<GameScreen> {
       _tryPlaceFromHand(coord, ri, ci);
       return;
     }
-
     if (_inMoveMode) {
       if (coord == _moveFromCoord) {
         _cancelMoveMode();
@@ -768,7 +858,6 @@ class _GameScreenState extends State<GameScreen> {
       }
       return;
     }
-
     setState(() {
       _sidebarCoord = coord;
       _sidebarRi = ri;
@@ -789,7 +878,6 @@ class _GameScreenState extends State<GameScreen> {
     }
     final carta = _hand[_selectedHandIndex!];
 
-    // ── Regla Estática: solo colocar donde ya hay carta propia del turno anterior ──
     if (carta.esEstatica) {
       final celdaInicial = _boardStateInicial.getCelda(coord);
       final tieneCartaPropiaAnterior =
@@ -811,10 +899,7 @@ class _GameScreenState extends State<GameScreen> {
             ownerZone: _localPlayer.zona),
       );
       _hand = List.from(_hand)..removeAt(_selectedHandIndex!);
-      // No añadir a _cartasMovidasEsteTurno: desplegar desde la mano
-      // no consume el movimiento de la carta; podrá moverse este mismo turno.
       _selectedHandIndex = null;
-      // Estáticas no pueden moverse tras colocarse
       if (carta.esEstatica) {
         _cartasMovidasEsteTurno.add(carta.id);
       }
@@ -825,26 +910,21 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  // ── Activar modo movimiento desde sidebar ─────────────────
   void _onMoveSelected(List<int> indices) {
     if (_sidebarCoord == null || indices.isEmpty) return;
-
     if (_yoCerreElTurno) {
       _toast('Ya has cerrado el turno. Espera al siguiente.', error: true);
       return;
     }
-
     final celda = _boardState.getCelda(_sidebarCoord!);
-
     final validIndices = indices
         .where((i) =>
             i < celda.cartas.length &&
             celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
             !_cartasMovidasEsteTurno.contains(celda.cartas[i].carta.id) &&
-            !celda.cartas[i].carta.esEstatica) // Estáticas no se mueven
+            !celda.cartas[i].carta.esEstatica)
         .toList();
 
-    // Mensaje específico si todas eran estáticas
     if (validIndices.isEmpty) {
       final todasEstaticas = indices.every(
           (i) => i < celda.cartas.length && celda.cartas[i].carta.esEstatica);
@@ -868,15 +948,12 @@ class _GameScreenState extends State<GameScreen> {
     final minMov = validIndices
         .map((i) => celda.cartas[i].carta.movimiento)
         .reduce((a, b) => a < b ? a : b);
-
-    // ── Resolver tipo efectivo del grupo ──────────────────
     final tipo = _tipoEfectivo(validIndices, celda);
     if (tipo == -1) {
       _toast('No puedes mover unidades terrestres y marinas juntas',
           error: true);
       return;
     }
-
     setState(() {
       _moveFromCoord = _sidebarCoord;
       _moveCardIndices = validIndices;
@@ -885,11 +962,9 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
-  // ── Ejecutar movimiento ───────────────────────────────────
   void _executeMove(String dest, int ri, int ci) {
     final from = _moveFromCoord!;
     final celda = _boardState.getCelda(from);
-
     final moving = _moveCardIndices
         .where((i) =>
             i < celda.cartas.length &&
@@ -901,7 +976,6 @@ class _GameScreenState extends State<GameScreen> {
       _cancelMoveMode();
       return;
     }
-
     final movingSet = moving.toSet();
     final staying = celda.cartas.where((c) => !movingSet.contains(c)).toList();
 
@@ -913,11 +987,9 @@ class _GameScreenState extends State<GameScreen> {
         _cartasMovidasEsteTurno.add(c.carta.id);
       }
       _boardState = st;
-
       _moveFromCoord = null;
       _moveCardIndices = [];
       _movableCoords = {};
-
       _sidebarCoord = dest;
       _sidebarRi = ri;
       _sidebarCi = ci;
@@ -968,8 +1040,6 @@ class _GameScreenState extends State<GameScreen> {
           .where((c) => c.ownerUid == _localPlayer.datos.uid)
           .map((c) {
         final carta = c.carta;
-        // Solo campos necesarios para combate — sin Imagen ni Descripcion
-        // para mantener el payload pequeño y evitar timeouts en red lenta.
         return <String, dynamic>{
           'id': carta.id,
           'Nombre': carta.nombre,
@@ -993,7 +1063,7 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   Future<void> _cerrarTurno() async {
-    if (_yoCerreElTurno || _isSendingTurn) return;
+    if (_yoCerreElTurno || _isSendingTurn || _estoyEliminado) return;
     setState(() {
       _isSendingTurn = true;
       _selectedHandIndex = null;
@@ -1013,7 +1083,6 @@ class _GameScreenState extends State<GameScreen> {
             )
             .timeout(const Duration(seconds: 30));
       } catch (e) {
-        // Reintentar automáticamente hasta 2 veces en errores transitorios
         bool reintentado = false;
         for (int intento = 1; intento <= 2; intento++) {
           await Future.delayed(Duration(seconds: intento * 2));
@@ -1039,22 +1108,28 @@ class _GameScreenState extends State<GameScreen> {
         }
       }
       if (!mounted) return;
+      // Persistir mano + mazo al cerrar turno
+      _saveHandAndDeck();
     } else {
-      setState(
-          () => _boardState = _boardState.nextTurn(_opponentPlayer.datos.uid));
+      // Modo offline: avanzar turno y robar 1 carta
+      setState(() {
+        _boardState = _boardState.nextTurn(_opponentPlayer.datos.uid);
+      });
+      // Robar 1 carta del mazo en modo offline
+      if (_mazoRestante.isNotEmpty) {
+        final idx = _mazoRestante.indexWhere((c) => !c.esEvolucion);
+        if (idx != -1) {
+          final carta = _mazoRestante[idx];
+          setState(() {
+            _mazoRestante = List.from(_mazoRestante)..removeAt(idx);
+            _hand = [..._hand, carta];
+          });
+          _toast('🃏 +1 carta para el nuevo turno');
+        }
+      }
     }
 
     if (mounted) setState(() => _isSendingTurn = false);
-    // Persistir la mano actual para que al re-entrar no se recalcule
-    if (widget.lobbyId != null) {
-      FirebaseFirestore.instance
-          .collection('Partidas')
-          .doc(widget.lobbyId)
-          .update({
-        'statsPartida.${widget.localPlayerUid}.mano':
-            _hand.map((c) => c.id).toList(),
-      }).catchError((_) {}); // fire-and-forget
-    }
     _toast('Turno cerrado. Esperando a los demás…');
   }
 
@@ -1062,20 +1137,18 @@ class _GameScreenState extends State<GameScreen> {
     if (widget.lobbyId == null) return;
     final turnoAResolver = _boardState.turnoActual;
     try {
-      // 1. Leer movimientos y stats en PARALELO con timeout
-      final fetchMovimientos = TurnService()
+      // 1. Leer movimientos y stats en paralelo
+      final movimientos = await TurnService()
           .getMovimientosTurno(
             lobbyId: widget.lobbyId!,
             turno: turnoAResolver,
           )
           .timeout(const Duration(seconds: 30));
-      final fetchDoc = FirebaseFirestore.instance
+      final lobbyDoc = await FirebaseFirestore.instance
           .collection('Partidas')
           .doc(widget.lobbyId)
           .get()
           .timeout(const Duration(seconds: 60));
-      final movimientos = await fetchMovimientos;
-      final lobbyDoc = await fetchDoc;
       if (!mounted) return;
 
       // 2. Fusionar tableros
@@ -1086,10 +1159,14 @@ class _GameScreenState extends State<GameScreen> {
         });
       }
 
-      // 3. Resolver combates (CPU, sin red)
-      final resolucion = CombateService.resolverCombates(tableroFusionado);
+      // 3. Resolver combates (con info de cuarteles)
+      final resolucion = CombateService.resolverCombates(
+        tableroFusionado,
+        obeliscosPorJugador:
+            _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null,
+      );
 
-      // 4. Reconstruir BoardState limpio (sin cartas derrotadas)
+      // 4. Reconstruir BoardState limpio
       var newState = const BoardState();
       resolucion.tableroResultante.forEach((coord, cartas) {
         for (final c in cartas) {
@@ -1104,7 +1181,7 @@ class _GameScreenState extends State<GameScreen> {
         }
       });
 
-      // 5. Extraer stats del doc ya leído en paralelo
+      // 5. Extraer stats actuales
       final statsActuales = <String, Map<String, int>>{};
       if (lobbyDoc.exists) {
         final rawS =
@@ -1132,7 +1209,7 @@ class _GameScreenState extends State<GameScreen> {
         return {'uid': m.uid, 'zona': zona, 'celdas': m.celdas};
       }).toList();
 
-      // 7. Persistir en Firestore (el outer try-catch captura fallos)
+      // 7. Persistir en Firestore
       await TurnService()
           .resolverCombatesYAvanzar(
             lobbyId: widget.lobbyId!,
@@ -1140,11 +1217,25 @@ class _GameScreenState extends State<GameScreen> {
             tablero: tableroFusionado,
             statsActuales: statsActuales,
             movimientosLog: movimientosLog,
+            obeliscosPorJugador:
+                _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null,
           )
           .timeout(const Duration(seconds: 20));
       if (!mounted) return;
 
-      // 8. Actualizar estado local
+      // 8. Notificar conquistas al jugador local
+      for (final conquista in resolucion.obeliscosConquistados) {
+        if (conquista.conquistadorUid == widget.localPlayerUid) {
+          _toast(
+              '🏰 ¡Cuartel conquistado en ${conquista.coord}! +${CombateService.energiesConquista}E +${CombateService.pcConquista}PC');
+        } else if (conquista.perdedorUid == widget.localPlayerUid) {
+          // El stream notificará la eliminación; solo log aquí
+          _toast('💀 Tu cuartel en ${conquista.coord} fue conquistado',
+              error: true);
+        }
+      }
+
+      // 9. Actualizar estado local (el stream aplica el estado definitivo)
       final ptsGanados =
           resolucion.energiesPorJugador[widget.localPlayerUid] ?? 0;
       setState(() {
@@ -1157,20 +1248,10 @@ class _GameScreenState extends State<GameScreen> {
         _cartasMovidasEsteTurno.clear();
         if (ptsGanados > 0) _localPlayer.puntos += ptsGanados;
       });
-      // Actualizar la mano guardada en Firestore tras resolver turno
-      if (widget.lobbyId != null) {
-        FirebaseFirestore.instance
-            .collection('Partidas')
-            .doc(widget.lobbyId)
-            .update({
-          'statsPartida.${widget.localPlayerUid}.mano':
-              _hand.map((c) => c.id).toList(),
-        }).catchError((_) {});
-      }
+
+      // La mano y mazo se actualizarán cuando llegue el stream del nuevo turno
       if (_modoTurno == ModoTurno.rapida && mounted) _startTimer();
     } catch (e) {
-      // Cualquier excepción en el flujo de resolución resetea el estado
-      // para que el jugador pueda reintentar.
       if (mounted) {
         setState(() {
           _resolviendo = false;
@@ -1234,9 +1315,6 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> _checkRefresh() async {
     if (!_yoCerreElTurno) return;
-
-    // ── Paso 1: estado en memoria (sin red) ──────────────────
-    // Resetear _resolviendo para desbloquear si quedó atascado
     setState(() => _resolviendo = false);
 
     if (_todosCerraronTurno) {
@@ -1246,10 +1324,8 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
 
-    // ── Paso 2: comprobar si el turno ya avanzó en Firestore ─
-    // Solo caché local — sin esperar red. Si falla, mostrar estado en memoria.
     if (widget.lobbyId == null) {
-      final faltan = _jugadoresEnPartida - _cerradoPor.length;
+      final faltan = _jugadoresActivos - _cerradoPor.length;
       _toast('Faltan $faltan jugador${faltan == 1 ? '' : 'es'} por cerrar.');
       return;
     }
@@ -1261,8 +1337,7 @@ class _GameScreenState extends State<GameScreen> {
           .doc(widget.lobbyId)
           .get(const GetOptions(source: Source.cache));
     } catch (_) {
-      // Sin caché: mostrar estado en memoria sin error
-      final faltan = _jugadoresEnPartida - _cerradoPor.length;
+      final faltan = _jugadoresActivos - _cerradoPor.length;
       _toast('Faltan $faltan jugador${faltan == 1 ? '' : 'es'} por cerrar.');
       return;
     }
@@ -1270,7 +1345,6 @@ class _GameScreenState extends State<GameScreen> {
     final lobby = LobbyModel.fromFirestore(doc);
     final data = doc.data() as Map<String, dynamic>;
 
-    // Si ya avanzó el turno en Firestore, sincronizar el tablero
     if (lobby.turnoActual > _turnoConfirmadoStream &&
         data.containsKey('tablero')) {
       final tableroRaw = TurnService.parseTablero(data);
@@ -1302,11 +1376,9 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
 
-    // Turno no avanzado: actualizar cerradoPor y disparar resolución si somos host
     setState(() {
       _cerradoPor = List<String>.from(lobby.cerradoPor);
       _jugadoresEnPartida = lobby.jugadores.length;
-      // Resetear _resolviendo para recuperarse de cualquier estado bloqueado
       _resolviendo = false;
     });
     if (_todosCerraronTurno) {
@@ -1314,10 +1386,108 @@ class _GameScreenState extends State<GameScreen> {
       _toast('Resolviendo turno…');
       _resolverTurno();
     } else {
-      final faltan = _jugadoresEnPartida - _cerradoPor.length;
+      final faltan = _jugadoresActivos - _cerradoPor.length;
       _toast(
           'Faltan $faltan jugador${faltan == 1 ? '' : 'es'} por cerrar turno.');
     }
+  }
+
+  // ── Diálogo de eliminación ────────────────────────────────
+  void _showEliminadoDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A0505),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('💀 CUARTEL DESTRUIDO',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 14,
+                color: Color(0xFFCC3030),
+                letterSpacing: 1.5)),
+        content: const Text(
+            'Tu cuartel general ha sido conquistado.\n'
+            'Has sido eliminado de la partida.\n'
+            'Puedes seguir observando la batalla.',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 10,
+                color: Color(0xFF8A6060),
+                height: 1.7)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OBSERVAR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    color: Color(0xFFCC3030))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              Navigator.of(context).pop(); // salir al menú
+            },
+            child: const Text('SALIR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    color: Color(0xFF506070))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Diálogo de fin de partida ─────────────────────────────
+  void _showFinPartidaDialog() {
+    if (!mounted) return;
+    final somoGanador = _ganadorUid == widget.localPlayerUid;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor:
+            somoGanador ? const Color(0xFF0A1A05) : const Color(0xFF0A0A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(somoGanador ? '🏆 ¡VICTORIA!' : '⚔  PARTIDA FINALIZADA',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 14,
+                color: somoGanador
+                    ? const Color(0xFFC8A860)
+                    : const Color(0xFF506070),
+                letterSpacing: 1.5)),
+        content: Text(
+            somoGanador
+                ? 'Eres el último comandante en pie.\n¡El campo de batalla es tuyo!'
+                : 'La partida ha terminado.\nUn rival ha conquistado todos los cuarteles.',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 10,
+                color: somoGanador
+                    ? const Color(0xFF6A8A50)
+                    : const Color(0xFF506070),
+                height: 1.7)),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              Navigator.of(context).pop();
+            },
+            child: Text('SALIR AL MENÚ',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    color: somoGanador
+                        ? const Color(0xFFC8A860)
+                        : const Color(0xFF506070))),
+          ),
+        ],
+      ),
+    );
   }
 
   void _toast(String msg, {bool error = false}) {
@@ -1359,11 +1529,9 @@ class _GameScreenState extends State<GameScreen> {
     final sidebarTerrain = (_sidebarRi != null && _sidebarCi != null)
         ? _config.terrain(_sidebarRi!, _sidebarCi!)
         : null;
-
     final isEnemySidebar = _sidebarCoord != null &&
         kObeliscoCoords.contains(_sidebarCoord) &&
         _sidebarCoord != _obeliscoLocal;
-
     final String? selectedCoord =
         _inMoveMode ? _moveFromCoord : (_sidebarOpen ? _sidebarCoord : null);
 
@@ -1400,29 +1568,46 @@ class _GameScreenState extends State<GameScreen> {
                   _TurnWaitBanner(
                     modoTurno: _modoTurno,
                     cerradoPor: _cerradoPor.length,
-                    totalJugadores: _jugadoresEnPartida,
+                    totalJugadores: _jugadoresActivos,
                     onRefresh: _checkRefresh,
                   ),
-                BottomHudBar(
-                  player: _localPlayer,
-                  isMyTurn: !_yoCerreElTurno,
-                  isSending: _isSendingTurn,
-                  endTurnLabel: _isSendingTurn
-                      ? 'ENVIANDO'
-                      : _yoCerreElTurno
-                          ? 'TURNO CERRADO'
-                          : _modoTurno == ModoTurno.rapida
-                              ? 'FIN TURNO (${_segundosRestantes}s)'
-                              : 'FIN TURNO',
-                  onEndTurn:
-                      (_yoCerreElTurno || _isSendingTurn) ? null : _endTurn,
-                ),
-                HandWidget(
-                  cartas: _hand,
-                  selectedIndex: _selectedHandIndex,
-                  onCardTap: _onHandCardTap,
-                  resolveEvolucion: _resolveEvolucion,
-                ),
+                // Banner eliminado (modo observador)
+                if (_estoyEliminado)
+                  Container(
+                    width: double.infinity,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                    color: const Color(0xFF2A0505),
+                    child: const Text('💀 ELIMINADO — Modo Observador',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 9,
+                            color: Color(0xFFAA3030),
+                            letterSpacing: 1)),
+                  ),
+                if (!_estoyEliminado)
+                  BottomHudBar(
+                    player: _localPlayer,
+                    isMyTurn: !_yoCerreElTurno,
+                    isSending: _isSendingTurn,
+                    endTurnLabel: _isSendingTurn
+                        ? 'ENVIANDO'
+                        : _yoCerreElTurno
+                            ? 'TURNO CERRADO'
+                            : _modoTurno == ModoTurno.rapida
+                                ? 'FIN TURNO (${_segundosRestantes}s)'
+                                : 'FIN TURNO',
+                    onEndTurn:
+                        (_yoCerreElTurno || _isSendingTurn) ? null : _endTurn,
+                  ),
+                if (!_estoyEliminado)
+                  HandWidget(
+                    cartas: _hand,
+                    selectedIndex: _selectedHandIndex,
+                    onCardTap: _onHandCardTap,
+                    resolveEvolucion: _resolveEvolucion,
+                  ),
               ],
             ),
             if (_sidebarOpen)
@@ -1433,17 +1618,16 @@ class _GameScreenState extends State<GameScreen> {
                   child: const SizedBox.expand(),
                 ),
               ),
-            if (_hayCambiosPendientes && !_yoCerreElTurno)
+            if (_hayCambiosPendientes && !_yoCerreElTurno && !_estoyEliminado)
               Positioned(
                 left: 10,
                 bottom: 58 + 105 + 8,
                 child: _UndoChangesButton(onUndo: _undoCambios),
               ),
-            // Botón INFORME — entre tablero y HUD inferior
             if (_boardState.turnoActual > 1)
               Positioned(
                 left: 10,
-                bottom: 58 + 105 + 6,
+                bottom: _estoyEliminado ? 8 : 58 + 105 + 6,
                 child: _InformeButton(
                   onTap: () {
                     _informeAbierto = true;
@@ -1462,10 +1646,17 @@ class _GameScreenState extends State<GameScreen> {
                   },
                 ),
               ),
+            // Mazo restante counter
+            if (!_estoyEliminado && _mazoRestante.isNotEmpty)
+              Positioned(
+                right: 10,
+                bottom: 58 + 105 + 6,
+                child: _DeckCounter(remaining: _mazoRestante.length),
+              ),
             Positioned(
               top: 58,
               right: 0,
-              bottom: 58 + 105,
+              bottom: _estoyEliminado ? 0 : 58 + 105,
               width: CellSidebar.width,
               child: CellSidebar(
                 celda: sidebarCelda,
@@ -1475,11 +1666,12 @@ class _GameScreenState extends State<GameScreen> {
                 isEnemyObelisco: isEnemySidebar,
                 localUid: _localPlayer.datos.uid,
                 playerColors: _playerColors,
-                onMoveSelected: _onMoveSelected,
+                onMoveSelected: _estoyEliminado ? (_) {} : _onMoveSelected,
                 onClose: _closeSidebar,
                 energiasDisponibles: _localPlayer.puntos,
                 resolveEvolucion: _resolveEvolucion,
-                onEvolucionar: _evolucionarCarta,
+                onEvolucionar:
+                    _estoyEliminado ? (_, __, ___) async {} : _evolucionarCarta,
               ),
             ),
           ],
@@ -1645,6 +1837,39 @@ class _TurnWaitBannerState extends State<_TurnWaitBanner> {
 }
 
 // ─────────────────────────────────────────────────────────────
+// CONTADOR DE MAZO RESTANTE
+// ─────────────────────────────────────────────────────────────
+class _DeckCounter extends StatelessWidget {
+  final int remaining;
+  const _DeckCounter({required this.remaining});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: const Color(0xCC060E1A),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF2A4060), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.style, size: 11, color: Color(0xFF5080A0)),
+          const SizedBox(width: 4),
+          Text('$remaining',
+              style: const TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 9,
+                  color: Color(0xFF5080A0),
+                  letterSpacing: 1)),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 class _LoadingScreen extends StatelessWidget {
   const _LoadingScreen();
   @override
@@ -1741,9 +1966,6 @@ class _ErrorScreen extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────
-// BOTÓN DESHACER CAMBIOS
-// ─────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
 // BOTÓN INFORME DE BATALLA
 // ─────────────────────────────────────────────────────────────

@@ -45,8 +45,6 @@ class LobbyJugador {
 }
 
 // ── Stats de partida por jugador (energies, PC) ───────────────
-/// Se guarda en el campo `statsPartida` del documento Partida.
-/// Estructura Firestore: { uid: { energies: int, pc: int } }
 class StatsPartidaJugador {
   final int energies;
   final int pc;
@@ -90,16 +88,15 @@ class LobbyModel {
   final ModoTurno modoTurno;
   final int turnoActual;
   final List<String> cerradoPor;
-
-  /// Estadísticas de combate por jugador: uid → StatsPartidaJugador
   final Map<String, StatsPartidaJugador> statsPartida;
-
-  /// Log del último combate resuelto (para mostrar resultados en pantalla).
   final List<Map<String, dynamic>> ultimoCombateLog;
-
-  /// ID del documento en la colección `Mapas`.
-  /// Null si la partida no tiene mapa asignado (se usa terreno por defecto: todo land).
   final String? mapaId;
+
+  /// UIDs de jugadores cuyo cuartel general fue conquistado (eliminados).
+  final List<String> jugadoresEliminados;
+
+  /// UID del jugador ganador (disponible cuando estado == finalizada).
+  final String? ganadorUid;
 
   const LobbyModel({
     required this.id,
@@ -117,23 +114,32 @@ class LobbyModel {
     this.statsPartida = const {},
     this.ultimoCombateLog = const [],
     this.mapaId,
+    this.jugadoresEliminados = const [],
+    this.ganadorUid,
   });
 
   bool get estaLleno => jugadores.length >= maxJugadores;
   bool get todosListos =>
       jugadores.isNotEmpty && jugadores.every((j) => j.listo);
-  bool get todosCerraronTurno =>
-      jugadores.isNotEmpty &&
-      jugadores.every((j) => cerradoPor.contains(j.uid));
 
-  /// Devuelve las stats de un jugador, o vacías si aún no tiene.
+  /// Número de jugadores aún activos (no eliminados).
+  int get jugadoresActivos =>
+      jugadores.where((j) => !jugadoresEliminados.contains(j.uid)).length;
+
+  /// True si todos los jugadores ACTIVOS han cerrado el turno.
+  bool get todosCerraronTurno {
+    final activos =
+        jugadores.where((j) => !jugadoresEliminados.contains(j.uid));
+    return activos.isNotEmpty &&
+        activos.every((j) => cerradoPor.contains(j.uid));
+  }
+
   StatsPartidaJugador statsDeJugador(String uid) =>
       statsPartida[uid] ?? const StatsPartidaJugador();
 
   factory LobbyModel.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
 
-    // Parsear statsPartida
     final rawStats = d['statsPartida'] as Map<String, dynamic>? ?? {};
     final stats = rawStats.map(
       (uid, v) => MapEntry(
@@ -142,10 +148,12 @@ class LobbyModel {
       ),
     );
 
-    // Parsear ultimoCombateLog
     final rawLog = d['ultimoCombateLog'] as List<dynamic>? ?? [];
     final combateLog =
         rawLog.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+
+    final rawElim = d['jugadoresEliminados'] as List<dynamic>? ?? [];
+    final eliminados = rawElim.map((e) => e.toString()).toList();
 
     return LobbyModel(
       id: doc.id,
@@ -165,6 +173,8 @@ class LobbyModel {
       statsPartida: stats,
       ultimoCombateLog: combateLog,
       mapaId: d['mapaId'] as String?,
+      jugadoresEliminados: eliminados,
+      ganadorUid: d['ganadorUid'] as String?,
     );
   }
 
@@ -196,6 +206,8 @@ class LobbyModel {
         'cerradoPor': cerradoPor,
         'statsPartida': statsPartida.map((uid, s) => MapEntry(uid, s.toMap())),
         'ultimoCombateLog': ultimoCombateLog,
+        'jugadoresEliminados': jugadoresEliminados,
+        if (ganadorUid != null) 'ganadorUid': ganadorUid,
         if (mapaId != null) 'mapaId': mapaId,
       };
 

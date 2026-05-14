@@ -3,41 +3,76 @@
 /// ─────────────────────────────────────────────────────────────────────────
 /// Sistema de combate de WarZero
 ///
-/// REGLAS:
-///   Al final de cada turno (antes de empezar el siguiente) se comprueba si
-///   hay cartas de distintos jugadores en la misma celda.
+/// REGLAS NORMALES:
+///   Al final de cada turno se comprueba si hay cartas de distintos jugadores
+///   en la misma celda.
+///   • poderNeto(X) = Σfuerza(X) − Σdefensa(todos los enemigos de X)
+///   • El grupo con mayor poderNeto gana.
+///   • Las cartas de los grupos perdedores se destruyen.
+///   • En empate exacto → todos destruidos.
 ///
-///   Si las hay, se resuelve el combate por celda:
-///     • poderNeto(X) = Σfuerza(X) − Σdefensa(todos los enemigos de X)
-///     • El grupo con mayor poderNeto gana.
-///     • Las cartas de los grupos perdedores se destruyen.
-///     • En empate exacto entre dos o más grupos → todos destruidos.
+/// REGLA CUARTEL GENERAL (OBELISCO):
+///   Si se produce combate en la celda obelisco de un jugador, ese jugador
+///   recibe una defensa extra de 80 puntos (la fortaleza del cuartel).
+///   Si el defensor pierde → conquista: el atacante gana +100 Energies y
+///   +100 PC, y el defensor queda ELIMINADO de la partida.
+///   Si no hay cartas defensoras pero sí atacantes, se compara la fuerza
+///   atacante contra 80 (defensa base del cuartel vacío).
 ///
-///   Recompensas para el ganador (por cada grupo derrotado):
-///     • Energies += Σcoste de las cartas destruidas del grupo derrotado.
-///     • PC       += 3 × número de cartas destruidas del grupo derrotado.
+/// RECOMPENSAS NORMALES (por grupo derrotado):
+///   • Energies += Σcoste de las cartas destruidas del grupo derrotado.
+///   • PC       += 3 × número de cartas destruidas del grupo derrotado.
 /// ─────────────────────────────────────────────────────────────────────────
 
-/// Datos de un grupo de cartas que pertenecen al mismo jugador en una celda.
+/// Resultado de la conquista de un cuartel general.
+class ObeliscoConquista {
+  final String coord;
+  final String conquistadorUid;
+  final String perdedorUid;
+
+  const ObeliscoConquista({
+    required this.coord,
+    required this.conquistadorUid,
+    required this.perdedorUid,
+  });
+
+  Map<String, dynamic> toLogMap() => {
+        'coord': coord,
+        'conquistadorUid': conquistadorUid,
+        'perdedorUid': perdedorUid,
+        'tipo': 'conquista_cuartel',
+      };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 class _GrupoJugador {
   final String ownerUid;
   final String ownerZone;
   final List<Map<String, dynamic>> cartas;
 
+  /// Defensa adicional (solo usada en obeliscos).
+  final int defensaBonus;
+
   _GrupoJugador({
     required this.ownerUid,
     required this.ownerZone,
     required this.cartas,
+    this.defensaBonus = 0,
   });
 
-  int get totalFuerza =>
-      cartas.fold(0, (s, c) => s + ((c['fuerza'] as num?)?.toInt() ?? 0));
+  int get totalFuerza => cartas.fold(0,
+      (s, c) => s + ((c['Fuerza'] ?? c['fuerza'] as num? ?? 0) as num).toInt());
 
   int get totalDefensa =>
-      cartas.fold(0, (s, c) => s + ((c['defensa'] as num?)?.toInt() ?? 0));
+      cartas.fold(
+          0,
+          (s, c) =>
+              s +
+              ((c['Defensa'] ?? c['defensa'] as num? ?? 0) as num).toInt()) +
+      defensaBonus;
 
-  int get totalCoste =>
-      cartas.fold(0, (s, c) => s + ((c['coste'] as num?)?.toInt() ?? 0));
+  int get totalCoste => cartas.fold(0,
+      (s, c) => s + ((c['Coste'] ?? c['coste'] as num? ?? 0) as num).toInt());
 
   int get numCartas => cartas.length;
 }
@@ -46,29 +81,17 @@ class _GrupoJugador {
 
 /// Resultado del combate en una celda concreta.
 class ResultadoCombate {
-  /// Coordenada de la celda donde ocurrió el combate (e.g. "B5").
   final String coord;
-
-  /// UID del jugador ganador. Null si fue un empate total (todos destruidos).
   final String? ganadorUid;
-
-  /// Zone del ganador (para UI).
   final String? ganadorZone;
-
-  /// UIDs de los jugadores cuyos grupos fueron derrotados.
   final List<String> derrotadosUid;
-
-  /// Energies ganadas por jugador: uid → cantidad.
   final Map<String, int> energiesGanadas;
-
-  /// PC ganados por jugador: uid → cantidad.
   final Map<String, int> pcGanados;
-
-  /// Cartas que sobreviven en la celda tras el combate.
   final List<Map<String, dynamic>> cartasSupervivientes;
-
-  /// Detalle para mostrar en el log de la partida.
   final List<Map<String, dynamic>> detalle;
+
+  /// True si este combate resultó en la conquista de un cuartel general.
+  final bool esConquistaObelisco;
 
   const ResultadoCombate({
     required this.coord,
@@ -79,9 +102,9 @@ class ResultadoCombate {
     required this.pcGanados,
     required this.cartasSupervivientes,
     required this.detalle,
+    this.esConquistaObelisco = false,
   });
 
-  /// Serializa para guardar en Firestore como log del último combate.
   Map<String, dynamic> toLogMap() => {
         'coord': coord,
         'ganadorUid': ganadorUid,
@@ -90,6 +113,7 @@ class ResultadoCombate {
         'energiesGanadas': energiesGanadas,
         'pcGanados': pcGanados,
         'detalle': detalle,
+        'esConquistaObelisco': esConquistaObelisco,
       };
 }
 
@@ -97,57 +121,146 @@ class ResultadoCombate {
 
 /// Resultado global de la fase de combates para un turno completo.
 class ResolucionCombates {
-  /// Tablero con las cartas destruidas ya eliminadas.
   final Map<String, List<Map<String, dynamic>>> tableroResultante;
-
-  /// Lista de todos los combates resueltos (uno por celda con conflicto).
   final List<ResultadoCombate> resultados;
-
-  /// Energies acumuladas por jugador en este turno: uid → total ganado.
   final Map<String, int> energiesPorJugador;
-
-  /// PC acumulados por jugador en este turno: uid → total ganado.
   final Map<String, int> pcPorJugador;
+
+  /// Lista de conquistas de cuarteles generales ocurridas en este turno.
+  final List<ObeliscoConquista> obeliscosConquistados;
 
   const ResolucionCombates({
     required this.tableroResultante,
     required this.resultados,
     required this.energiesPorJugador,
     required this.pcPorJugador,
+    this.obeliscosConquistados = const [],
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 
 class CombateService {
+  /// Defensa base del cuartel general (obelisco).
+  static const int defensaObelisco = 80;
+
+  /// Bonificación de Energies por conquistar un cuartel.
+  static const int energiesConquista = 100;
+
+  /// Bonificación de PC por conquistar un cuartel.
+  static const int pcConquista = 100;
+
   /// Resuelve todos los combates del tablero y devuelve el tablero resultante
   /// junto con las recompensas por jugador.
   ///
-  /// [tablero] es el mapa coord → lista de cartas (cada carta es un Map que
-  /// incluye 'ownerUid', 'ownerZone', 'fuerza', 'defensa', 'coste', etc.)
+  /// [tablero]             coord → lista de cartas (PascalCase o snake_case).
+  /// [obeliscosPorJugador] uid → coord del cuartel de ese jugador.
+  ///                        Si se pasa, los combates en cuarteles aplican
+  ///                        la defensa extra de [defensaObelisco].
   static ResolucionCombates resolverCombates(
-    Map<String, List<Map<String, dynamic>>> tablero,
-  ) {
+    Map<String, List<Map<String, dynamic>>> tablero, {
+    Map<String, String>? obeliscosPorJugador,
+  }) {
+    // Invertir: coord → uid propietario del obelisco en esa coord.
+    final obeliscoOwnerByCoord = <String, String>{};
+    if (obeliscosPorJugador != null) {
+      obeliscosPorJugador.forEach((uid, coord) {
+        obeliscoOwnerByCoord[coord] = uid;
+      });
+    }
+
     final tableroResultante = <String, List<Map<String, dynamic>>>{};
     final resultados = <ResultadoCombate>[];
     final energiesPorJugador = <String, int>{};
     final pcPorJugador = <String, int>{};
+    final conquistas = <ObeliscoConquista>[];
 
-    for (final entry in tablero.entries) {
-      final coord = entry.key;
-      final cartas = entry.value;
+    // ── Celdas que son cuarteles pero aparecen vacías (sin cartas atacantes) ──
+    // Solo procesar celdas que tengan cartas.
+    final coordsAProcesar = {
+      ...tablero.keys,
+      // También incluir coords de obeliscos vacíos que tengan atacantes →
+      // ya cubiertos por tablero.keys si los atacantes movieron ahí.
+    };
 
-      // Agrupar cartas por ownerUid
+    for (final coord in coordsAProcesar) {
+      final cartas = tablero[coord] ?? [];
+      if (cartas.isEmpty) continue;
+
+      final esObeliscoCoord = obeliscoOwnerByCoord.containsKey(coord);
+      final obeliscoPropietarioUid =
+          esObeliscoCoord ? obeliscoOwnerByCoord[coord]! : null;
+
+      // Agrupar cartas por propietario.
       final grupos = _agruparPorJugador(cartas);
 
-      // Sin combate → copiar tal cual
+      // ── Caso especial: obelisco sin defensor (solo atacantes) ─────────────
+      if (esObeliscoCoord &&
+          obeliscoPropietarioUid != null &&
+          !grupos.containsKey(obeliscoPropietarioUid)) {
+        // Solo hay cartas enemigas en el cuartel.
+        // La conquista ocurre si la fuerza total del atacante > 80.
+        // Puede haber más de un atacante (se toman todos como aliados vs el cuartel).
+        final fuerzaTotal = grupos.values.fold(0, (s, g) => s + g.totalFuerza);
+        if (fuerzaTotal > defensaObelisco) {
+          // Conquista: el obelisco no tiene cartas que soporten.
+          // ¿Quién conquista? Si hay un solo atacante es claro.
+          // Con varios, el que más fuerza tiene lleva el logro.
+          final conquistadorUid = grupos.entries
+              .reduce(
+                  (a, b) => a.value.totalFuerza >= b.value.totalFuerza ? a : b)
+              .key;
+          conquistas.add(ObeliscoConquista(
+            coord: coord,
+            conquistadorUid: conquistadorUid,
+            perdedorUid: obeliscoPropietarioUid,
+          ));
+          energiesPorJugador[conquistadorUid] =
+              (energiesPorJugador[conquistadorUid] ?? 0) + energiesConquista;
+          pcPorJugador[conquistadorUid] =
+              (pcPorJugador[conquistadorUid] ?? 0) + pcConquista;
+
+          // Las cartas atacantes permanecen en la celda.
+          tableroResultante[coord] = cartas;
+          resultados.add(ResultadoCombate(
+            coord: coord,
+            ganadorUid: conquistadorUid,
+            ganadorZone: grupos[conquistadorUid]!.ownerZone,
+            derrotadosUid: [obeliscoPropietarioUid],
+            energiesGanadas: {conquistadorUid: energiesConquista},
+            pcGanados: {conquistadorUid: pcConquista},
+            cartasSupervivientes: cartas,
+            detalle: [],
+            esConquistaObelisco: true,
+          ));
+        } else {
+          // Fuerza insuficiente para conquistar: cartas permanecen (no hay combate real).
+          tableroResultante[coord] = cartas;
+        }
+        continue;
+      }
+
+      // ── Sin combate (1 solo propietario) ─────────────────────────────────
       if (grupos.length <= 1) {
         tableroResultante[coord] = cartas;
         continue;
       }
 
-      // ── Calcular poder neto de cada grupo ────────────────────
-      // poderNeto(X) = Σfuerza(X) − Σdefensa(todos los grupos enemigos de X)
+      // ── Combate: varios propietarios en la misma celda ───────────────────
+      // Si es un obelisco, el propietario recibe +80 de defensa.
+      if (esObeliscoCoord && obeliscoPropietarioUid != null) {
+        if (grupos.containsKey(obeliscoPropietarioUid)) {
+          final g = grupos[obeliscoPropietarioUid]!;
+          grupos[obeliscoPropietarioUid] = _GrupoJugador(
+            ownerUid: g.ownerUid,
+            ownerZone: g.ownerZone,
+            cartas: g.cartas,
+            defensaBonus: defensaObelisco,
+          );
+        }
+      }
+
+      // ── Calcular poder neto ───────────────────────────────────────────────
       final poderNeto = <String, int>{};
       for (final uid in grupos.keys) {
         final defensaEnemigos = grupos.entries
@@ -156,23 +269,23 @@ class CombateService {
         poderNeto[uid] = grupos[uid]!.totalFuerza - defensaEnemigos;
       }
 
-      // ── Determinar ganador/es ─────────────────────────────────
+      // ── Determinar ganador/es ─────────────────────────────────────────────
       final maxPoder = poderNeto.values.reduce((a, b) => a > b ? a : b);
       final ganadoresUid = poderNeto.entries
           .where((e) => e.value == maxPoder)
           .map((e) => e.key)
           .toList();
 
-      // ── Construir log de detalle ──────────────────────────────
+      // ── Log de detalle ────────────────────────────────────────────────────
       final detalle = grupos.entries.map((e) {
         return {
           'ownerUid': e.key,
           'ownerZone': e.value.ownerZone,
           'totalFuerza': e.value.totalFuerza,
           'totalDefensa': e.value.totalDefensa,
+          'defensaBonus': e.value.defensaBonus,
           'poderNeto': poderNeto[e.key],
           'numCartas': e.value.numCartas,
-          // Lista de cartas individuales con sus stats
           'cartas': e.value.cartas
               .map((c) => {
                     'nombre': c['Nombre'] ?? c['nombre'] ?? 'Carta',
@@ -188,38 +301,54 @@ class CombateService {
       String? ganadorZone;
       List<String> derrotadosUid;
       List<Map<String, dynamic>> supervivientes;
+      bool esConquista = false;
 
       if (ganadoresUid.length == 1) {
-        // ── Victoria clara ────────────────────────────────────
         ganadorUid = ganadoresUid.first;
         ganadorZone = grupos[ganadorUid]!.ownerZone;
         derrotadosUid = grupos.keys.where((uid) => uid != ganadorUid).toList();
         supervivientes = grupos[ganadorUid]!.cartas;
 
-        // Recompensas: por cada grupo derrotado
+        // Recompensas normales por grupos derrotados.
         for (final derrotadoUid in derrotadosUid) {
           final grupo = grupos[derrotadoUid]!;
           final energies = grupo.totalCoste;
           final pc = 3 * grupo.numCartas;
-
           energiesPorJugador[ganadorUid!] =
               (energiesPorJugador[ganadorUid] ?? 0) + energies;
           pcPorJugador[ganadorUid] = (pcPorJugador[ganadorUid] ?? 0) + pc;
         }
+
+        // ── Conquista de cuartel ──────────────────────────────────────────
+        if (esObeliscoCoord &&
+            obeliscoPropietarioUid != null &&
+            derrotadosUid.contains(obeliscoPropietarioUid)) {
+          esConquista = true;
+          conquistas.add(ObeliscoConquista(
+            coord: coord,
+            conquistadorUid: ganadorUid!,
+            perdedorUid: obeliscoPropietarioUid,
+          ));
+          // Recompensas adicionales por conquista.
+          energiesPorJugador[ganadorUid] =
+              (energiesPorJugador[ganadorUid] ?? 0) + energiesConquista;
+          pcPorJugador[ganadorUid] =
+              (pcPorJugador[ganadorUid] ?? 0) + pcConquista;
+        }
       } else {
-        // ── Empate total: todos los grupos empatados se destruyen ─
-        // Los grupos con poder inferior también se destruyen.
+        // Empate: todos los grupos empatados se destruyen.
         ganadorUid = null;
         ganadorZone = null;
         derrotadosUid = grupos.keys.toList();
         supervivientes = [];
+
+        // Si en un empate el obelisco propietario está entre los derrotados
+        // no se registra conquista (nadie capturó el cuartel).
       }
 
-      // Actualizar tablero resultante
       if (supervivientes.isNotEmpty) {
         tableroResultante[coord] = supervivientes;
       }
-      // Si no quedan supervivientes, la celda queda vacía (no se añade al mapa)
 
       resultados.add(ResultadoCombate(
         coord: coord,
@@ -234,6 +363,7 @@ class CombateService {
             : {},
         cartasSupervivientes: supervivientes,
         detalle: detalle,
+        esConquistaObelisco: esConquista,
       ));
     }
 
@@ -242,10 +372,11 @@ class CombateService {
       resultados: resultados,
       energiesPorJugador: energiesPorJugador,
       pcPorJugador: pcPorJugador,
+      obeliscosConquistados: conquistas,
     );
   }
 
-  // ── Helpers ──────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────
 
   static Map<String, _GrupoJugador> _agruparPorJugador(
     List<Map<String, dynamic>> cartas,
@@ -267,8 +398,11 @@ class CombateService {
     return grupos;
   }
 
-  /// Texto legible del resultado (para debug o notificaciones simples).
   static String resumirResultado(ResultadoCombate r) {
+    if (r.esConquistaObelisco) {
+      return '[${r.coord}] 🏰 CUARTEL CONQUISTADO por ${r.ganadorZone} '
+          '(+$energiesConquista Energies, +$pcConquista PC)';
+    }
     if (r.ganadorUid == null) {
       return '[${r.coord}] Empate — todas las cartas destruidas';
     }

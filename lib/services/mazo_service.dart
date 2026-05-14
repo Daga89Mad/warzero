@@ -29,7 +29,6 @@ class MazoService {
 
   // ── Resolver un mazo: expandir cartas con Cantidad ─────────
   Future<MazoResuelto> resolverMazo(MazoModel mazo) async {
-    // Cargar solo las cartas necesarias del mazo
     final cartasIds = mazo.entradas.map((e) => e.idCarta).toList();
     final snaps = await Future.wait(
       cartasIds.map((id) => _db.collection('Cartas').doc(id).get()),
@@ -49,34 +48,54 @@ class MazoService {
   }
 
   // ── Mazo por defecto si el jugador no tiene ninguno ────────
-  /// Crea un mazo aleatorio con las primeras N cartas disponibles
-  Future<MazoResuelto> crearMazoPorDefecto({int tamanio = 20}) async {
+  /// Crea un mazo aleatorio con N cartas del ejército indicado.
+  /// Si [ejercitoId] es null o no hay cartas de ese ejército, usa todas.
+  Future<MazoResuelto> crearMazoPorDefecto({
+    int tamanio = 20,
+    int? ejercitoId,
+  }) async {
     final todasLasCartas = await fetchTodasLasCartas();
-    // Filtrar cartas de Evolución: no se incluyen en mazos
+    // Nunca incluir cartas de Evolución en mazos.
     todasLasCartas.removeWhere((c) => c.esEvolucion);
-    todasLasCartas.shuffle();
-    final seleccion = todasLasCartas.take(tamanio).toList();
+
+    // Filtrar por ejército si se especificó.
+    List<CartaModel> pool = todasLasCartas;
+    if (ejercitoId != null) {
+      final filtradas =
+          todasLasCartas.where((c) => c.ejercito == ejercitoId).toList();
+      if (filtradas.isNotEmpty) pool = filtradas;
+    }
+
+    pool.shuffle();
+    final seleccion = pool.take(tamanio).toList();
     return MazoResuelto(id: 'default', cartas: seleccion);
   }
 
   // ── Punto de entrada principal: obtener mazo listo ─────────
-  /// Devuelve el primer mazo del jugador, o uno por defecto si no tiene.
-  Future<MazoResuelto> obtenerMazoParaJuego(String uid) async {
+  /// Devuelve el primer mazo del jugador filtrado por [ejercitoId], o uno
+  /// por defecto si no tiene mazos guardados.
+  ///
+  /// [ejercitoId] El ID del ejército seleccionado por el jugador en la sala
+  ///              de espera. Si es null no se filtra.
+  Future<MazoResuelto> obtenerMazoParaJuego(
+    String uid, {
+    int? ejercitoId,
+  }) async {
     try {
       final mazos = await fetchMazosDelJugador(uid);
       if (mazos.isEmpty) {
-        return crearMazoPorDefecto();
+        return crearMazoPorDefecto(ejercitoId: ejercitoId);
       }
-      return resolverMazo(mazos.first);
+      final resuelto = await resolverMazo(mazos.first);
+      // Filtrar por ejército preservando el mazo original si queda vacío.
+      return resuelto.filtrarPorEjercito(ejercitoId);
     } catch (e) {
-      // Fallback: mazo por defecto en caso de error
-      return crearMazoPorDefecto();
+      return crearMazoPorDefecto(ejercitoId: ejercitoId);
     }
   }
 
   // ── Guardar mazo ───────────────────────────────────────────
   Future<void> guardarMazo(String uid, MazoResuelto mazo) async {
-    // Agrupa por carta y cuenta
     final conteo = <String, int>{};
     for (final carta in mazo.cartas) {
       conteo[carta.id] = (conteo[carta.id] ?? 0) + 1;

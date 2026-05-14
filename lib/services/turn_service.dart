@@ -6,9 +6,6 @@ import 'combate_service.dart';
 import 'farmeo_service.dart';
 
 // ── Movimiento serializado ────────────────────────────────────
-/// Representa el estado del tablero del jugador al cerrar turno.
-/// Se guarda en el campo [movimientosTurno] del documento Partidas/{id},
-/// evitando subcolecciones que pueden quedar fuera de las reglas de seguridad.
 class MovimientoTurno {
   final String uid;
   final int turno;
@@ -60,9 +57,6 @@ class TurnService {
   }
 
   // ── Cerrar turno ──────────────────────────────────────────
-  /// Guarda los movimientos del jugador en el campo [movimientosTurno]
-  /// del documento principal y añade el uid a [cerradoPor].
-  /// Todo en un único update sobre Partidas/{id} — sin subcolecciones.
   Future<void> cerrarTurno({
     required String lobbyId,
     required String uid,
@@ -78,8 +72,6 @@ class TurnService {
       timestamp: DateTime.now().toUtc(),
     ).toMap();
 
-    // Un único update: guarda movimientos + marca cerradoPor
-    // movimientosTurno.{uid} = movData  →  solo escribe la clave del jugador
     Exception? lastError;
     for (int i = 0; i < 3; i++) {
       try {
@@ -87,7 +79,7 @@ class TurnService {
           'movimientosTurno.$uid': movData,
           'cerradoPor': FieldValue.arrayUnion([uid]),
         });
-        return; // éxito
+        return;
       } catch (e) {
         lastError = Exception(e.toString());
         if (i < 2) await Future.delayed(Duration(seconds: i + 1));
@@ -97,8 +89,6 @@ class TurnService {
   }
 
   // ── Obtener movimientos de todos ──────────────────────────
-  /// Lee el campo [movimientosTurno] del documento principal
-  /// y devuelve solo los movimientos del turno actual.
   Future<List<MovimientoTurno>> getMovimientosTurno({
     required String lobbyId,
     required int turno,
@@ -114,7 +104,6 @@ class TurnService {
       try {
         final mov = MovimientoTurno.fromMap(
             Map<String, dynamic>.from(entry.value as Map));
-        // Filtrar por turno actual para ignorar datos de turnos anteriores
         if (mov.turno == turno) result.add(mov);
       } catch (_) {}
     }
@@ -125,27 +114,28 @@ class TurnService {
   /// Resuelve combates + farmeo de posición + rayo, persiste en Firestore
   /// y retorna la resolución de combates.
   ///
-  /// Parámetros de farmeo (opcionales — si no se pasan, el farmeo se omite):
-  ///   [obeliscosPorJugador]  uid → coord del obelisco asignado.
-  ///   [continentes]          obeliscoCoord → lista de celdas del continente.
-  ///   [islaCentral]          Lista de coords de la isla central.
-  ///   [rayoActual]           Estado del rayo en BD: {coord, turnosRestantes}.
-  ///   [todasLasCeldas]       Todas las coords válidas del tablero.
+  /// [obeliscosPorJugador]  uid → coord del cuartel de ese jugador.
+  ///                         Si se pasa, se aplica la defensa de cuartel (+80)
+  ///                         y se detectan conquistas que eliminan jugadores.
   Future<ResolucionCombates> resolverCombatesYAvanzar({
     required String lobbyId,
     required int turnoActual,
     required Map<String, List<Map<String, dynamic>>> tablero,
     required Map<String, Map<String, int>> statsActuales,
     List<Map<String, dynamic>>? movimientosLog,
-    // ── Farmeo ────────────────────────────────────────────────
+    // ── Cuarteles ────────────────────────────────────────────
     Map<String, String>? obeliscosPorJugador,
+    // ── Farmeo ────────────────────────────────────────────────
     Map<String, List<String>>? continentes,
     List<String>? islaCentral,
     Map<String, dynamic>? rayoActual,
     List<String>? todasLasCeldas,
   }) async {
     // 1. Resolver combates (puro CPU, sin red)
-    final resolucion = CombateService.resolverCombates(tablero);
+    final resolucion = CombateService.resolverCombates(
+      tablero,
+      obeliscosPorJugador: obeliscosPorJugador,
+    );
 
     // 2. Calcular farmeo (sobre el tablero RESULTANTE tras combates)
     FarmeoResultado? farmeoResultado;
@@ -162,13 +152,13 @@ class TurnService {
       );
     }
 
-    // 3. Acumular stats (combate + farmeo)
+    // 3. Acumular stats (combate + farmeo + conquistas)
     final statsActualizadas = <String, Map<String, dynamic>>{};
     for (final entry in statsActuales.entries) {
       statsActualizadas[entry.key] = Map<String, dynamic>.from(entry.value);
     }
 
-    // Energies de COMBATE
+    // Energies de COMBATE (incluye recompensas normales y de conquista)
     resolucion.energiesPorJugador.forEach((uid, energiesC) {
       statsActualizadas.putIfAbsent(uid, () => {'energies': 0, 'pc': 0});
       statsActualizadas[uid]!['energies'] =
@@ -189,17 +179,23 @@ class TurnService {
 
     // 4. Construir log de combates y entrada de historial
     final combateLog = resolucion.resultados.map((r) => r.toLogMap()).toList();
+    final conquistasLog =
+        resolucion.obeliscosConquistados.map((c) => c.toLogMap()).toList();
     final entradaHistorial = <String, dynamic>{
       'turno': turnoActual,
       'combateLog': combateLog,
+      'conquistasLog': conquistasLog,
       'movimientosLog': movimientosLog ?? [],
-      // Farmeo del turno
       'farmeoLog': farmeoResultado?.farmeoLog ?? [],
       'rayoCoord': farmeoResultado?.nuevoRayo?['coord'],
       'rayoTurnosRestantes': farmeoResultado?.nuevoRayo?['turnosRestantes'],
     };
 
-    // 5. Transacción: solo escribe si el turno no ha avanzado ya
+    // 5. Preparar lista de jugadores recién eliminados
+    final nuevosEliminados =
+        resolucion.obeliscosConquistados.map((c) => c.perdedorUid).toList();
+
+    // 6. Transacción: solo escribe si el turno no ha avanzado ya
     final lobbyRef = _db.collection('Partidas').doc(lobbyId);
     final updateData = <String, dynamic>{
       'turnoActual': turnoActual + 1,
@@ -210,7 +206,6 @@ class TurnService {
       'ultimoCombateLog': combateLog,
       'ultimoFarmeoLog': farmeoResultado?.farmeoLog ?? [],
       if (movimientosLog != null) 'ultimosMovimientos': movimientosLog,
-      // Rayo persistido para el próximo turno
       if (farmeoActivo)
         'rayo': farmeoResultado?.nuevoRayo ?? FieldValue.delete(),
     };
@@ -231,6 +226,30 @@ class TurnService {
       }
       final finalData = Map<String, dynamic>.from(updateData);
       finalData['historialCombates'] = existingHistorial;
+
+      // ── Manejar eliminaciones ────────────────────────────────
+      if (nuevosEliminados.isNotEmpty) {
+        finalData['jugadoresEliminados'] =
+            FieldValue.arrayUnion(nuevosEliminados);
+
+        // Calcular jugadores aún activos para detectar fin de partida.
+        final existingElim =
+            List<String>.from((data['jugadoresEliminados'] as List?) ?? []);
+        final totalElim = {...existingElim, ...nuevosEliminados};
+        final jugadoresList = (data['jugadores'] as List? ?? []);
+        final allUids = jugadoresList
+            .map((j) => (j as Map)['uid'] as String? ?? '')
+            .where((u) => u.isNotEmpty)
+            .toList();
+        final activos =
+            allUids.where((uid) => !totalElim.contains(uid)).toList();
+
+        if (activos.length <= 1) {
+          finalData['estado'] = 'finalizada';
+          if (activos.isNotEmpty) finalData['ganadorUid'] = activos.first;
+        }
+      }
+
       tx.update(lobbyRef, finalData);
     });
 
