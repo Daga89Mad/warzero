@@ -22,11 +22,16 @@ Future<void> showCardDetail(
     barrierDismissible: true,
     barrierLabel: 'cerrar',
     barrierColor: Colors.black.withOpacity(0.82),
-    transitionDuration: const Duration(milliseconds: 220),
+    transitionDuration: const Duration(milliseconds: 180),
     transitionBuilder: (ctx, anim, _, child) {
-      return ScaleTransition(
-        scale: CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
-        child: FadeTransition(opacity: anim, child: child),
+      return FadeTransition(
+        opacity: CurvedAnimation(parent: anim, curve: Curves.easeOut),
+        child: ScaleTransition(
+          scale: Tween<double>(begin: 0.92, end: 1.0).animate(
+            CurvedAnimation(parent: anim, curve: Curves.easeOut),
+          ),
+          child: child,
+        ),
       );
     },
     pageBuilder: (ctx, _, __) => _CardDetailPage(
@@ -60,7 +65,9 @@ class _CardDetailPageState extends State<_CardDetailPage>
     with SingleTickerProviderStateMixin {
   late AnimationController _flipCtrl;
   CartaModel? _evolucion;
-  bool _loadingEvol = false;
+  // Se inicializa a true si hay evolución para evitar setState durante
+  // la animación de apertura (causaba el parpadeo visible).
+  late bool _loadingEvol;
   bool _showingEvolution = false;
   bool _evolucionando = false;
 
@@ -76,19 +83,20 @@ class _CardDetailPageState extends State<_CardDetailPage>
   @override
   void initState() {
     super.initState();
+    _loadingEvol =
+        _tieneEvolucion; // sin setState — evita rebuild mid-animation
     _flipCtrl = AnimationController(
       duration: const Duration(milliseconds: 520),
       vsync: this,
     );
-    // ── DEBUG: borrar después ──
-    debugPrint('🔍 puedeEvolucionar=${widget.carta.puedeEvolucionar} '
-        'idEvolucion="${widget.carta.idEvolucion}" '
-        'evolucion=${widget.carta.evolucion} '
-        'resolveEvolucion=${widget.resolveEvolucion != null} '
-        'tieneEvolucion=$_tieneEvolucion');
-    // ────────────────────────────
-    if (_tieneEvolucion) _loadEvolucion();
-    if (_tieneEvolucion) _loadEvolucion();
+    if (_tieneEvolucion) {
+      // Retrasar la carga hasta que la animación de apertura termine
+      // (transitionDuration = 220ms). Si setState ocurre durante la
+      // animación causa un parpadeo visible.
+      Future.delayed(const Duration(milliseconds: 220), () {
+        if (mounted) _loadEvolucion();
+      });
+    }
   }
 
   @override
@@ -98,10 +106,18 @@ class _CardDetailPageState extends State<_CardDetailPage>
   }
 
   Future<void> _loadEvolucion() async {
-    setState(() => _loadingEvol = true);
     try {
       final c = await widget.resolveEvolucion!(widget.carta.idEvolucion);
       if (!mounted) return;
+      // Precachear la imagen de la evolución antes de mostrar la flecha
+      // activa para que al hacer flip no haya parpadeo de placeholder.
+      if (c != null && c.imagen.isNotEmpty) {
+        try {
+          await precacheImage(NetworkImage(c.imagen), context)
+              .timeout(const Duration(milliseconds: 1500));
+        } catch (_) {}
+        if (!mounted) return;
+      }
       setState(() {
         _evolucion = c;
         _loadingEvol = false;
@@ -138,12 +154,13 @@ class _CardDetailPageState extends State<_CardDetailPage>
   Size _cardSize(BuildContext context) {
     final mq = MediaQuery.of(context).size;
     const double aspect = 1.5;
-    // Reservar espacio para la flecha si hay evolución (48 + 12 gap)
-    final double arrowSpace = _tieneEvolucion ? 64.0 : 0.0;
-    final double usableWidth = mq.width - arrowSpace;
+    // Reservar espacio para ambos lados del Row:
+    //   izquierda: 52px (balance) + derecha: 12px gap + 40px botón = 104px total.
+    const double totalSideSpace = 104.0;
+    final double usableWidth = mq.width - totalSideSpace;
 
-    final double maxW = (usableWidth * 0.92).clamp(300.0, 420.0);
-    final double maxH = (mq.height * 0.84).clamp(480.0, 720.0);
+    final double maxW = (usableWidth * 0.94).clamp(0.0, 440.0);
+    final double maxH = (mq.height * 0.88).clamp(0.0, 760.0);
 
     double cardW = maxW;
     double cardH = cardW * aspect;
@@ -168,10 +185,14 @@ class _CardDetailPageState extends State<_CardDetailPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               // ── CARTA + FLECHA ─────────────────────────────
+              // El espaciador izquierdo (52px) es igual al derecho
+              // (12 gap + 40 botón) para que la carta quede siempre
+              // centrada en pantalla, tenga o no botón de evolución.
               Row(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
+                  const SizedBox(width: 52), // balance izquierdo
                   _FlippingCard(
                     controller: _flipCtrl,
                     front: widget.carta,
@@ -179,16 +200,17 @@ class _CardDetailPageState extends State<_CardDetailPage>
                     cardWidth: sz.width,
                     cardHeight: sz.height,
                   ),
-                  if (_tieneEvolucion) ...[
-                    const SizedBox(width: 12),
+                  const SizedBox(width: 12),
+                  if (_tieneEvolucion)
                     _EvolutionArrow(
                       enabled: !_loadingEvol && _evolucion != null,
                       loading: _loadingEvol,
                       showingEvolution: _showingEvolution,
                       onTap: _toggleFlip,
                       evolucionCost: widget.carta.evolucion,
-                    ),
-                  ],
+                    )
+                  else
+                    const SizedBox(width: 40), // balance derecho
                 ],
               ),
 
@@ -289,8 +311,8 @@ class _EvolutionArrow extends StatelessWidget {
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        width: 48,
-        height: 110,
+        width: 40,
+        height: 64,
         decoration: BoxDecoration(
           color: Colors.black.withOpacity(0.55),
           borderRadius: BorderRadius.circular(8),
@@ -299,55 +321,31 @@ class _EvolutionArrow extends StatelessWidget {
               ? [BoxShadow(color: accent.withOpacity(0.35), blurRadius: 14)]
               : const [],
         ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            if (loading)
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 1.5,
-                  valueColor: AlwaysStoppedAnimation(color),
+        child: Center(
+          child: loading
+              ? SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    valueColor: AlwaysStoppedAnimation(color),
+                  ),
+                )
+              : AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 220),
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: ScaleTransition(scale: anim, child: child),
+                  ),
+                  child: Icon(
+                    showingEvolution
+                        ? Icons.arrow_back_ios_new
+                        : Icons.arrow_forward_ios,
+                    key: ValueKey(showingEvolution),
+                    size: 22,
+                    color: color,
+                  ),
                 ),
-              )
-            else
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                transitionBuilder: (child, anim) => FadeTransition(
-                  opacity: anim,
-                  child: ScaleTransition(scale: anim, child: child),
-                ),
-                child: Icon(
-                  showingEvolution
-                      ? Icons.arrow_back_ios_new
-                      : Icons.arrow_forward_ios,
-                  key: ValueKey(showingEvolution),
-                  size: 20,
-                  color: color,
-                ),
-              ),
-            const SizedBox(height: 8),
-            Text(
-              'EVOL',
-              style: TextStyle(
-                fontSize: 8,
-                color: color,
-                fontFamily: 'Cinzel',
-                letterSpacing: 1.6,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              '$evolucionCost⚡',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-                color: color,
-                fontFamily: 'Cinzel',
-              ),
-            ),
-          ],
         ),
       ),
     );
@@ -554,9 +552,9 @@ class _CardFace extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Imagen (flex:5 — ~55 % del espacio)
+                  // Imagen (flex:7 — ~65 % del espacio)
                   Expanded(
-                    flex: 5,
+                    flex: 7,
                     child: Container(
                       width: double.infinity,
                       decoration: BoxDecoration(
@@ -575,9 +573,32 @@ class _CardFace extends StatelessWidget {
                                   fit: BoxFit.cover,
                                   width: double.infinity,
                                   height: double.infinity,
-                                  loadingBuilder: (ctx, child, progress) {
-                                    if (progress == null) return child;
-                                    return _ImagePlaceholder();
+                                  // frameBuilder evita el hard-switch
+                                  // placeholder→imagen que causaba el
+                                  // parpadeo al abrir la carta.
+                                  frameBuilder: (ctx, child, frame, sync) {
+                                    if (sync || frame != null) {
+                                      return AnimatedOpacity(
+                                        opacity: 1.0,
+                                        duration: Duration.zero,
+                                        child: child,
+                                      );
+                                    }
+                                    // Imagen aún cargando — fondo plano
+                                    // sin switch brusco
+                                    return Stack(
+                                      fit: StackFit.expand,
+                                      children: [
+                                        _ImagePlaceholder(),
+                                        AnimatedOpacity(
+                                          opacity: frame == null ? 0.0 : 1.0,
+                                          duration:
+                                              const Duration(milliseconds: 250),
+                                          curve: Curves.easeIn,
+                                          child: child,
+                                        ),
+                                      ],
+                                    );
                                   },
                                   errorBuilder: (_, __, ___) =>
                                       _ImagePlaceholder(),
@@ -590,9 +611,9 @@ class _CardFace extends StatelessWidget {
 
                   const SizedBox(height: 8),
 
-                  // Descripción + Evolución (flex:4 — ~45 % del espacio)
+                  // Descripción + Evolución (flex:3 — ~35 % del espacio)
                   Expanded(
-                    flex: 4,
+                    flex: 3,
                     child: Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(

@@ -560,9 +560,7 @@ class _CardTile extends StatelessWidget {
                         ],
                         if (carta.puedeEvolucionar) ...[
                           const SizedBox(width: 4),
-                          _Chip(
-                              label: 'EVOL ${carta.evolucion}⚡',
-                              color: const Color(0xFFC060E0)),
+                          _EvolChip(coste: carta.evolucion),
                         ],
                       ]),
                     ]),
@@ -670,6 +668,40 @@ class _MoveButton extends StatelessWidget {
               ]),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CHIP EVOLUCIÓN — solo icono + coste, sin texto "EVOL"
+// ─────────────────────────────────────────────────────────────
+class _EvolChip extends StatelessWidget {
+  final int coste;
+  const _EvolChip({required this.coste});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFFC060E0);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: color.withOpacity(0.3), width: 0.5),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.arrow_upward, size: 8, color: color),
+          const SizedBox(width: 2),
+          Text('$coste⚡',
+              style: const TextStyle(
+                  fontSize: 7,
+                  color: color,
+                  letterSpacing: 0.5,
+                  fontFamily: 'Cinzel')),
         ],
       ),
     );

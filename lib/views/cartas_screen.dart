@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart';
+import '../widgets/card_detail_overlay.dart';
 import 'card_skin_selector_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,6 +16,9 @@ import 'card_skin_selector_screen.dart';
 //   Jugadores/{uid}                          → alias, nivel, exp, dinero
 //   Jugadores/{uid}/Coleccion/{cartaId}      → cartas que el jugador posee
 //   Skins/{skinId}                           → URL de skins (carga lazy)
+//
+// Las cartas con condicion==evolucion se ocultan del grid; se consultan
+// pulsando la flecha de evolución de la carta base en el overlay de detalle.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CartasScreen extends StatefulWidget {
@@ -34,13 +38,13 @@ class _CartasScreenState extends State<CartasScreen>
 
   Map<String, CartaModel> _catalogoGlobal = {};
   Map<String, _ColeccionEntry> _coleccion = {};
+  // Solo cartas NO evolucionadas, agrupadas por ejército
   Map<int, List<CartaModel>> _cartasPorEjercito = {};
   final Map<String, String> _skinImageCache = {};
 
   late TabController _tabController;
   List<EjercitoInfo> _ejercitosConCartas = [];
 
-  CartaModel? _detalleCarta;
   _JugadorStats? _jugadorStats;
 
   @override
@@ -61,12 +65,10 @@ class _CartasScreenState extends State<CartasScreen>
       final coleccionSnap = results[1] as QuerySnapshot;
       final jugadorSnap = results[2] as DocumentSnapshot;
 
-      // Catálogo global
       final catalogo = <String, CartaModel>{
         for (final doc in cartasSnap.docs) doc.id: CartaModel.fromFirestore(doc)
       };
 
-      // Subcolección Coleccion
       final coleccion = <String, _ColeccionEntry>{};
       for (final doc in coleccionSnap.docs) {
         final d = doc.data() as Map<String, dynamic>;
@@ -80,7 +82,6 @@ class _CartasScreenState extends State<CartasScreen>
         );
       }
 
-      // Stats del jugador
       _JugadorStats? stats;
       if (jugadorSnap.exists) {
         final d = jugadorSnap.data() as Map<String, dynamic>;
@@ -93,11 +94,12 @@ class _CartasScreenState extends State<CartasScreen>
         );
       }
 
-      // Agrupar por ejército (solo cartas que posee el jugador)
+      // Agrupar por ejército — EXCLUIR cartas evolucionadas del grid
       final agrupadas = <int, List<CartaModel>>{};
       for (final entry in coleccion.entries) {
         final carta = catalogo[entry.key];
         if (carta == null) continue;
+        if (carta.esEvolucion) continue; // ← solo se ven desde la carta base
         agrupadas.putIfAbsent(carta.ejercito, () => []).add(carta);
       }
       agrupadas.forEach((_, list) {
@@ -125,11 +127,12 @@ class _CartasScreenState extends State<CartasScreen>
 
       _resolverImagenesSkins(coleccion);
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = e.toString();
           _loading = false;
         });
+      }
     }
   }
 
@@ -151,6 +154,44 @@ class _CartasScreenState extends State<CartasScreen>
 
   String _imagenEfectiva(CartaModel carta) =>
       _skinImageCache[carta.id] ?? carta.imagen;
+
+  // ── Resuelve la carta evolucionada — primero catálogo local, luego Firestore
+  Future<CartaModel?> _resolveEvolucion(String idEvolucion) async {
+    final local = _catalogoGlobal[idEvolucion];
+    if (local != null) return local;
+    try {
+      final doc = await _db.collection('Cartas').doc(idEvolucion).get();
+      if (!doc.exists) return null;
+      return CartaModel.fromFirestore(doc);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Abre el detalle con la flecha de evolución (solo visualización).
+  // Precachea la imagen antes de abrir el dialog para que se pinte
+  // en el primer frame sin placeholder visible (causa del parpadeo).
+  Future<void> _abrirDetalle(CartaModel carta) async {
+    final imgUrl = _imagenEfectiva(carta);
+    if (imgUrl.isNotEmpty) {
+      try {
+        await precacheImage(
+          NetworkImage(imgUrl),
+          context,
+        ).timeout(const Duration(milliseconds: 1500));
+      } catch (_) {
+        // Si falla o tarda demasiado, abrir igual
+      }
+    }
+    if (!mounted) return;
+    showCardDetail(
+      context,
+      carta,
+      resolveEvolucion: carta.puedeEvolucionar ? _resolveEvolucion : null,
+      energiasDisponibles: null,
+      onEvolucionar: null,
+    );
+  }
 
   Future<void> _abrirSelectorSkin(CartaModel carta) async {
     final entry = _coleccion[carta.id];
@@ -207,53 +248,26 @@ class _CartasScreenState extends State<CartasScreen>
     return Scaffold(
       backgroundColor: const Color(0xFF060E1A),
       appBar: _appBar(),
-      body: Stack(
+      // Sin Stack — el overlay lo maneja showCardDetail (showGeneralDialog)
+      body: Column(
         children: [
-          Column(
-            children: [
-              if (_jugadorStats != null)
-                _JugadorStatsBar(stats: _jugadorStats!),
-              if (_ejercitosConCartas.isEmpty)
-                const Expanded(child: _ColeccionVaciaView())
-              else ...[
-                _buildTabBar(),
-                Expanded(
-                  child: TabBarView(
-                    controller: _tabController,
-                    children: _ejercitosConCartas.map((e) {
-                      final cartas = _cartasPorEjercito[e.id] ?? [];
-                      return _CartasGrid(
-                        cartas: cartas,
-                        coleccion: _coleccion,
-                        imagenEfectiva: _imagenEfectiva,
-                        onLongPress: (c) => setState(() => _detalleCarta = c),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ],
-            ],
-          ),
-
-          // Overlay detalle
-          if (_detalleCarta != null) ...[
-            GestureDetector(
-              onTap: () => setState(() => _detalleCarta = null),
-              child: Container(color: Colors.black87),
-            ),
-            Center(
-              child: _CartaDetalleOverlay(
-                carta: _detalleCarta!,
-                imagen: _imagenEfectiva(_detalleCarta!),
-                cantidad: _coleccion[_detalleCarta!.id]?.cantidad ?? 1,
-                tieneSkinActiva:
-                    _coleccion[_detalleCarta!.id]?.skinSeleccionada != null,
-                onClose: () => setState(() => _detalleCarta = null),
-                onCambiarDiseno: () {
-                  final carta = _detalleCarta!;
-                  setState(() => _detalleCarta = null);
-                  _abrirSelectorSkin(carta);
-                },
+          if (_jugadorStats != null) _JugadorStatsBar(stats: _jugadorStats!),
+          if (_ejercitosConCartas.isEmpty)
+            const Expanded(child: _ColeccionVaciaView())
+          else ...[
+            _buildTabBar(),
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: _ejercitosConCartas.map((e) {
+                  final cartas = _cartasPorEjercito[e.id] ?? [];
+                  return _CartasGrid(
+                    cartas: cartas,
+                    coleccion: _coleccion,
+                    imagenEfectiva: _imagenEfectiva,
+                    onCardTap: _abrirDetalle,
+                  );
+                }).toList(),
               ),
             ),
           ],
@@ -349,7 +363,6 @@ class _JugadorStatsBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Avatar circular con nivel
           Container(
             width: 46,
             height: 46,
@@ -381,8 +394,6 @@ class _JugadorStatsBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-
-          // Alias + barra XP
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -417,8 +428,6 @@ class _JugadorStatsBar extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-
-          // Dinero
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -442,19 +451,24 @@ class _JugadorStatsBar extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // GRID 4 COLUMNAS
 // ─────────────────────────────────────────────────────────────
-class _CartasGrid extends StatelessWidget {
+class _CartasGrid extends StatefulWidget {
   final List<CartaModel> cartas;
   final Map<String, _ColeccionEntry> coleccion;
   final String Function(CartaModel) imagenEfectiva;
-  final void Function(CartaModel) onLongPress;
+  final void Function(CartaModel) onCardTap;
 
   const _CartasGrid({
     required this.cartas,
     required this.coleccion,
     required this.imagenEfectiva,
-    required this.onLongPress,
+    required this.onCardTap,
   });
 
+  @override
+  State<_CartasGrid> createState() => _CartasGridState();
+}
+
+class _CartasGridState extends State<_CartasGrid> {
   @override
   Widget build(BuildContext context) {
     return GridView.builder(
@@ -465,16 +479,16 @@ class _CartasGrid extends StatelessWidget {
         crossAxisSpacing: 10,
         childAspectRatio: 0.60,
       ),
-      itemCount: cartas.length,
+      itemCount: widget.cartas.length,
       itemBuilder: (_, i) {
-        final carta = cartas[i];
-        final entry = coleccion[carta.id];
+        final carta = widget.cartas[i];
+        final entry = widget.coleccion[carta.id];
         return _MiniCarta(
           carta: carta,
-          imagen: imagenEfectiva(carta),
+          imagen: widget.imagenEfectiva(carta),
           cantidad: entry?.cantidad ?? 1,
           tieneSkin: entry?.skinSeleccionada != null,
-          onLongPress: () => onLongPress(carta),
+          onTap: () => widget.onCardTap(carta),
         );
       },
     );
@@ -489,21 +503,22 @@ class _MiniCarta extends StatelessWidget {
   final String imagen;
   final int cantidad;
   final bool tieneSkin;
-  final VoidCallback onLongPress;
+  final VoidCallback onTap;
 
   const _MiniCarta({
     required this.carta,
     required this.imagen,
     required this.cantidad,
     required this.tieneSkin,
-    required this.onLongPress,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onLongPress: onLongPress,
-      child: Container(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: DecoratedBox(
         decoration: BoxDecoration(
           color: const Color(0xFF0C1A2A),
           borderRadius: BorderRadius.circular(6),
@@ -561,6 +576,14 @@ class _MiniCarta extends StatelessWidget {
                                   const _PlaceholderArt())
                           : const _PlaceholderArt(),
                     ),
+                    // Indicador pequeño de que tiene evolución
+                    if (carta.puedeEvolucionar)
+                      const Positioned(
+                        top: 2,
+                        right: 2,
+                        child: Icon(Icons.arrow_forward_ios,
+                            size: 8, color: Color(0xFFC060E0)),
+                      ),
                     if (tieneSkin)
                       const Positioned(
                         bottom: 2,
@@ -618,249 +641,6 @@ class _PlaceholderArt extends StatelessWidget {
         color: const Color(0xFF0A1525),
         child: const Icon(Icons.shield_outlined,
             size: 28, color: Color(0xFF2A3A4A)),
-      );
-}
-
-// ─────────────────────────────────────────────────────────────
-// OVERLAY DETALLE
-// ─────────────────────────────────────────────────────────────
-class _CartaDetalleOverlay extends StatelessWidget {
-  final CartaModel carta;
-  final String imagen;
-  final int cantidad;
-  final bool tieneSkinActiva;
-  final VoidCallback onClose;
-  final VoidCallback onCambiarDiseno;
-
-  const _CartaDetalleOverlay({
-    required this.carta,
-    required this.imagen,
-    required this.cantidad,
-    required this.tieneSkinActiva,
-    required this.onClose,
-    required this.onCambiarDiseno,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        width: MediaQuery.of(context).size.width * 0.82,
-        constraints: const BoxConstraints(maxWidth: 340),
-        decoration: BoxDecoration(
-          color: const Color(0xFF0A1525),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-              color: const Color(0xFFC8A860).withOpacity(0.5), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-                color: const Color(0xFFC8A860).withOpacity(0.15),
-                blurRadius: 30,
-                spreadRadius: 2)
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Align(
-              alignment: Alignment.topRight,
-              child: IconButton(
-                icon:
-                    const Icon(Icons.close, size: 18, color: Color(0xFF506070)),
-                onPressed: onClose,
-              ),
-            ),
-
-            // Imagen
-            Stack(
-              alignment: Alignment.topRight,
-              children: [
-                Container(
-                  width: 150,
-                  height: 200,
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: tieneSkinActiva
-                            ? const Color(0xFFA040FF).withOpacity(0.7)
-                            : const Color(0xFFE0C060).withOpacity(0.5),
-                        width: 1.5),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(9),
-                    child: imagen.isNotEmpty
-                        ? Image.network(imagen,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                                const _PlaceholderArt())
-                        : const _PlaceholderArt(),
-                  ),
-                ),
-                if (tieneSkinActiva)
-                  const Positioned(
-                    top: 6,
-                    right: 26,
-                    child: Icon(Icons.color_lens,
-                        size: 16, color: Color(0xFFA040FF)),
-                  ),
-              ],
-            ),
-
-            const SizedBox(height: 14),
-
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text(carta.nombre.toUpperCase(),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                      fontFamily: 'Cinzel',
-                      fontSize: 13,
-                      letterSpacing: 1.5,
-                      color: Color(0xFFC8A860),
-                      fontWeight: FontWeight.bold)),
-            ),
-
-            const SizedBox(height: 4),
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                    '${carta.tipoIcon} ${carta.tipoLabel.toUpperCase()}  ·  EJ.${carta.ejercito}',
-                    style: const TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 8,
-                        color: Color(0xFF506070),
-                        letterSpacing: 1)),
-                if (cantidad > 1) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1A2A3A),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text('x$cantidad',
-                        style: const TextStyle(
-                            fontFamily: 'Cinzel',
-                            fontSize: 8,
-                            color: Color(0xFFC8A860))),
-                  ),
-                ],
-              ],
-            ),
-
-            const SizedBox(height: 14),
-
-            // Stats
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _StatChip(
-                      '⚔', '${carta.fuerza}', 'FZA', const Color(0xFFE08040)),
-                  _StatChip(
-                      '🛡', '${carta.defensa}', 'DEF', const Color(0xFF4090D0)),
-                  _StatChip(
-                      '⚡', '${carta.coste}', 'CST', const Color(0xFFD4A800)),
-                  _StatChip('↗', '${carta.movimiento}', 'MOV',
-                      const Color(0xFF4ABB58)),
-                ],
-              ),
-            ),
-
-            if (carta.descripcion.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: Text(
-                  carta.descripcion,
-                  textAlign: TextAlign.center,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontFamily: 'Cinzel',
-                      fontSize: 8,
-                      color: Color(0xFF506070),
-                      height: 1.6),
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 18),
-
-            // Botón CAMBIAR DISEÑO
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-              child: GestureDetector(
-                onTap: onCambiarDiseno,
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(colors: [
-                      const Color(0xFFA040FF).withOpacity(0.25),
-                      const Color(0xFFA040FF).withOpacity(0.08),
-                    ]),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                        color: const Color(0xFFA040FF).withOpacity(0.6),
-                        width: 1),
-                  ),
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.color_lens_outlined,
-                          size: 16, color: Color(0xFFA040FF)),
-                      SizedBox(width: 8),
-                      Text('CAMBIAR DISEÑO',
-                          style: TextStyle(
-                              fontFamily: 'Cinzel',
-                              fontSize: 11,
-                              letterSpacing: 2,
-                              color: Color(0xFFA040FF),
-                              fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _StatChip extends StatelessWidget {
-  final String icon;
-  final String value;
-  final String label;
-  final Color color;
-  const _StatChip(this.icon, this.value, this.label, this.color);
-
-  @override
-  Widget build(BuildContext context) => Column(
-        children: [
-          Text(icon, style: const TextStyle(fontSize: 14)),
-          const SizedBox(height: 2),
-          Text(value,
-              style: TextStyle(
-                  fontFamily: 'Cinzel',
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: color)),
-          Text(label,
-              style: const TextStyle(
-                  fontFamily: 'Cinzel',
-                  fontSize: 6,
-                  color: Color(0xFF506070),
-                  letterSpacing: 1)),
-        ],
       );
 }
 

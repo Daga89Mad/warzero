@@ -19,9 +19,14 @@ class FirebaseCrudService {
 
   // ───────────────────────────────────────────────────────────
   // CARTAS INICIALES DEL CATÁLOGO
-  // Cada jugador nuevo recibe estas cartas al registrarse.
-  // Formato: { cartaId → lista de skins desbloqueadas }
-  // La primera skin de cada lista es la seleccionada por defecto.
+  //
+  // Estas 21 cartas se dan a cada jugador nuevo:
+  //   - Se crean en Jugadores/{uid}/Coleccion/{cartaId}
+  //   - Se añaden a Jugadores/{uid}/Mazos/{mazoId}/Cartas/{cartaId}
+  //     con { Cantidad: 1 } para que el mazo inicial sea jugable.
+  //
+  // Formato: { cartaId → skins desbloqueadas }
+  // La primera skin de la lista es la seleccionada por defecto.
   // ───────────────────────────────────────────────────────────
   static const Map<String, List<String>> _cartasIniciales = {
     '2nSmuTkVPutvQV9B9CO3': ['default'],
@@ -70,7 +75,6 @@ class FirebaseCrudService {
       final uid = cred.user?.uid;
       final aliasFinal = alias.trim().isEmpty ? 'Jugador' : alias.trim();
       if (uid != null) {
-        // Crear el doc principal del jugador
         await _db.collection('Jugadores').doc(uid).set({
           'alias': aliasFinal,
           'dinero': 0,
@@ -83,8 +87,8 @@ class FirebaseCrudService {
           await cred.user?.updateDisplayName(aliasFinal);
         } catch (_) {}
 
-        // Crear las subcolecciones iniciales (cada una en su try-catch
-        // para que un fallo en una no bloquee las demás)
+        // Crear subcolecciones: cada bloque en su propio try-catch para
+        // que un fallo en uno no bloquee los demás.
         await _initSubcolecciones(uid);
       }
       return cred;
@@ -106,7 +110,6 @@ class FirebaseCrudService {
         email: email,
         password: password,
       );
-      // Asegurar que cuentas antiguas (sin subcolecciones) las tengan
       final uid = cred.user?.uid;
       if (uid != null) {
         try {
@@ -122,14 +125,23 @@ class FirebaseCrudService {
   }
 
   // ───────────────────────────────────────────────────────────
-  // ESTRUCTURA INICIAL DE SUBCOLECCIONES
+  // INICIALIZACIÓN DE SUBCOLECCIONES (registro)
   // ───────────────────────────────────────────────────────────
 
-  /// Crea las subcolecciones con su contenido inicial.
-  /// Cada bloque va en su propio try-catch: si uno falla (p. ej. por
-  /// reglas de Firestore incompletas) los demás se crean igualmente.
+  /// Crea las tres subcolecciones del jugador con su contenido inicial.
   ///
-  /// IMPORTANTE: las reglas de Firestore deben incluir:
+  /// ESTRUCTURA RESULTANTE EN FIRESTORE:
+  ///   Jugadores/{uid}/Estadisticas/Resultados      → {Victorias:0, Derrotas:0}
+  ///   Jugadores/{uid}/Coleccion/{cartaId}           → {cantidad, fechaObtenida,
+  ///                                                    skinSeleccionada,
+  ///                                                    skinsDesbloqueadas}
+  ///   Jugadores/{uid}/Mazos/{mazoId}               → metadata del mazo
+  ///   Jugadores/{uid}/Mazos/{mazoId}/Cartas/{id}   → {Cantidad: 1}
+  ///                                                 ← CLAVE: sin esto el mazo
+  ///                                                   se lee como vacío y el
+  ///                                                   jugador no recibe mano.
+  ///
+  /// REGLA DE FIRESTORE NECESARIA (añadir si no existe):
   ///   match /Estadisticas/{docId} {
   ///     allow read, write: if request.auth != null
   ///                        && request.auth.uid == uid;
@@ -137,7 +149,7 @@ class FirebaseCrudService {
   Future<void> _initSubcolecciones(String uid) async {
     final jugadorRef = _db.collection('Jugadores').doc(uid);
 
-    // ── Estadisticas → doc 'Resultados' ──────────────────────
+    // ── 1. Estadisticas ──────────────────────────────────────
     try {
       await jugadorRef.collection('Estadisticas').doc('Resultados').set({
         'Victorias': 0,
@@ -147,22 +159,19 @@ class FirebaseCrudService {
       print('[FirebaseCrudService] _initSubcolecciones Estadisticas: $e');
     }
 
-    // ── Coleccion → 21 cartas iniciales del catálogo ─────────
-    // Cada documento usa el ID de la carta global como ID del doc y tiene:
-    //   cantidad (String), fechaObtenida, skinSeleccionada, skinsDesbloqueadas
+    // ── 2. Coleccion (cartas que posee el jugador) ────────────
+    // Doc ID = ID de la carta global. Campos: cantidad (String),
+    // fechaObtenida, skinSeleccionada, skinsDesbloqueadas.
     try {
       final colRef = jugadorRef.collection('Coleccion');
       final batch = _db.batch();
       final ahora = Timestamp.now();
-
       for (final entry in _cartasIniciales.entries) {
-        final cartaId = entry.key;
-        final skins = entry.value;
-        batch.set(colRef.doc(cartaId), {
+        batch.set(colRef.doc(entry.key), {
           'cantidad': '1',
           'fechaObtenida': ahora,
-          'skinSeleccionada': skins.first,
-          'skinsDesbloqueadas': skins,
+          'skinSeleccionada': entry.value.first,
+          'skinsDesbloqueadas': entry.value,
         });
       }
       await batch.commit();
@@ -170,31 +179,56 @@ class FirebaseCrudService {
       print('[FirebaseCrudService] _initSubcolecciones Coleccion: $e');
     }
 
-    // ── Mazos → mazo vacío inicial ────────────────────────────
+    // ── 3. Mazos + su subcolección Cartas ────────────────────
+    //
+    // RAÍZ DEL BUG: el código anterior solo creaba el doc del mazo
+    // pero NO las entradas en Mazos/{id}/Cartas. fetchMazosDelJugador
+    // lee esa subcolección → vacía → resolverMazo devuelve [] → mano vacía.
+    //
+    // Ahora se crean ambas cosas en el mismo batch para garantizar
+    // que el mazo sea jugable desde el primer turno.
     try {
-      await jugadorRef.collection('Mazos').add({
+      final mazosRef = jugadorRef.collection('Mazos');
+      final mazoDoc = mazosRef.doc(); // ID auto-generado
+
+      final batch = _db.batch();
+
+      // Doc raíz del mazo
+      batch.set(mazoDoc, {
         'nombre': 'Mazo 1',
         'ejercitoId': 1,
         'esPrincipal': true,
-        'cartaIds': <String>[],
-        'total': 0,
+        'cartaIds': _cartasIniciales.keys.toList(),
+        'total': _cartasIniciales.length,
         'creadoEn': FieldValue.serverTimestamp(),
       });
+
+      // Subcolección Cartas: una entrada por carta inicial.
+      // MazoEntrada.fromFirestore espera doc.id = cartaId y campo 'Cantidad'.
+      final cartasRef = mazoDoc.collection('Cartas');
+      for (final cartaId in _cartasIniciales.keys) {
+        batch.set(cartasRef.doc(cartaId), {'Cantidad': 1});
+      }
+
+      await batch.commit();
     } catch (e) {
       print('[FirebaseCrudService] _initSubcolecciones Mazos: $e');
     }
   }
 
-  /// Versión idempotente para cuentas antiguas: solo crea lo que falta.
-  /// Se llama en cada login; no toca nada que ya exista.
+  // ───────────────────────────────────────────────────────────
+  // IDEMPOTENTE PARA CUENTAS ANTIGUAS (login)
+  // ───────────────────────────────────────────────────────────
+
+  /// Se llama en cada login. Solo crea lo que falta; no toca lo que existe.
   Future<void> _ensureSubcolecciones(String uid) async {
     final jugadorRef = _db.collection('Jugadores').doc(uid);
 
-    // Estadisticas/Resultados
+    // Estadisticas
     try {
-      final estSnap =
+      final snap =
           await jugadorRef.collection('Estadisticas').doc('Resultados').get();
-      if (!estSnap.exists) {
+      if (!snap.exists) {
         await jugadorRef.collection('Estadisticas').doc('Resultados').set({
           'Victorias': 0,
           'Derrotas': 0,
@@ -204,22 +238,19 @@ class FirebaseCrudService {
       print('[FirebaseCrudService] _ensureSubcolecciones Estadisticas: $e');
     }
 
-    // Coleccion: si está completamente vacía, sembrar las cartas iniciales
+    // Coleccion: si vacía, sembrar cartas iniciales
     try {
       final colSnap = await jugadorRef.collection('Coleccion').limit(1).get();
       if (colSnap.docs.isEmpty) {
         final colRef = jugadorRef.collection('Coleccion');
         final batch = _db.batch();
         final ahora = Timestamp.now();
-
         for (final entry in _cartasIniciales.entries) {
-          final cartaId = entry.key;
-          final skins = entry.value;
-          batch.set(colRef.doc(cartaId), {
+          batch.set(colRef.doc(entry.key), {
             'cantidad': '1',
             'fechaObtenida': ahora,
-            'skinSeleccionada': skins.first,
-            'skinsDesbloqueadas': skins,
+            'skinSeleccionada': entry.value.first,
+            'skinsDesbloqueadas': entry.value,
           });
         }
         await batch.commit();
@@ -228,18 +259,42 @@ class FirebaseCrudService {
       print('[FirebaseCrudService] _ensureSubcolecciones Coleccion: $e');
     }
 
-    // Mazos: si no tiene ninguno, crear el mazo inicial
+    // Mazos: si vacío, crear el mazo inicial CON su subcolección Cartas
     try {
       final mazosSnap = await jugadorRef.collection('Mazos').limit(1).get();
       if (mazosSnap.docs.isEmpty) {
-        await jugadorRef.collection('Mazos').add({
+        // Sin ningún mazo → crear mazo inicial completo
+        final mazosRef = jugadorRef.collection('Mazos');
+        final mazoDoc = mazosRef.doc();
+        final batch = _db.batch();
+        batch.set(mazoDoc, {
           'nombre': 'Mazo 1',
           'ejercitoId': 1,
           'esPrincipal': true,
-          'cartaIds': <String>[],
-          'total': 0,
+          'cartaIds': _cartasIniciales.keys.toList(),
+          'total': _cartasIniciales.length,
           'creadoEn': FieldValue.serverTimestamp(),
         });
+        final cartasRef = mazoDoc.collection('Cartas');
+        for (final cartaId in _cartasIniciales.keys) {
+          batch.set(cartasRef.doc(cartaId), {'Cantidad': 1});
+        }
+        await batch.commit();
+      } else {
+        // Hay al menos un mazo: verificar que tenga cartas en su subcolección.
+        // Cuentas antiguas pueden tener el doc del mazo pero sin Cartas.
+        final primerMazo = mazosSnap.docs.first;
+        final cartasSnap =
+            await primerMazo.reference.collection('Cartas').limit(1).get();
+        if (cartasSnap.docs.isEmpty) {
+          // El mazo existe pero su subcolección Cartas está vacía → poblarla
+          final batch = _db.batch();
+          final cartasRef = primerMazo.reference.collection('Cartas');
+          for (final cartaId in _cartasIniciales.keys) {
+            batch.set(cartasRef.doc(cartaId), {'Cantidad': 1});
+          }
+          await batch.commit();
+        }
       }
     } catch (e) {
       print('[FirebaseCrudService] _ensureSubcolecciones Mazos: $e');
@@ -251,9 +306,6 @@ class FirebaseCrudService {
   // ───────────────────────────────────────────────────────────
 
   /// Añade una carta a la Coleccion del jugador o incrementa su cantidad.
-  ///
-  /// [cartaId] es el ID del doc en la colección global 'Cartas'.
-  /// [skinInicial] es la skin que se asigna la primera vez.
   Future<void> agregarCartaAColeccion({
     required String uid,
     required String cartaId,
@@ -264,12 +316,10 @@ class FirebaseCrudService {
     final snap = await cartaRef.get();
 
     if (snap.exists && snap.data()?['placeholder'] != true) {
-      // El jugador ya tiene la carta: sumar una copia
       final cantidadActual =
           int.tryParse(snap.data()?['cantidad']?.toString() ?? '1') ?? 1;
       await cartaRef.update({'cantidad': '${cantidadActual + 1}'});
     } else {
-      // Primera copia (o placeholder residual de versiones antiguas)
       await cartaRef.set({
         'cantidad': '1',
         'fechaObtenida': FieldValue.serverTimestamp(),
