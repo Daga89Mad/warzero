@@ -242,22 +242,13 @@ class _HudBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
 
-          // ── Stats: PUNTOS + ENERGIES ──
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _StatColumn(
-                label: 'PUNTOS',
-                value: player.puntos,
-                color: color,
-              ),
-              const SizedBox(width: 10),
-              const _StatColumn(
-                label: 'ENERGIES',
-                value: 0, // Placeholder — se activará más adelante
-                color: Color(0xFF3A7ABA),
-              ),
-            ],
+          // ── Stats: ENERGIES ──
+          // player.puntos contiene las energías actuales (leídas de
+          // statsPartida.{uid}.energies en Firestore).
+          _StatColumn(
+            label: '⚡ ENERGIES',
+            value: player.puntos,
+            color: const Color(0xFF3A7ABA),
           ),
 
           // ── End turn button (player only) ──
@@ -275,7 +266,7 @@ class _HudBar extends StatelessWidget {
   }
 }
 
-// ── Columna de stat (PUNTOS / ENERGIES) ──────────────────────
+// ── Columna de stat ───────────────────────────────────────────
 class _StatColumn extends StatelessWidget {
   final String label;
   final int value;

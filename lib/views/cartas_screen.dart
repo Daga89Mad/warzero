@@ -179,9 +179,7 @@ class _CartasScreenState extends State<CartasScreen>
           NetworkImage(imgUrl),
           context,
         ).timeout(const Duration(milliseconds: 1500));
-      } catch (_) {
-        // Si falla o tarda demasiado, abrir igual
-      }
+      } catch (_) {}
     }
     if (!mounted) return;
     showCardDetail(
@@ -190,6 +188,7 @@ class _CartasScreenState extends State<CartasScreen>
       resolveEvolucion: carta.puedeEvolucionar ? _resolveEvolucion : null,
       energiasDisponibles: null,
       onEvolucionar: null,
+      onCambiarDiseno: () => _abrirSelectorSkin(carta),
     );
   }
 
@@ -474,10 +473,10 @@ class _CartasGridState extends State<_CartasGrid> {
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 4,
-        mainAxisSpacing: 10,
-        crossAxisSpacing: 10,
-        childAspectRatio: 0.60,
+        crossAxisCount: 3,
+        mainAxisSpacing: 12,
+        crossAxisSpacing: 12,
+        childAspectRatio: 0.62,
       ),
       itemCount: widget.cartas.length,
       itemBuilder: (_, i) {

@@ -20,6 +20,9 @@ class CellSidebar extends StatefulWidget {
   /// True → cuartel enemigo, ocultar detalles
   final bool isEnemyObelisco;
 
+  /// True → esta celda es cualquier cuartel general (propio o enemigo)
+  final bool isObelisco;
+
   /// UID del jugador local — determina qué cartas son movibles
   final String? localUid;
 
@@ -37,6 +40,9 @@ class CellSidebar extends StatefulWidget {
 
   static const double width = 220;
 
+  /// Defensa base de cualquier cuartel general.
+  static const int defensaBase = 80;
+
   const CellSidebar({
     super.key,
     required this.celda,
@@ -45,6 +51,7 @@ class CellSidebar extends StatefulWidget {
     required this.isOpen,
     required this.onClose,
     this.isEnemyObelisco = false,
+    this.isObelisco = false,
     this.localUid,
     this.onMoveSelected,
     this.playerColors = const {},
@@ -84,6 +91,19 @@ class _CellSidebarState extends State<CellSidebar> {
     final hasLocal = cards.any((c) => c.ownerUid == widget.localUid);
     final localCount = cards.where((c) => c.ownerUid == widget.localUid).length;
     final total = widget.isEnemyObelisco ? null : widget.celda?.fuerzaTotal;
+    // Para obeliscos: siempre incluir los 80 de defensa base.
+    // Cuartel enemigo → solo base (no revelamos las cartas enemigas).
+    // Cuartel propio  → base + defensa de las cartas.
+    // Celda normal    → solo defensa de las cartas (null si no hay cartas).
+    final int? defensa;
+    if (widget.isEnemyObelisco) {
+      defensa = CellSidebar.defensaBase;
+    } else if (widget.isObelisco) {
+      defensa = CellSidebar.defensaBase + (widget.celda?.defensaTotal ?? 0);
+    } else {
+      final d = widget.celda?.defensaTotal;
+      defensa = (d != null && d > 0) ? d : null;
+    }
 
     // Movimiento mínimo entre cartas seleccionadas
     int? minMov;
@@ -107,10 +127,14 @@ class _CellSidebarState extends State<CellSidebar> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Header(
-              coord: widget.coord,
-              terrain: widget.terrain,
-              total: total,
-              onClose: widget.onClose),
+            coord: widget.coord,
+            terrain: widget.terrain,
+            total: total,
+            defensa: defensa,
+            isObelisco: widget.isObelisco,
+            isEnemyObelisco: widget.isEnemyObelisco,
+            onClose: widget.onClose,
+          ),
           const Divider(color: Color(0x30503214), height: 1),
 
           Expanded(
@@ -119,6 +143,7 @@ class _CellSidebarState extends State<CellSidebar> {
               coord: widget.coord,
               terrain: widget.terrain,
               isEnemyObelisco: widget.isEnemyObelisco,
+              isObelisco: widget.isObelisco,
               localUid: widget.localUid,
               selected: _selected,
               onToggle: _toggle,
@@ -152,12 +177,20 @@ class _Header extends StatelessWidget {
   final String? coord;
   final TerrainType? terrain;
   final int? total;
+  final int? defensa;
+  final bool isObelisco;
+  final bool isEnemyObelisco;
   final VoidCallback onClose;
-  const _Header(
-      {required this.coord,
-      required this.terrain,
-      required this.total,
-      required this.onClose});
+
+  const _Header({
+    required this.coord,
+    required this.terrain,
+    required this.total,
+    required this.defensa,
+    required this.isObelisco,
+    required this.isEnemyObelisco,
+    required this.onClose,
+  });
 
   String _label(TerrainType? t) {
     switch (t) {
@@ -199,6 +232,11 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Color del cuartel: rojo para enemigo, dorado para propio
+    const ownColor = Color(0xFFC8A860);
+    const enemyColor = Color(0xFFC04040);
+    final hqColor = isEnemyObelisco ? enemyColor : ownColor;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 8, 10),
       child: Row(
@@ -215,30 +253,88 @@ class _Header extends StatelessWidget {
                       fontFamily: 'Cinzel',
                       height: 1)),
               const SizedBox(height: 4),
-              Row(children: [
-                if (_terrainIcon(terrain).isNotEmpty) ...[
-                  Text(_terrainIcon(terrain),
-                      style: const TextStyle(fontSize: 11, height: 1)),
-                  const SizedBox(width: 5),
-                ],
-                Text(_label(terrain),
+              // Etiqueta de cuartel general — sustituye etiqueta de terreno
+              if (isObelisco) ...[
+                Text(
+                  isEnemyObelisco
+                      ? '🏚  CUARTEL ENEMIGO'
+                      : '🏰  CUARTEL GENERAL',
+                  style: TextStyle(
+                      fontSize: 8,
+                      letterSpacing: 1.5,
+                      color: hqColor,
+                      fontFamily: 'Cinzel'),
+                ),
+                const SizedBox(height: 6),
+                // Badge de defensa base
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: hqColor.withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                        color: hqColor.withOpacity(0.35), width: 0.8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.shield, size: 11, color: hqColor),
+                      const SizedBox(width: 4),
+                      Text(
+                        'DEFENSA BASE  ${CellSidebar.defensaBase}',
+                        style: TextStyle(
+                            fontSize: 8,
+                            color: hqColor,
+                            fontFamily: 'Cinzel',
+                            letterSpacing: 1,
+                            fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ] else ...[
+                Row(children: [
+                  if (_terrainIcon(terrain).isNotEmpty) ...[
+                    Text(_terrainIcon(terrain),
+                        style: const TextStyle(fontSize: 11, height: 1)),
+                    const SizedBox(width: 5),
+                  ],
+                  Text(_label(terrain),
+                      style: const TextStyle(
+                          fontSize: 8,
+                          letterSpacing: 2,
+                          color: Color(0xFF506070),
+                          fontFamily: 'Cinzel')),
+                ]),
+                const SizedBox(height: 6),
+                Text(_terrainDesc(terrain),
                     style: const TextStyle(
                         fontSize: 8,
-                        letterSpacing: 2,
-                        color: Color(0xFF506070),
-                        fontFamily: 'Cinzel')),
-              ]),
-              const SizedBox(height: 6),
-              Text(_terrainDesc(terrain),
-                  style: const TextStyle(
-                      fontSize: 8,
-                      color: Color(0xFF304555),
-                      height: 1.6,
-                      fontFamily: 'Cinzel',
-                      letterSpacing: 0.2)),
+                        color: Color(0xFF304555),
+                        height: 1.6,
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 0.2)),
+              ],
             ]),
           ),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+            if (defensa != null) ...[
+              const Text('DEFENSA',
+                  style: TextStyle(
+                      fontSize: 7,
+                      color: Color(0xFF506070),
+                      letterSpacing: 1.5,
+                      fontFamily: 'Cinzel')),
+              Text('$defensa',
+                  style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF60A0D0),
+                      fontFamily: 'Cinzel',
+                      height: 1)),
+              const SizedBox(height: 6),
+            ],
             if (total != null && total! > 0) ...[
               const Text('FUERZA',
                   style: TextStyle(
@@ -253,7 +349,7 @@ class _Header extends StatelessWidget {
                       color: Color(0xFFE0C060),
                       fontFamily: 'Cinzel',
                       height: 1)),
-              const SizedBox(height: 4),
+              const SizedBox(height: 6),
             ],
             GestureDetector(
               onTap: onClose,
@@ -275,6 +371,7 @@ class _Body extends StatelessWidget {
   final String? coord;
   final TerrainType? terrain;
   final bool isEnemyObelisco;
+  final bool isObelisco;
   final String? localUid;
   final Set<int> selected;
   final void Function(int) onToggle;
@@ -291,6 +388,7 @@ class _Body extends StatelessWidget {
     required this.coord,
     required this.terrain,
     required this.isEnemyObelisco,
+    required this.isObelisco,
     required this.localUid,
     required this.selected,
     required this.onToggle,
@@ -303,18 +401,12 @@ class _Body extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cards = celda?.cartas ?? [];
-    // ── Cuartel enemigo ──────────────────────────────────────
+
+    // ── Cuartel enemigo con cartas ───────────────────────────
     if (isEnemyObelisco && cards.isNotEmpty) {
       return Padding(
         padding: const EdgeInsets.all(16),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('CUARTEL ENEMIGO',
-              style: TextStyle(
-                  fontSize: 8,
-                  color: Color(0xFFC04040),
-                  fontFamily: 'Cinzel',
-                  letterSpacing: 2)),
-          const SizedBox(height: 12),
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(12),
@@ -349,6 +441,47 @@ class _Body extends StatelessWidget {
       );
     }
 
+    // ── Cuartel enemigo vacío ────────────────────────────────
+    if (isEnemyObelisco && cards.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0A0C14),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0x30C04040), width: 1),
+            ),
+            child: Column(children: [
+              const Icon(Icons.shield_outlined,
+                  size: 22, color: Color(0xFFC04040)),
+              const SizedBox(height: 8),
+              const Text('SIN DEFENSORES',
+                  style: TextStyle(
+                      fontSize: 9,
+                      color: Color(0xFFC04040),
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1.5)),
+              const SizedBox(height: 4),
+              const Text(
+                'El cuartel resiste con\ndefensa propia (80).',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 7,
+                    color: Color(0xFF506070),
+                    fontFamily: 'Cinzel',
+                    letterSpacing: 1,
+                    height: 1.6),
+              ),
+            ]),
+          ),
+        ]),
+      );
+    }
+
+    // ── Celda vacía (no obelisco) ────────────────────────────
     if (cards.isEmpty) {
       return const Center(
         child: Text('CELDA VACÍA',

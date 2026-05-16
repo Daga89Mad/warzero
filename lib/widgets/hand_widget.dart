@@ -9,8 +9,11 @@ class HandWidget extends StatelessWidget {
   final int? selectedIndex;
   final Function(int) onCardTap;
 
+  /// Energías disponibles del jugador local.
+  /// Las cartas con coste > energiesDisponibles se muestran bloqueadas.
+  final int energiesDisponibles;
+
   /// Resolver carta de evolución (para preview al hacer long press).
-  /// Si es null, el overlay se abre sin flecha de evolución.
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
 
   const HandWidget({
@@ -18,6 +21,7 @@ class HandWidget extends StatelessWidget {
     required this.cartas,
     required this.selectedIndex,
     required this.onCardTap,
+    this.energiesDisponibles = 0,
     this.resolveEvolucion,
   });
 
@@ -47,19 +51,21 @@ class HandWidget extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 7, 14, 13),
         itemCount: cartas.length,
         separatorBuilder: (_, __) => const SizedBox(width: 7),
-        itemBuilder: (context, i) => _HandCard(
-          carta: cartas[i],
-          isActive: i == selectedIndex,
-          onTap: () => onCardTap(i),
-          onLongPress: () => showCardDetail(
-            context,
-            cartas[i],
-            resolveEvolucion: resolveEvolucion,
-            // Sin energiasDisponibles ni onEvolucionar:
-            // desde la mano solo se puede previsualizar la evolución,
-            // no confirmarla (la carta aún no está en el tablero).
-          ),
-        ),
+        itemBuilder: (context, i) {
+          final carta = cartas[i];
+          final affordable = carta.coste <= energiesDisponibles;
+          return _HandCard(
+            carta: carta,
+            isActive: i == selectedIndex,
+            affordable: affordable,
+            onTap: () => onCardTap(i),
+            onLongPress: () => showCardDetail(
+              context,
+              carta,
+              resolveEvolucion: resolveEvolucion,
+            ),
+          );
+        },
       ),
     );
   }
@@ -69,18 +75,28 @@ class HandWidget extends StatelessWidget {
 class _HandCard extends StatelessWidget {
   final CartaModel carta;
   final bool isActive;
+
+  /// False si el jugador no tiene energía suficiente para desplegarla.
+  final bool affordable;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
   const _HandCard({
     required this.carta,
     required this.isActive,
+    required this.affordable,
     required this.onTap,
     this.onLongPress,
   });
 
   @override
   Widget build(BuildContext context) {
+    // Color del borde del círculo de coste: rojo si no puede pagar, dorado si sí.
+    final costCircleColor =
+        affordable ? const Color(0xFFB08040) : const Color(0xFF8B2020);
+    final costTextColor =
+        affordable ? const Color(0xFF040C14) : const Color(0xFFFFAAAA);
+
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -90,12 +106,16 @@ class _HandCard extends StatelessWidget {
         width: 64,
         height: 88,
         decoration: BoxDecoration(
-          color: const Color(0xFF0C1A2A),
+          color: affordable
+              ? const Color(0xFF0C1A2A)
+              : const Color(0xFF0C0E14), // fondo más oscuro si no puede pagar
           borderRadius: BorderRadius.circular(5),
           border: Border.all(
             color: isActive
                 ? const Color(0xFFE0C060)
-                : const Color(0xFF78591E).withOpacity(0.45),
+                : affordable
+                    ? const Color(0xFF78591E).withOpacity(0.45)
+                    : const Color(0xFF5A2020).withOpacity(0.7),
             width: 1.5,
           ),
           boxShadow: isActive
@@ -119,10 +139,12 @@ class _HandCard extends StatelessWidget {
                 children: [
                   Text(
                     '${carta.fuerza}',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 19,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFFE0C060),
+                      color: affordable
+                          ? const Color(0xFFE0C060)
+                          : const Color(0xFF806040),
                       fontFamily: 'Cinzel',
                       height: 1,
                     ),
@@ -130,17 +152,17 @@ class _HandCard extends StatelessWidget {
                   Container(
                     width: 16,
                     height: 16,
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFB08040),
+                    decoration: BoxDecoration(
+                      color: costCircleColor,
                       shape: BoxShape.circle,
                     ),
                     child: Center(
                       child: Text(
                         '${carta.coste}',
-                        style: const TextStyle(
+                        style: TextStyle(
                             fontSize: 8,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFF040C14),
+                            color: costTextColor,
                             fontFamily: 'Cinzel'),
                       ),
                     ),
@@ -150,16 +172,19 @@ class _HandCard extends StatelessWidget {
               // ── Art area ──
               Expanded(
                 child: Center(
-                  child: carta.imagen.isNotEmpty
-                      ? Image.network(
-                          carta.imagen,
-                          width: 36,
-                          height: 36,
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, __, ___) =>
-                              const _PlaceholderIcon(),
-                        )
-                      : const _PlaceholderIcon(),
+                  child: Opacity(
+                    opacity: affordable ? 1.0 : 0.45,
+                    child: carta.imagen.isNotEmpty
+                        ? Image.network(
+                            carta.imagen,
+                            width: 36,
+                            height: 36,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) =>
+                                const _PlaceholderIcon(),
+                          )
+                        : const _PlaceholderIcon(),
+                  ),
                 ),
               ),
               // ── Nombre ──
@@ -168,9 +193,11 @@ class _HandCard extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 6,
-                  color: Color(0xFF506878),
+                  color: affordable
+                      ? const Color(0xFF506878)
+                      : const Color(0xFF3A3040),
                   letterSpacing: 0.5,
                   fontFamily: 'Cinzel',
                 ),
@@ -178,9 +205,11 @@ class _HandCard extends StatelessWidget {
               // ── Ejército ──
               Text(
                 'EJÉRCITO ${carta.ejercito}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 5,
-                  color: Color(0x7F506878),
+                  color: affordable
+                      ? const Color(0x7F506878)
+                      : const Color(0x4F3A3040),
                   fontFamily: 'Cinzel',
                 ),
               ),

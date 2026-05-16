@@ -16,6 +16,10 @@ Future<void> showCardDetail(
   Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion,
   int? energiasDisponibles,
   Future<void> Function(CartaModel evolucion)? onEvolucionar,
+
+  /// Callback para cambiar el skin/diseño. Solo se muestra el botón si
+  /// se proporciona (colección sí, juego no).
+  VoidCallback? onCambiarDiseno,
 }) {
   return showGeneralDialog(
     context: context,
@@ -39,6 +43,7 @@ Future<void> showCardDetail(
       resolveEvolucion: resolveEvolucion,
       energiasDisponibles: energiasDisponibles,
       onEvolucionar: onEvolucionar,
+      onCambiarDiseno: onCambiarDiseno,
     ),
   );
 }
@@ -49,12 +54,14 @@ class _CardDetailPage extends StatefulWidget {
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
   final int? energiasDisponibles;
   final Future<void> Function(CartaModel evolucion)? onEvolucionar;
+  final VoidCallback? onCambiarDiseno;
 
   const _CardDetailPage({
     required this.carta,
     this.resolveEvolucion,
     this.energiasDisponibles,
     this.onEvolucionar,
+    this.onCambiarDiseno,
   });
 
   @override
@@ -150,17 +157,13 @@ class _CardDetailPageState extends State<_CardDetailPage>
     }
   }
 
-  // ── Calcular dimensiones de la carta según pantalla y flecha ──
+  // ── Calcular dimensiones de la carta ──────────────────────────
   Size _cardSize(BuildContext context) {
     final mq = MediaQuery.of(context).size;
     const double aspect = 1.5;
-    // Reservar espacio para ambos lados del Row:
-    //   izquierda: 52px (balance) + derecha: 12px gap + 40px botón = 104px total.
-    const double totalSideSpace = 104.0;
-    final double usableWidth = mq.width - totalSideSpace;
-
-    final double maxW = (usableWidth * 0.94).clamp(0.0, 440.0);
-    final double maxH = (mq.height * 0.88).clamp(0.0, 760.0);
+    const double hPad = 24.0; // padding horizontal total (12 cada lado)
+    final double maxW = (mq.width - hPad).clamp(0.0, 520.0);
+    final double maxH = (mq.height * 0.80).clamp(0.0, 820.0);
 
     double cardW = maxW;
     double cardH = cardW * aspect;
@@ -178,54 +181,65 @@ class _CardDetailPageState extends State<_CardDetailPage>
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
       behavior: HitTestBehavior.opaque,
-      child: Center(
-        child: GestureDetector(
-          onTap: () {},
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // ── CARTA + FLECHA ─────────────────────────────
-              // El espaciador izquierdo (52px) es igual al derecho
-              // (12 gap + 40 botón) para que la carta quede siempre
-              // centrada en pantalla, tenga o no botón de evolución.
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const SizedBox(width: 52), // balance izquierdo
-                  _FlippingCard(
-                    controller: _flipCtrl,
-                    front: widget.carta,
-                    back: _evolucion,
-                    cardWidth: sz.width,
-                    cardHeight: sz.height,
-                  ),
-                  const SizedBox(width: 12),
-                  if (_tieneEvolucion)
-                    _EvolutionArrow(
-                      enabled: !_loadingEvol && _evolucion != null,
-                      loading: _loadingEvol,
-                      showingEvolution: _showingEvolution,
-                      onTap: _toggleFlip,
-                      evolucionCost: widget.carta.evolucion,
-                    )
-                  else
-                    const SizedBox(width: 40), // balance derecho
-                ],
-              ),
-
-              // ── BOTÓN EVOLUCIONAR ──────────────────────────
-              if (_showingEvolution && widget.onEvolucionar != null) ...[
-                const SizedBox(height: 18),
-                _EvolveButton(
-                  cost: widget.carta.evolucion,
-                  energiasDisponibles: widget.energiasDisponibles ?? 0,
-                  enabled: _puedeEvolucionar,
-                  busy: _evolucionando,
-                  onTap: _confirmarEvolucion,
+      child: Material(
+        type: MaterialType.transparency,
+        child: Center(
+          child: GestureDetector(
+            onTap: () {},
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ── CARTA ─────────────────────────────────────
+                _FlippingCard(
+                  controller: _flipCtrl,
+                  front: widget.carta,
+                  back: _evolucion,
+                  cardWidth: sz.width,
+                  cardHeight: sz.height,
                 ),
+
+                // ── FILA INFERIOR: flecha evolución (derecha) ──
+                if (_tieneEvolucion) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: sz.width,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        _EvolutionArrow(
+                          enabled: !_loadingEvol && _evolucion != null,
+                          loading: _loadingEvol,
+                          showingEvolution: _showingEvolution,
+                          onTap: _toggleFlip,
+                          evolucionCost: widget.carta.evolucion,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                // ── BOTÓN EVOLUCIONAR ──────────────────────────
+                if (_showingEvolution && widget.onEvolucionar != null) ...[
+                  const SizedBox(height: 18),
+                  _EvolveButton(
+                    cost: widget.carta.evolucion,
+                    energiasDisponibles: widget.energiasDisponibles ?? 0,
+                    enabled: _puedeEvolucionar,
+                    busy: _evolucionando,
+                    onTap: _confirmarEvolucion,
+                  ),
+                ],
+
+                // ── BOTÓN CAMBIAR DISEÑO ────────────────────────
+                if (widget.onCambiarDiseno != null) ...[
+                  const SizedBox(height: 14),
+                  _SkinButton(onTap: () {
+                    Navigator.of(context).pop();
+                    widget.onCambiarDiseno!();
+                  }),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -306,46 +320,39 @@ class _EvolutionArrow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFFA040C0);
-    final color = enabled ? accent : const Color(0xFF354050);
+    final color = enabled ? accent : const Color(0xFF506070);
+    final label = loading
+        ? '…'
+        : showingEvolution
+            ? 'Original'
+            : 'Evolución  ⚡$evolucionCost';
+
     return GestureDetector(
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        width: 40,
-        height: 64,
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: color.withOpacity(0.55), width: 1.2),
+          color: Colors.black.withOpacity(0.60),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.65), width: 1.2),
           boxShadow: enabled
-              ? [BoxShadow(color: accent.withOpacity(0.35), blurRadius: 14)]
+              ? [BoxShadow(color: accent.withOpacity(0.35), blurRadius: 12)]
               : const [],
         ),
         child: Center(
-          child: loading
-              ? SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    valueColor: AlwaysStoppedAnimation(color),
-                  ),
-                )
-              : AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  transitionBuilder: (child, anim) => FadeTransition(
-                    opacity: anim,
-                    child: ScaleTransition(scale: anim, child: child),
-                  ),
-                  child: Icon(
-                    showingEvolution
-                        ? Icons.arrow_back_ios_new
-                        : Icons.arrow_forward_ios,
-                    key: ValueKey(showingEvolution),
-                    size: 22,
-                    color: color,
-                  ),
-                ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: color,
+              fontFamily: 'Cinzel',
+              letterSpacing: 1.0,
+              decoration: TextDecoration.none,
+            ),
+          ),
         ),
       ),
     );
@@ -353,6 +360,49 @@ class _EvolutionArrow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
+// BOTÓN CAMBIAR DISEÑO (skin)
+// ─────────────────────────────────────────────────────────────
+class _SkinButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _SkinButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFFA040FF);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 11),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(colors: [
+            color.withOpacity(0.22),
+            color.withOpacity(0.07),
+          ]),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.55), width: 1),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.color_lens_outlined, size: 16, color: color),
+            SizedBox(width: 8),
+            Text(
+              'CAMBIAR DISEÑO',
+              style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 11,
+                letterSpacing: 2,
+                color: color,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // BOTÓN EVOLUCIONAR
 // ─────────────────────────────────────────────────────────────
 class _EvolveButton extends StatelessWidget {
@@ -441,8 +491,15 @@ class _CardFace extends StatelessWidget {
     required this.cardHeight,
   });
 
+  // CAMBIO: la cabecera crece si la carta tiene condición especial,
+  // para alojar el chip de condición debajo del nombre.
+  double get _headerHeight =>
+      carta.condicion != CondicionCarta.basica ? 68.0 : 52.0;
+
   @override
   Widget build(BuildContext context) {
+    final headerH = _headerHeight;
+
     return Container(
       width: cardWidth,
       height: cardHeight,
@@ -522,33 +579,68 @@ class _CardFace extends StatelessWidget {
               ),
             ),
 
-            // Nombre
+            // ── CABECERA: Nombre + Condición (si aplica) ──
+            // CAMBIO: altura dinámica según si hay condición
             Positioned(
               top: 0,
               left: 68,
               right: 68,
-              height: 52,
-              child: Center(
-                child: Text(
-                  carta.nombre.toUpperCase(),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFFE8C870),
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 1.2,
-                    decoration: TextDecoration.none,
+              height: headerH,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Nombre
+                  Text(
+                    carta.nombre.toUpperCase(),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFE8C870),
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1.2,
+                      decoration: TextDecoration.none,
+                    ),
                   ),
-                ),
+                  // CAMBIO: condición debajo del nombre en pequeño
+                  if (carta.condicion != CondicionCarta.basica) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color:
+                            Color(carta.condicion.colorValue).withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: Color(carta.condicion.colorValue)
+                              .withOpacity(0.45),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Text(
+                        '${carta.condicion.icon} ${carta.condicion.label.toUpperCase()}',
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.bold,
+                          color: Color(carta.condicion.colorValue),
+                          fontFamily: 'Cinzel',
+                          letterSpacing: 0.8,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
 
-            // Contenido
+            // Contenido (imagen + descripción)
+            // CAMBIO: padding superior usa headerH dinámico
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 52, 14, 56),
+              padding: EdgeInsets.fromLTRB(14, headerH, 14, 56),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -612,6 +704,7 @@ class _CardFace extends StatelessWidget {
                   const SizedBox(height: 8),
 
                   // Descripción + Evolución (flex:3 — ~35 % del espacio)
+                  // CAMBIO: eliminada la fila de Condición de aquí
                   Expanded(
                     flex: 3,
                     child: Container(
@@ -643,46 +736,6 @@ class _CardFace extends StatelessWidget {
                               ),
                             ),
                           ),
-                          // ── Condición (si no es básica) ──
-                          if (carta.condicion != CondicionCarta.basica) ...[
-                            const SizedBox(height: 6),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'CONDICIÓN',
-                                  style: TextStyle(
-                                    fontSize: 8,
-                                    color: Color(0xFF7A6A40),
-                                    fontFamily: 'Cinzel',
-                                    letterSpacing: 1.5,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Color(carta.condicion.colorValue)
-                                        .withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(
-                                        color: Color(carta.condicion.colorValue)
-                                            .withOpacity(0.40),
-                                        width: 0.8),
-                                  ),
-                                  child: Text(
-                                    '${carta.condicion.icon} ${carta.condicion.label}',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(carta.condicion.colorValue),
-                                      fontFamily: 'Cinzel',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
                           const SizedBox(height: 8),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,

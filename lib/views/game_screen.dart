@@ -122,6 +122,13 @@ class _GameScreenState extends State<GameScreen> {
   final Set<String> _cartasMovidasEsteTurno = {};
   bool get _hayCambiosPendientes => _cartasMovidasEsteTurno.isNotEmpty;
 
+  // ── Energía snapshot al inicio de cada turno ──────────────
+  /// Energías del jugador al comenzar el turno (para restaurar en undo).
+  int _puntosInicial = 0;
+
+  /// Energía total gastada en despliegues este turno (para restaurar en Firestore).
+  int _energiaGastadaDespliegue = 0;
+
   bool _loading = true;
   String? _error;
 
@@ -394,12 +401,28 @@ class _GameScreenState extends State<GameScreen> {
                 .map((e) => Map<String, dynamic>.from(e as Map))
                 .toList();
         final rawStats = data['statsPartida'] as Map<String, dynamic>? ?? {};
-        int puntosRestaurados = 0;
+        // ── Energías iniciales ────────────────────────────────
+        // Si el jugador no tiene entrada en statsPartida (primera vez que
+        // entra al juego), se le asignan 15 energías y se persisten.
+        const int _energiasIniciales = 15;
+        int puntosRestaurados;
+
         if (rawStats.containsKey(widget.localPlayerUid)) {
           final myS =
               Map<String, dynamic>.from(rawStats[widget.localPlayerUid] as Map);
           puntosRestaurados = (myS['energies'] as num?)?.toInt() ?? 0;
+        } else {
+          // Primera vez: asignar energías de inicio
+          puntosRestaurados = _energiasIniciales;
+          FirebaseFirestore.instance
+              .collection('Partidas')
+              .doc(widget.lobbyId)
+              .update({
+            'statsPartida.${widget.localPlayerUid}.energies':
+                _energiasIniciales,
+          }).catchError((_) {});
         }
+        _puntosInicial = puntosRestaurados;
         final loadedHistorial =
             (data['historialCombates'] as List<dynamic>? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map))
@@ -510,6 +533,7 @@ class _GameScreenState extends State<GameScreen> {
           _boardStateInicial = _boardState;
           _handInicial = List.from(manoFinal);
           _cartasMovidasEsteTurno.clear();
+          _energiaGastadaDespliegue = 0;
         });
         _turnoConfirmadoStream = lobby.turnoActual;
         _cargaCompletada = true;
@@ -552,6 +576,8 @@ class _GameScreenState extends State<GameScreen> {
         _boardStateInicial = _boardState;
         _handInicial = List.from(manoInicial);
         _cartasMovidasEsteTurno.clear();
+        _puntosInicial = 0;
+        _energiaGastadaDespliegue = 0;
       });
     } on TimeoutException catch (_) {
       if (mounted) {
@@ -673,6 +699,7 @@ class _GameScreenState extends State<GameScreen> {
           _mazoRestante = nuevoMazo;
           _handInicial = List.from(nuevaMano);
           _cartasMovidasEsteTurno.clear();
+          _energiaGastadaDespliegue = 0;
         });
 
         // Persistir mano + mazo tras robar la carta
@@ -685,7 +712,10 @@ class _GameScreenState extends State<GameScreen> {
               Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
           final pts = (myS['energies'] as num?)?.toInt() ?? 0;
           if (pts != _localPlayer.puntos) {
-            setState(() => _localPlayer.puntos = pts);
+            setState(() {
+              _localPlayer.puntos = pts;
+              _puntosInicial = pts; // sincronizar snapshot de inicio de turno
+            });
           }
         }
         if (_modoTurno == ModoTurno.rapida) _startTimer();
@@ -878,6 +908,16 @@ class _GameScreenState extends State<GameScreen> {
     }
     final carta = _hand[_selectedHandIndex!];
 
+    // ── Comprobar coste de energía ────────────────────────────
+    final coste = carta.coste;
+    if (_localPlayer.puntos < coste) {
+      _toast(
+        '⚡ Energía insuficiente: necesitas $coste, tienes ${_localPlayer.puntos}',
+        error: true,
+      );
+      return;
+    }
+
     if (carta.esEstatica) {
       final celdaInicial = _boardStateInicial.getCelda(coord);
       final tieneCartaPropiaAnterior =
@@ -903,11 +943,29 @@ class _GameScreenState extends State<GameScreen> {
       if (carta.esEstatica) {
         _cartasMovidasEsteTurno.add(carta.id);
       }
+      // ── Descontar energía localmente ──────────────────────
+      _localPlayer.puntos -= coste;
+      _energiaGastadaDespliegue += coste;
       _sidebarCoord = coord;
       _sidebarRi = ri;
       _sidebarCi = ci;
       _sidebarOpen = true;
     });
+
+    // ── Persistir gasto en Firestore ──────────────────────────
+    if (widget.lobbyId != null && coste > 0) {
+      FirebaseFirestore.instance
+          .collection('Partidas')
+          .doc(widget.lobbyId)
+          .update({
+        'statsPartida.${widget.localPlayerUid}.energies':
+            FieldValue.increment(-coste),
+      }).catchError((_) {}); // fire-and-forget; undo restaura si cancela
+    }
+
+    if (coste > 0) {
+      _toast('${carta.nombre} desplegada  (-$coste ⚡)');
+    }
   }
 
   void _onMoveSelected(List<int> indices) {
@@ -1006,6 +1064,7 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _undoCambios() {
+    final energiaARestaurar = _energiaGastadaDespliegue;
     setState(() {
       _boardState = _boardStateInicial;
       _hand = List.from(_handInicial);
@@ -1016,7 +1075,22 @@ class _GameScreenState extends State<GameScreen> {
       _selectedHandIndex = null;
       _sidebarOpen = false;
       _sidebarCoord = null;
+      // ── Restaurar energía al snapshot de inicio de turno ──
+      _localPlayer.puntos = _puntosInicial;
+      _energiaGastadaDespliegue = 0;
     });
+
+    // Devolver la energía gastada en despliegues en Firestore
+    if (widget.lobbyId != null && energiaARestaurar > 0) {
+      FirebaseFirestore.instance
+          .collection('Partidas')
+          .doc(widget.lobbyId)
+          .update({
+        'statsPartida.${widget.localPlayerUid}.energies':
+            FieldValue.increment(energiaARestaurar),
+      }).catchError((_) {});
+    }
+
     _toast('Cambios revertidos al estado inicial del turno.');
   }
 
@@ -1246,7 +1320,9 @@ class _GameScreenState extends State<GameScreen> {
         _boardStateInicial = _boardState;
         _handInicial = List.from(_hand);
         _cartasMovidasEsteTurno.clear();
+        _energiaGastadaDespliegue = 0;
         if (ptsGanados > 0) _localPlayer.puntos += ptsGanados;
+        _puntosInicial = _localPlayer.puntos;
       });
 
       // La mano y mazo se actualizarán cuando llegue el stream del nuevo turno
@@ -1372,6 +1448,8 @@ class _GameScreenState extends State<GameScreen> {
             restoredState.copyWith(turnoActual: lobby.turnoActual);
         _handInicial = List.from(_hand);
         _cartasMovidasEsteTurno.clear();
+        _puntosInicial = _localPlayer.puntos;
+        _energiaGastadaDespliegue = 0;
       });
       return;
     }
@@ -1532,6 +1610,8 @@ class _GameScreenState extends State<GameScreen> {
     final isEnemySidebar = _sidebarCoord != null &&
         kObeliscoCoords.contains(_sidebarCoord) &&
         _sidebarCoord != _obeliscoLocal;
+    final isObeliscoSidebar =
+        _sidebarCoord != null && kObeliscoCoords.contains(_sidebarCoord);
     final String? selectedCoord =
         _inMoveMode ? _moveFromCoord : (_sidebarOpen ? _sidebarCoord : null);
 
@@ -1606,6 +1686,7 @@ class _GameScreenState extends State<GameScreen> {
                     cartas: _hand,
                     selectedIndex: _selectedHandIndex,
                     onCardTap: _onHandCardTap,
+                    energiesDisponibles: _localPlayer.puntos,
                     resolveEvolucion: _resolveEvolucion,
                   ),
               ],
@@ -1664,6 +1745,7 @@ class _GameScreenState extends State<GameScreen> {
                 terrain: sidebarTerrain,
                 isOpen: _sidebarOpen,
                 isEnemyObelisco: isEnemySidebar,
+                isObelisco: isObeliscoSidebar,
                 localUid: _localPlayer.datos.uid,
                 playerColors: _playerColors,
                 onMoveSelected: _estoyEliminado ? (_) {} : _onMoveSelected,
