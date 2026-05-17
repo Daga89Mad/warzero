@@ -242,5 +242,5 @@ const List<EjercitoInfo> kEjercitos = [
   EjercitoInfo(id: 1, nombre: 'Humanos', descripcion: '', icono: '⚔️'),
   EjercitoInfo(id: 2, nombre: 'Biónicos', descripcion: '', icono: '🛡️'),
   EjercitoInfo(id: 3, nombre: 'Demonios', descripcion: '', icono: '⚓'),
-  EjercitoInfo(id: 4, nombre: 'Robots', descripcion: '', icono: '🌒'),
+  EjercitoInfo(id: 4, nombre: 'Nefilim', descripcion: '', icono: '🌒'),
 ];

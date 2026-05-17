@@ -25,7 +25,9 @@ enum CondicionCarta {
   /// movida en el turno actual). No se puede mover tras colocarse.
   estatica,
 
-  /// Reservada para futuro uso.
+  /// Carta de acción: se juega desde la mano para lanzar la habilidad
+  /// referenciada por `idHabilidad`. El origen del rango es el cuartel
+  /// general del jugador. Tras usarla se descarta.
   accion,
 }
 
@@ -117,7 +119,25 @@ class CartaModel {
   /// Coste energético. El ganador recibe este valor como Energies.
   final int coste;
 
+  /// Id de la habilidad en `CatalogoHabilidades` (0 = sin habilidad).
+  /// Tanto cartas de acción (CondicionCarta.accion) como cartas normales
+  /// pueden tener idHabilidad > 0.
   final int idHabilidad;
+
+  /// Coste en Energies para activar la habilidad de la carta.
+  ///   - Carta de acción: coste para jugar la carta (se descarta tras uso).
+  ///   - Carta normal con idHabilidad > 0: coste para activar la habilidad
+  ///     desde el tablero (la carta NO se descarta).
+  final int costeHabilidad;
+
+  /// Enfriamiento: turnos que deben pasar entre dos usos consecutivos de
+  /// la habilidad de esta carta en el tablero.
+  ///   - 0  → puede usarla cada turno.
+  ///   - N  → tras un uso en el turno X, no puede volver a usarla hasta
+  ///          el turno X + N + 1.
+  /// No aplica a cartas de acción (se descartan al primer uso).
+  final int enfriamientoHabilidad;
+
   final String imagen;
   final int movimiento;
 
@@ -143,6 +163,8 @@ class CartaModel {
     this.defensa = 0,
     this.coste = 0,
     required this.idHabilidad,
+    this.costeHabilidad = 0,
+    this.enfriamientoHabilidad = 0,
     required this.imagen,
     required this.movimiento,
     this.tipo = 1,
@@ -160,8 +182,16 @@ class CartaModel {
   /// True si la carta es Estática (mov 0, reglas de colocación especiales).
   bool get esEstatica => condicion == CondicionCarta.estatica;
 
-  /// Movimiento efectivo: las estáticas siempre tienen 0.
-  int get movimientoEfectivo => esEstatica ? 0 : movimiento;
+  /// True si la carta es de Acción: se juega desde la mano para lanzar una
+  /// habilidad y se descarta tras su uso.
+  bool get esAccion => condicion == CondicionCarta.accion;
+
+  /// True si la carta tiene una habilidad asignada (id > 0 en el catálogo).
+  bool get tieneHabilidad => idHabilidad > 0;
+
+  /// Movimiento efectivo: las estáticas y las cartas de acción siempre
+  /// tienen 0 (las acciones no se colocan).
+  int get movimientoEfectivo => (esEstatica || esAccion) ? 0 : movimiento;
 
   // ── Parseo robusto ────────────────────────────────────────
   static int _parseInt(dynamic v, {int fallback = 0}) {
@@ -191,6 +221,8 @@ class CartaModel {
       defensa: _parseInt(d['Defensa']),
       coste: _parseInt(d['Coste']),
       idHabilidad: _parseInt(d['IdHabilidad']),
+      costeHabilidad: _parseInt(d['CosteHabilidad']),
+      enfriamientoHabilidad: _parseInt(d['EnfriamientoHabilidad']),
       imagen: d['Imagen']?.toString() ?? '',
       movimiento: _parseInt(d['Movimiento'], fallback: 1),
       tipo: _parseInt(d['Tipo'], fallback: 1),
@@ -210,6 +242,9 @@ class CartaModel {
         defensa: _field(d, 'Defensa', 'defensa'),
         coste: _field(d, 'Coste', 'coste'),
         idHabilidad: _field(d, 'IdHabilidad', 'idHabilidad'),
+        costeHabilidad: _field(d, 'CosteHabilidad', 'costeHabilidad'),
+        enfriamientoHabilidad:
+            _field(d, 'EnfriamientoHabilidad', 'enfriamientoHabilidad'),
         imagen: (d['Imagen'] ?? d['imagen'])?.toString() ?? '',
         movimiento: _field(d, 'Movimiento', 'movimiento', fallback: 1),
         tipo: _field(d, 'Tipo', 'tipo', fallback: 1),
@@ -229,6 +264,8 @@ class CartaModel {
         'Defensa': defensa,
         'Coste': coste,
         'IdHabilidad': idHabilidad,
+        'CosteHabilidad': costeHabilidad,
+        'EnfriamientoHabilidad': enfriamientoHabilidad,
         'Imagen': imagen,
         'Movimiento': movimiento,
         'Tipo': tipo,
@@ -246,6 +283,8 @@ class CartaModel {
     int? defensa,
     int? coste,
     int? idHabilidad,
+    int? costeHabilidad,
+    int? enfriamientoHabilidad,
     String? imagen,
     int? movimiento,
     int? tipo,
@@ -262,6 +301,9 @@ class CartaModel {
         defensa: defensa ?? this.defensa,
         coste: coste ?? this.coste,
         idHabilidad: idHabilidad ?? this.idHabilidad,
+        costeHabilidad: costeHabilidad ?? this.costeHabilidad,
+        enfriamientoHabilidad:
+            enfriamientoHabilidad ?? this.enfriamientoHabilidad,
         imagen: imagen ?? this.imagen,
         movimiento: movimiento ?? this.movimiento,
         tipo: tipo ?? this.tipo,

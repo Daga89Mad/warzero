@@ -40,6 +40,14 @@ class CellSidebar extends StatefulWidget {
 
   static const double width = 220;
 
+  /// Turno actual de la partida (para calcular enfriamiento de habilidades).
+  final int turnoActual;
+
+  /// Callback al pulsar LANZAR HABILIDAD en una carta del tablero.
+  /// Recibe (carta, coord, indiceDentroDeLaCelda).
+  final Future<void> Function(CartaEnCelda carta, String coord, int indice)?
+      onLanzarHabilidad;
+
   /// Defensa base de cualquier cuartel general.
   static const int defensaBase = 80;
 
@@ -58,6 +66,8 @@ class CellSidebar extends StatefulWidget {
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
+    this.turnoActual = 1, // NUEVO
+    this.onLanzarHabilidad, // NUEVO
   });
 
   @override
@@ -151,6 +161,8 @@ class _CellSidebarState extends State<CellSidebar> {
               energiasDisponibles: widget.energiasDisponibles,
               resolveEvolucion: widget.resolveEvolucion,
               onEvolucionar: widget.onEvolucionar,
+              turnoActual: widget.turnoActual, // NUEVO
+              onLanzarHabilidad: widget.onLanzarHabilidad, // NUEVO
             ),
           ),
 
@@ -383,6 +395,11 @@ class _Body extends StatelessWidget {
   final Future<void> Function(String coord, int indice, CartaModel evolucion)?
       onEvolucionar;
 
+  // Habilidad
+  final int turnoActual;
+  final Future<void> Function(CartaEnCelda carta, String coord, int indice)?
+      onLanzarHabilidad;
+
   const _Body({
     required this.celda,
     required this.coord,
@@ -396,6 +413,8 @@ class _Body extends StatelessWidget {
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
+    this.turnoActual = 1,
+    this.onLanzarHabilidad,
   });
 
   @override
@@ -508,6 +527,8 @@ class _Body extends StatelessWidget {
         energiasDisponibles: energiasDisponibles,
         resolveEvolucion: resolveEvolucion,
         onEvolucionar: onEvolucionar,
+        turnoActual: turnoActual,
+        onLanzarHabilidad: onLanzarHabilidad,
       ),
     );
   }
@@ -524,7 +545,9 @@ class _CardTile extends StatelessWidget {
   final bool isChecked;
   final VoidCallback? onToggle;
   final Map<String, Color> playerColors;
-
+  final int turnoActual;
+  final Future<void> Function(CartaEnCelda carta, String coord, int indice)?
+      onLanzarHabilidad;
   // Evolución
   final int? energiasDisponibles;
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
@@ -542,6 +565,8 @@ class _CardTile extends StatelessWidget {
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
+    this.turnoActual = 1,
+    this.onLanzarHabilidad,
   });
 
   String _ownerLabel(String zone) {
@@ -559,21 +584,43 @@ class _CardTile extends StatelessWidget {
   }
 
   void _abrirDetalle(BuildContext ctx) {
-    // Solo evolucionar cartas propias con evolución configurada
     final puedeEvolucionar = isLocal &&
         onEvolucionar != null &&
         coord != null &&
         entry.carta.puedeEvolucionar;
 
+    // ── Habilidad: visible solo si la carta es propia, tiene habilidad
+    //     en el catálogo y se ha pasado un callback. El cooldown se
+    //     calcula desde ultimoUsoHabilidad y enfriamientoHabilidad.
+    final puedeLanzar = isLocal &&
+        coord != null &&
+        onLanzarHabilidad != null &&
+        entry.carta.tieneHabilidad;
+
+    final enfriamientoRestante =
+        puedeLanzar ? _calcularEnfriamientoRestante(entry, turnoActual) : 0;
+
     showCardDetail(
       ctx,
       entry.carta,
       resolveEvolucion: resolveEvolucion,
-      energiasDisponibles: puedeEvolucionar ? energiasDisponibles : null,
+      energiasDisponibles:
+          (puedeEvolucionar || puedeLanzar) ? energiasDisponibles : null,
       onEvolucionar: puedeEvolucionar
           ? (evolucion) => onEvolucionar!(coord!, indice, evolucion)
           : null,
+      onLanzarHabilidad:
+          puedeLanzar ? () => onLanzarHabilidad!(entry, coord!, indice) : null,
+      enfriamientoRestante: enfriamientoRestante,
     );
+  }
+
+  static int _calcularEnfriamientoRestante(
+      CartaEnCelda entry, int turnoActual) {
+    if (entry.ultimoUsoHabilidad == null) return 0;
+    final transcurridos = turnoActual - entry.ultimoUsoHabilidad!;
+    final restante = entry.carta.enfriamientoHabilidad - transcurridos + 1;
+    return restante > 0 ? restante : 0;
   }
 
   @override

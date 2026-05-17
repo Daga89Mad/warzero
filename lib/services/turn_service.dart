@@ -1,9 +1,13 @@
 // lib/services/turn_service.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../models/accion_pendiente.dart';
+import '../models/board_state.dart';
+import '../models/efecto_estado.dart';
 import '../models/lobby_model.dart';
 import 'combate_service.dart';
 import 'farmeo_service.dart';
+import 'habilidad_service.dart';
 
 // ── Movimiento serializado ────────────────────────────────────
 class MovimientoTurno {
@@ -12,11 +16,16 @@ class MovimientoTurno {
   final Map<String, List<Map<String, dynamic>>> celdas;
   final DateTime timestamp;
 
+  /// Acciones declaradas por el jugador durante este turno (carta de acción
+  /// o habilidad de carta). Se resuelven al cerrar el turno.
+  final List<AccionPendiente> acciones;
+
   const MovimientoTurno({
     required this.uid,
     required this.turno,
     required this.celdas,
     required this.timestamp,
+    this.acciones = const [],
   });
 
   Map<String, dynamic> toMap() => {
@@ -24,6 +33,8 @@ class MovimientoTurno {
         'turno': turno,
         'celdas': celdas,
         'timestamp': Timestamp.fromDate(timestamp),
+        if (acciones.isNotEmpty)
+          'acciones': acciones.map((a) => a.toMap()).toList(),
       };
 
   factory MovimientoTurno.fromMap(Map<String, dynamic> d) => MovimientoTurno(
@@ -40,6 +51,10 @@ class MovimientoTurno {
         timestamp: d['timestamp'] is Timestamp
             ? (d['timestamp'] as Timestamp).toDate()
             : DateTime.now(),
+        acciones: ((d['acciones'] as List?) ?? [])
+            .map((m) =>
+                AccionPendiente.fromMap(Map<String, dynamic>.from(m as Map)))
+            .toList(),
       );
 }
 
@@ -57,11 +72,14 @@ class TurnService {
   }
 
   // ── Cerrar turno ──────────────────────────────────────────
+  /// Sube los movimientos y las acciones declaradas por el jugador, y marca
+  /// que ha cerrado el turno.
   Future<void> cerrarTurno({
     required String lobbyId,
     required String uid,
     required int turno,
     required Map<String, List<Map<String, dynamic>>> celdas,
+    List<AccionPendiente> acciones = const [],
   }) async {
     final lobbyRef = _db.collection('Partidas').doc(lobbyId);
 
@@ -70,6 +88,7 @@ class TurnService {
       turno: turno,
       celdas: celdas,
       timestamp: DateTime.now().toUtc(),
+      acciones: acciones,
     ).toMap();
 
     Exception? lastError;
@@ -110,13 +129,22 @@ class TurnService {
     return result;
   }
 
-  // ── Resolver combates, farmeo y avanzar turno ─────────────
-  /// Resuelve combates + farmeo de posición + rayo, persiste en Firestore
-  /// y retorna la resolución de combates.
+  // ── Resolver acciones + combates + farmeo y avanzar turno ─
+  /// Resuelve, en este orden:
+  ///   1. Acciones declaradas (disparo / teletransporte / veneno) sobre el
+  ///      tablero ya fusionado.
+  ///   2. Combates con defensa reducida por venenos activos en cartas.
+  ///   3. Farmeo de posición + rayo, sobre el tablero post-combates.
+  ///   4. `tickEfectos` para decrementar duración de todos los efectos
+  ///      persistentes (celdas y cartas).
   ///
-  /// [obeliscosPorJugador]  uid → coord del cuartel de ese jugador.
-  ///                         Si se pasa, se aplica la defensa de cuartel (+80)
-  ///                         y se detectan conquistas que eliminan jugadores.
+  /// Persiste en Firestore el tablero resultante, las stats acumuladas y el
+  /// estado actualizado de `efectosCelda`.
+  ///
+  /// [obeliscosPorJugador]   uid → coord del cuartel de ese jugador.
+  /// [acciones]              Lista PLANA de acciones pendientes de todos los
+  ///                          jugadores (orden de declaración no importa).
+  /// [efectosCeldaActual]    Estado de efectos en celdas leído del lobby.
   Future<ResolucionCombates> resolverCombatesYAvanzar({
     required String lobbyId,
     required int turnoActual,
@@ -125,25 +153,45 @@ class TurnService {
     List<Map<String, dynamic>>? movimientosLog,
     // ── Cuarteles ────────────────────────────────────────────
     Map<String, String>? obeliscosPorJugador,
+    // ── Acciones / efectos persistentes ─────────────────────
+    List<AccionPendiente> acciones = const [],
+    Map<String, List<EfectoActivo>> efectosCeldaActual = const {},
     // ── Farmeo ────────────────────────────────────────────────
     Map<String, List<String>>? continentes,
     List<String>? islaCentral,
     Map<String, dynamic>? rayoActual,
     List<String>? todasLasCeldas,
   }) async {
-    // 1. Resolver combates (puro CPU, sin red)
+    // 1. Aplicar acciones (tele → disparo → veneno) y propagar venenos.
+    final accResultado = HabilidadService.aplicarAcciones(
+      tablero: tablero,
+      acciones: acciones,
+      efectosCelda: efectosCeldaActual,
+      obeliscosPorJugador: obeliscosPorJugador ?? const {},
+    );
+
+    // 2. Resolver combates sobre el tablero ya modificado.
     final resolucion = CombateService.resolverCombates(
-      tablero,
+      accResultado.tableroResultante,
       obeliscosPorJugador: obeliscosPorJugador,
     );
 
-    // 2. Calcular farmeo (sobre el tablero RESULTANTE tras combates)
+    // 3. Tick de efectos sobre el tablero post-combate (decrementa duraciones).
+    final tick = HabilidadService.tickEfectos(
+      tablero: resolucion.tableroResultante,
+      efectosCelda: accResultado.efectosCeldaResultante,
+    );
+
+    final tableroFinal = tick.tableroResultante;
+    final efectosCeldaFinal = tick.efectosCeldaResultante;
+
+    // 4. Calcular farmeo (sobre el tablero FINAL tras combates y tick).
     FarmeoResultado? farmeoResultado;
     final farmeoActivo =
         continentes != null && islaCentral != null && todasLasCeldas != null;
     if (farmeoActivo) {
       farmeoResultado = FarmeoService.calcularFarmeo(
-        tablero: resolucion.tableroResultante,
+        tablero: tableroFinal,
         obeliscosPorJugador: obeliscosPorJugador ?? {},
         continentes: continentes!,
         islaCentral: islaCentral!,
@@ -152,7 +200,7 @@ class TurnService {
       );
     }
 
-    // 3. Acumular stats (combate + farmeo + conquistas)
+    // 5. Acumular stats (combate + farmeo + conquistas)
     final statsActualizadas = <String, Map<String, dynamic>>{};
     for (final entry in statsActuales.entries) {
       statsActualizadas[entry.key] = Map<String, dynamic>.from(entry.value);
@@ -177,7 +225,7 @@ class TurnService {
           ((statsActualizadas[uid]!['energies'] as int?) ?? 0) + energiesF;
     });
 
-    // 4. Construir log de combates y entrada de historial
+    // 6. Construir log de combates y entrada de historial
     final combateLog = resolucion.resultados.map((r) => r.toLogMap()).toList();
     final conquistasLog =
         resolucion.obeliscosConquistados.map((c) => c.toLogMap()).toList();
@@ -187,27 +235,33 @@ class TurnService {
       'conquistasLog': conquistasLog,
       'movimientosLog': movimientosLog ?? [],
       'farmeoLog': farmeoResultado?.farmeoLog ?? [],
+      'accionesLog': accResultado.log,
       'rayoCoord': farmeoResultado?.nuevoRayo?['coord'],
       'rayoTurnosRestantes': farmeoResultado?.nuevoRayo?['turnosRestantes'],
     };
 
-    // 5. Preparar lista de jugadores recién eliminados
+    // 7. Preparar lista de jugadores recién eliminados
     final nuevosEliminados =
         resolucion.obeliscosConquistados.map((c) => c.perdedorUid).toList();
 
-    // 6. Transacción: solo escribe si el turno no ha avanzado ya
+    // 8. Transacción: solo escribe si el turno no ha avanzado ya
     final lobbyRef = _db.collection('Partidas').doc(lobbyId);
     final updateData = <String, dynamic>{
       'turnoActual': turnoActual + 1,
       'cerradoPor': [],
       'movimientosTurno': {},
-      'tablero': resolucion.tableroResultante,
+      'tablero': tableroFinal,
       'statsPartida': statsActualizadas,
       'ultimoCombateLog': combateLog,
       'ultimoFarmeoLog': farmeoResultado?.farmeoLog ?? [],
+      'ultimoAccionesLog': accResultado.log,
       if (movimientosLog != null) 'ultimosMovimientos': movimientosLog,
       if (farmeoActivo)
         'rayo': farmeoResultado?.nuevoRayo ?? FieldValue.delete(),
+      // Persistir efectos de celda (o borrar el campo si queda vacío).
+      'efectosCelda': efectosCeldaFinal.isEmpty
+          ? FieldValue.delete()
+          : BoardState.efectosCeldaToFirestore(efectosCeldaFinal),
     };
 
     await _db.runTransaction((tx) async {
@@ -280,6 +334,31 @@ class TurnService {
           .toList();
       return MapEntry(coord, cartas);
     });
+  }
+
+  /// Parsea el campo `efectosCelda` del doc del lobby.
+  static Map<String, List<EfectoActivo>> parseEfectosCelda(
+          Map<String, dynamic> data) =>
+      BoardState.efectosCeldaFromFirestore(
+        data['efectosCelda'] as Map<String, dynamic>?,
+      );
+
+  /// Parsea el campo `acciones` flat de todos los movimientos de un turno.
+  /// Útil para reconstruir la lista de acciones a resolver.
+  static List<AccionPendiente> parseAccionesDeMovimientos(
+    Map<String, dynamic> data,
+    int turno,
+  ) {
+    final rawMov = data['movimientosTurno'] as Map<String, dynamic>? ?? {};
+    final result = <AccionPendiente>[];
+    for (final entry in rawMov.entries) {
+      try {
+        final mov = MovimientoTurno.fromMap(
+            Map<String, dynamic>.from(entry.value as Map));
+        if (mov.turno == turno) result.addAll(mov.acciones);
+      } catch (_) {}
+    }
+    return result;
   }
 
   // ── Cierre diario ─────────────────────────────────────────

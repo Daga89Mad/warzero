@@ -19,10 +19,49 @@
 ///   Si no hay cartas defensoras pero sí atacantes, se compara la fuerza
 ///   atacante contra 80 (defensa base del cuartel vacío).
 ///
+/// EFECTOS PERSISTENTES (VENENO):
+///   Cada carta puede llevar en su Map un campo `Efectos: [...]` con efectos
+///   activos. La defensa efectiva de una carta es:
+///       defensaEfectiva = max(0, Defensa - Σ veneno.magnitud)
+///   considerando solo efectos con turnosRestantes > 0. La defensa que se
+///   usa en `totalDefensa` (y en la fórmula del combate) es la efectiva.
+///
 /// RECOMPENSAS NORMALES (por grupo derrotado):
 ///   • Energies += Σcoste de las cartas destruidas del grupo derrotado.
 ///   • PC       += 3 × número de cartas destruidas del grupo derrotado.
 /// ─────────────────────────────────────────────────────────────────────────
+
+/// Calcula la reducción de defensa que sufre una carta por sus efectos
+/// activos (suma de magnitudes de los venenos con turnosRestantes > 0).
+///
+/// Se mantiene como función top-level y no depende del servicio de
+/// habilidades para evitar acoplamiento circular: `combate_service` no
+/// importa `habilidad_service`.
+int _defensaReducidaPorEfectos(Map<String, dynamic> carta) {
+  final raw = carta['Efectos'] as List?;
+  if (raw == null) return 0;
+  int total = 0;
+  for (final m in raw) {
+    final mm = Map<String, dynamic>.from(m as Map);
+    final turnos = (mm['turnosRestantes'] as num?)?.toInt() ?? 0;
+    if (turnos <= 0) continue;
+    final tipo = mm['tipo'] as String?;
+    // Solo el veneno reduce defensa por ahora. Si en el futuro hay más
+    // efectos que la reduzcan, basta con añadirlos aquí.
+    if (tipo == 'veneno') {
+      total += (mm['magnitud'] as num?)?.toInt() ?? 0;
+    }
+  }
+  return total;
+}
+
+/// Defensa efectiva de una sola carta (no negativa).
+int _defensaEfectivaDeCarta(Map<String, dynamic> c) {
+  final base = ((c['Defensa'] ?? c['defensa'] as num? ?? 0) as num).toInt();
+  final reducida = _defensaReducidaPorEfectos(c);
+  final efectiva = base - reducida;
+  return efectiva > 0 ? efectiva : 0;
+}
 
 /// Resultado de la conquista de un cuartel general.
 class ObeliscoConquista {
@@ -63,13 +102,28 @@ class _GrupoJugador {
   int get totalFuerza => cartas.fold(0,
       (s, c) => s + ((c['Fuerza'] ?? c['fuerza'] as num? ?? 0) as num).toInt());
 
-  int get totalDefensa =>
-      cartas.fold(
-          0,
-          (s, c) =>
-              s +
-              ((c['Defensa'] ?? c['defensa'] as num? ?? 0) as num).toInt()) +
-      defensaBonus;
+  /// Defensa total efectiva: suma defensa efectiva por carta (base − venenos)
+  /// y añade el bonus de obelisco si aplica.
+  int get totalDefensa {
+    int suma = 0;
+    for (final c in cartas) {
+      suma += _defensaEfectivaDeCarta(c);
+    }
+    return suma + defensaBonus;
+  }
+
+  /// Defensa total base, sin restar efectos. Útil para logs y depuración.
+  int get totalDefensaBase {
+    int suma = 0;
+    for (final c in cartas) {
+      suma += ((c['Defensa'] ?? c['defensa'] as num? ?? 0) as num).toInt();
+    }
+    return suma + defensaBonus;
+  }
+
+  /// Suma de la reducción por venenos en este grupo.
+  int get totalReduccionVeneno =>
+      cartas.fold(0, (s, c) => s + _defensaReducidaPorEfectos(c));
 
   int get totalCoste => cartas.fold(0,
       (s, c) => s + ((c['Coste'] ?? c['coste'] as num? ?? 0) as num).toInt());
@@ -154,6 +208,9 @@ class CombateService {
   /// junto con las recompensas por jugador.
   ///
   /// [tablero]             coord → lista de cartas (PascalCase o snake_case).
+  ///                       Cada carta puede llevar un campo 'Efectos' (lista
+  ///                       de efectos activos) que se consulta para calcular
+  ///                       defensa efectiva por veneno.
   /// [obeliscosPorJugador] uid → coord del cuartel de ese jugador.
   ///                        Si se pasa, los combates en cuarteles aplican
   ///                        la defensa extra de [defensaObelisco].
@@ -283,17 +340,24 @@ class CombateService {
           'ownerZone': e.value.ownerZone,
           'totalFuerza': e.value.totalFuerza,
           'totalDefensa': e.value.totalDefensa,
+          'totalDefensaBase': e.value.totalDefensaBase,
+          'reduccionVeneno': e.value.totalReduccionVeneno,
           'defensaBonus': e.value.defensaBonus,
           'poderNeto': poderNeto[e.key],
           'numCartas': e.value.numCartas,
-          'cartas': e.value.cartas
-              .map((c) => {
-                    'nombre': c['Nombre'] ?? c['nombre'] ?? 'Carta',
-                    'fuerza': (c['Fuerza'] ?? c['fuerza'] ?? 0),
-                    'defensa': (c['Defensa'] ?? c['defensa'] ?? 0),
-                    'coste': (c['Coste'] ?? c['coste'] ?? 0),
-                  })
-              .toList(),
+          'cartas': e.value.cartas.map((c) {
+            final base =
+                ((c['Defensa'] ?? c['defensa'] as num? ?? 0) as num).toInt();
+            final reducida = _defensaReducidaPorEfectos(c);
+            return {
+              'nombre': c['Nombre'] ?? c['nombre'] ?? 'Carta',
+              'fuerza': (c['Fuerza'] ?? c['fuerza'] ?? 0),
+              'defensa': base,
+              'defensaEfectiva': base - reducida > 0 ? base - reducida : 0,
+              'reduccionVeneno': reducida,
+              'coste': (c['Coste'] ?? c['coste'] ?? 0),
+            };
+          }).toList(),
         };
       }).toList();
 

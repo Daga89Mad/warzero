@@ -21,6 +21,11 @@ import '../widgets/cell_sidebar.dart';
 import '../widgets/cell_widget.dart' show kObeliscoCoords;
 import '../widgets/hand_widget.dart';
 import '../widgets/player_hud.dart';
+import '../models/accion_pendiente.dart';
+import '../models/efecto_estado.dart';
+import '../models/habilidad_model.dart';
+import '../services/accion_controller.dart';
+import '../services/habilidad_service.dart';
 
 class GameScreen extends StatefulWidget {
   final String localPlayerUid;
@@ -115,12 +120,28 @@ class _GameScreenState extends State<GameScreen> {
   List<int> _moveCardIndices = [];
   Set<String> _movableCoords = {};
   bool get _inMoveMode => _moveFromCoord != null;
+// ── Modo acción / habilidad ─────────────────────────────────
+  late AccionController _accionController;
 
+  /// Acciones declaradas en este turno (se envían al cerrar turno).
+  final List<AccionPendiente> _accionesPendientes = [];
+
+  /// Efectos de celda activos (leídos de Firestore y mantenidos en memoria).
+  Map<String, List<EfectoActivo>> _efectosCelda = {};
+
+  bool get _inActionMode => _accionController.activo;
+
+  /// Coords resaltables en el tablero: depende del modo activo.
+  ///   - Modo movimiento → _movableCoords
+  ///   - Modo acción     → objetivos válidos del controlador
+  Set<String> get _highlightCoords =>
+      _inActionMode ? _accionController.objetivosValidos : _movableCoords;
   // ── Snapshot inicial del turno ─────────────────────────────
   BoardState _boardStateInicial = const BoardState();
   List<CartaModel> _handInicial = [];
   final Set<String> _cartasMovidasEsteTurno = {};
-  bool get _hayCambiosPendientes => _cartasMovidasEsteTurno.isNotEmpty;
+  bool get _hayCambiosPendientes =>
+      _cartasMovidasEsteTurno.isNotEmpty || _accionesPendientes.isNotEmpty;
 
   // ── Energía snapshot al inicio de cada turno ──────────────
   /// Energías del jugador al comenzar el turno (para restaurar en undo).
@@ -140,6 +161,7 @@ class _GameScreenState extends State<GameScreen> {
   void initState() {
     super.initState();
     _config = GameConfig.forPlayerCount(widget.playerCount);
+    _accionController = AccionController(config: _config);
     _setupPlayers();
     _loadGame();
   }
@@ -874,6 +896,11 @@ class _GameScreenState extends State<GameScreen> {
   // ─────────────────────────────────────────────────────────
 
   void _onCellTap(String coord, int ri, int ci) {
+    // ── Modo acción: selección de objetivos ────────────────
+    if (_inActionMode) {
+      _handleCellTapEnAccion(coord);
+      return;
+    }
     if (_selectedHandIndex != null) {
       _tryPlaceFromHand(coord, ri, ci);
       return;
@@ -1062,9 +1089,261 @@ class _GameScreenState extends State<GameScreen> {
       _movableCoords = {};
     });
   }
+// ─────────────────────────────────────────────────────────
+  // FLUJO DE ACCIONES / HABILIDADES
+  // ─────────────────────────────────────────────────────────
+
+  /// Lanza una carta de acción desde la mano. El origen es el cuartel local.
+  void _iniciarAccionDesdeMano(int handIndex) {
+    if (_yoCerreElTurno || _estoyEliminado) {
+      _toast('No puedes lanzar acciones ahora.', error: true);
+      return;
+    }
+    if (handIndex < 0 || handIndex >= _hand.length) return;
+    final carta = _hand[handIndex];
+    if (!carta.tieneHabilidad) {
+      _toast('Esta carta no tiene habilidad asignada.', error: true);
+      return;
+    }
+    if (_obeliscoLocal == null || _obeliscoLocal!.isEmpty) {
+      _toast('Necesitas un cuartel asignado.', error: true);
+      return;
+    }
+    if (_localPlayer.puntos < carta.costeHabilidad) {
+      _toast(
+          'Energías insuficientes (${_localPlayer.puntos} / ${carta.costeHabilidad}).',
+          error: true);
+      return;
+    }
+
+    setState(() {
+      _selectedHandIndex = null;
+      _cancelMoveMode();
+      _sidebarOpen = false;
+      _accionController.iniciarDesdeCartaDeMano(
+        carta: carta,
+        indiceMano: handIndex,
+        obeliscoLocal: _obeliscoLocal!,
+        obeliscosPorJugador: _obeliscosPorJugador,
+      );
+    });
+    _toast(
+        'Selecciona ${_accionController.habilidad!.numObjetivos == 1 ? 'una celda' : '${_accionController.habilidad!.numObjetivos} celdas'} objetivo.');
+  }
+
+  /// Lanza la habilidad de una carta del tablero (carta normal con
+  /// idHabilidad > 0). Se llama desde el botón "LANZAR HABILIDAD" del
+  /// overlay de detalle.
+  Future<void> _iniciarAccionDesdeTablero(
+    CartaEnCelda carta,
+    String coord,
+    int indiceCelda,
+  ) async {
+    if (_yoCerreElTurno || _estoyEliminado) {
+      _toast('No puedes lanzar habilidades ahora.', error: true);
+      return;
+    }
+    if (!carta.habilidadDisponible(_boardState.turnoActual)) {
+      _toast('La habilidad está en enfriamiento.', error: true);
+      return;
+    }
+    if (_localPlayer.puntos < carta.carta.costeHabilidad) {
+      _toast(
+          'Energías insuficientes (${_localPlayer.puntos} / ${carta.carta.costeHabilidad}).',
+          error: true);
+      return;
+    }
+
+    setState(() {
+      _selectedHandIndex = null;
+      _cancelMoveMode();
+      _sidebarOpen = false;
+      _accionController.iniciarDesdeCartaDeTablero(
+        cartaEnCelda: carta,
+        coord: coord,
+        indiceCelda: indiceCelda,
+        obeliscosPorJugador: _obeliscosPorJugador,
+      );
+    });
+    _toast(
+        'Selecciona ${_accionController.habilidad!.numObjetivos == 1 ? 'una celda' : '${_accionController.habilidad!.numObjetivos} celdas'} objetivo.');
+  }
+
+  /// Maneja un tap en el tablero cuando estamos en modo acción.
+  void _handleCellTapEnAccion(String coord) {
+    final controller = _accionController;
+    if (controller.fase == FaseAccion.seleccionandoObjetivos) {
+      final aceptado = controller.seleccionarObjetivo(coord);
+      if (!aceptado) {
+        _toast('Esa celda no es un objetivo válido.', error: true);
+        return;
+      }
+      setState(() {}); // refresca highlight
+
+      // Si requiere carta propia → mostrar modal
+      if (controller.fase == FaseAccion.seleccionandoCartaTeleport) {
+        _showCartaPropiaModal();
+        return;
+      }
+
+      if (controller.lista) {
+        _completarAccion();
+      }
+    }
+  }
+
+  /// Modal para elegir qué carta propia teletransportar.
+  Future<void> _showCartaPropiaModal() async {
+    // Lista de candidatos: todas las cartas propias del jugador local
+    // en el tablero. Se identifican por (coord, indice).
+    final candidatos = <_CartaPropiaRef>[];
+    _boardState.celdas.forEach((coord, celda) {
+      for (int i = 0; i < celda.cartas.length; i++) {
+        final c = celda.cartas[i];
+        if (c.ownerUid == _localPlayer.datos.uid) {
+          candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
+        }
+      }
+    });
+
+    if (candidatos.isEmpty) {
+      _toast('No tienes cartas en el tablero para teletransportar.',
+          error: true);
+      _cancelarAccion();
+      return;
+    }
+
+    final ref = await showDialog<_CartaPropiaRef>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1525),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: Color(0x4040C0FF), width: 1),
+        ),
+        title: const Text('ELIGE UNA CARTA',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 12,
+                color: Color(0xFF40C0FF),
+                letterSpacing: 1.5)),
+        content: SizedBox(
+          width: 280,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: candidatos.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            itemBuilder: (_, i) {
+              final r = candidatos[i];
+              return InkWell(
+                onTap: () => Navigator.of(ctx).pop(r),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF06101C),
+                    borderRadius: BorderRadius.circular(4),
+                    border:
+                        Border.all(color: const Color(0x4040C0FF), width: 0.8),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(r.coord,
+                          style: const TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 12,
+                              color: Color(0xFFC8A860),
+                              fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(r.carta.carta.nombre,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontFamily: 'Cinzel',
+                                fontSize: 10,
+                                color: Color(0xFFB0A090))),
+                      ),
+                      Text('${r.carta.carta.fuerza}⚔',
+                          style: const TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 10,
+                              color: Color(0xFFC04040))),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('CANCELAR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    color: Color(0xFF506070),
+                    fontSize: 10)),
+          ),
+        ],
+      ),
+    );
+
+    if (ref == null) {
+      _cancelarAccion();
+      return;
+    }
+    _accionController.setCartaTeleport(ref.coord, ref.indice);
+    _completarAccion();
+  }
+
+  /// Construye la AccionPendiente final, descuenta energías y la añade a
+  /// la lista pendiente. Si es carta de acción, se descarta de la mano.
+  void _completarAccion() {
+    final controller = _accionController;
+    final accion = controller.construir(
+      uid: _localPlayer.datos.uid,
+      zona: _localPlayer.zona,
+      turno: _boardState.turnoActual,
+    );
+    if (accion == null) return;
+
+    setState(() {
+      _accionesPendientes.add(accion);
+      _localPlayer.puntos -= accion.costePagado;
+
+      // Si es carta de acción: descartar de la mano.
+      if (controller.esCartaDeAccion && controller.indiceMano != null) {
+        final idx = controller.indiceMano!;
+        if (idx >= 0 && idx < _hand.length) {
+          _hand = List.from(_hand)..removeAt(idx);
+        }
+      }
+      // Si es habilidad de carta en tablero: marcar ultimoUsoHabilidad.
+      if (controller.esHabilidadDeTablero &&
+          controller.cartaTableroCoord != null &&
+          controller.cartaTableroIndice != null) {
+        final coord = controller.cartaTableroCoord!;
+        final indice = controller.cartaTableroIndice!;
+        final celda = _boardState.getCelda(coord);
+        if (indice >= 0 && indice < celda.cartas.length) {
+          final actualizada = celda.cartas[indice]
+              .copyWith(ultimoUsoHabilidad: _boardState.turnoActual);
+          final nuevasCartas = [...celda.cartas];
+          nuevasCartas[indice] = actualizada;
+          _boardState =
+              _boardState.setCelda(coord, celda.withCartas(nuevasCartas));
+        }
+      }
+      _accionController.cancelar();
+    });
+    _toast('Acción declarada. Se resolverá al cerrar el turno.');
+  }
+
+  void _cancelarAccion() {
+    setState(() => _accionController.cancelar());
+  }
 
   void _undoCambios() {
-    final energiaARestaurar = _energiaGastadaDespliegue;
     setState(() {
       _boardState = _boardStateInicial;
       _hand = List.from(_handInicial);
@@ -1075,27 +1354,26 @@ class _GameScreenState extends State<GameScreen> {
       _selectedHandIndex = null;
       _sidebarOpen = false;
       _sidebarCoord = null;
-      // ── Restaurar energía al snapshot de inicio de turno ──
-      _localPlayer.puntos = _puntosInicial;
-      _energiaGastadaDespliegue = 0;
+      _accionController.cancelar();
+      _accionesPendientes.clear();
+      // Las energías se restauran cuando llega el nuevo estado por el stream.
     });
-
-    // Devolver la energía gastada en despliegues en Firestore
-    if (widget.lobbyId != null && energiaARestaurar > 0) {
-      FirebaseFirestore.instance
-          .collection('Partidas')
-          .doc(widget.lobbyId)
-          .update({
-        'statsPartida.${widget.localPlayerUid}.energies':
-            FieldValue.increment(energiaARestaurar),
-      }).catchError((_) {});
-    }
-
     _toast('Cambios revertidos al estado inicial del turno.');
   }
 
   void _onHandCardTap(int index) {
+    if (index < 0 || index >= _hand.length) return;
+    final carta = _hand[index];
+
+    // ── Carta de acción: entra en modo selección de objetivos ──
+    if (carta.esAccion) {
+      _iniciarAccionDesdeMano(index);
+      return;
+    }
+
+    // Comportamiento clásico para cartas no-acción
     setState(() {
+      _accionController.cancelar();
       _selectedHandIndex = _selectedHandIndex == index ? null : index;
       _cancelMoveMode();
       if (_selectedHandIndex != null) _sidebarOpen = false;
@@ -1154,6 +1432,7 @@ class _GameScreenState extends State<GameScreen> {
               uid: widget.localPlayerUid,
               turno: _boardState.turnoActual,
               celdas: _serializarTablero(),
+              acciones: _accionesPendientes,
             )
             .timeout(const Duration(seconds: 30));
       } catch (e) {
@@ -1168,6 +1447,7 @@ class _GameScreenState extends State<GameScreen> {
                   uid: widget.localPlayerUid,
                   turno: _boardState.turnoActual,
                   celdas: _serializarTablero(),
+                  acciones: _accionesPendientes,
                 )
                 .timeout(const Duration(seconds: 30));
             reintentado = true;
@@ -1233,29 +1513,53 @@ class _GameScreenState extends State<GameScreen> {
         });
       }
 
-      // 3. Resolver combates (con info de cuarteles)
+      // 3. Recopilar acciones de todos los jugadores y efectos previos
+      final acciones = <AccionPendiente>[];
+      for (final mov in movimientos) {
+        acciones.addAll(mov.acciones);
+      }
+      final efectosCeldaPrevios = lobbyDoc.exists
+          ? TurnService.parseEfectosCelda(
+              lobbyDoc.data() as Map<String, dynamic>)
+          : <String, List<EfectoActivo>>{};
+
+      // 4. Aplicar acciones (tele → disparo → veneno) ANTES de combates
+      final accResult = HabilidadService.aplicarAcciones(
+        tablero: tableroFusionado,
+        acciones: acciones,
+        efectosCelda: efectosCeldaPrevios,
+        obeliscosPorJugador:
+            _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : const {},
+      );
+
+      // 5. Resolver combates sobre el tablero tras acciones
       final resolucion = CombateService.resolverCombates(
-        tableroFusionado,
+        accResult.tableroResultante,
         obeliscosPorJugador:
             _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null,
       );
 
-      // 4. Reconstruir BoardState limpio
+      // 6. Tick de efectos sobre el tablero post-combate
+      final tick = HabilidadService.tickEfectos(
+        tablero: resolucion.tableroResultante,
+        efectosCelda: accResult.efectosCeldaResultante,
+      );
+      final tableroFinal = tick.tableroResultante;
+      final efectosCeldaFinal = tick.efectosCeldaResultante;
+
+      // 7. Reconstruir BoardState limpio
       var newState = const BoardState();
-      resolucion.tableroResultante.forEach((coord, cartas) {
+      tableroFinal.forEach((coord, cartas) {
         for (final c in cartas) {
           newState = newState.placeCarta(
             coord,
-            CartaEnCelda(
-              carta: _cartaFromMap(c),
-              ownerUid: c['ownerUid'] as String? ?? '',
-              ownerZone: c['ownerZone'] as String? ?? '',
-            ),
+            CartaEnCelda.fromMap(c),
           );
         }
       });
+      newState = newState.copyWith(efectosCelda: efectosCeldaFinal);
 
-      // 5. Extraer stats actuales
+      // 8. Extraer stats actuales
       final statsActuales = <String, Map<String, int>>{};
       if (lobbyDoc.exists) {
         final rawS =
@@ -1271,7 +1575,7 @@ class _GameScreenState extends State<GameScreen> {
         });
       }
 
-      // 6. Log de movimientos
+      // 9. Log de movimientos
       final movimientosLog = movimientos.map((m) {
         String zona = '';
         for (final cs in m.celdas.values) {
@@ -1283,7 +1587,7 @@ class _GameScreenState extends State<GameScreen> {
         return {'uid': m.uid, 'zona': zona, 'celdas': m.celdas};
       }).toList();
 
-      // 7. Persistir en Firestore
+      // 10. Persistir en Firestore (incluyendo efectosCelda)
       await TurnService()
           .resolverCombatesYAvanzar(
             lobbyId: widget.lobbyId!,
@@ -1293,39 +1597,40 @@ class _GameScreenState extends State<GameScreen> {
             movimientosLog: movimientosLog,
             obeliscosPorJugador:
                 _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null,
+            acciones: acciones,
+            efectosCeldaActual: efectosCeldaPrevios,
           )
           .timeout(const Duration(seconds: 20));
       if (!mounted) return;
 
-      // 8. Notificar conquistas al jugador local
+      // 11. Notificar conquistas
       for (final conquista in resolucion.obeliscosConquistados) {
         if (conquista.conquistadorUid == widget.localPlayerUid) {
           _toast(
               '🏰 ¡Cuartel conquistado en ${conquista.coord}! +${CombateService.energiesConquista}E +${CombateService.pcConquista}PC');
         } else if (conquista.perdedorUid == widget.localPlayerUid) {
-          // El stream notificará la eliminación; solo log aquí
           _toast('💀 Tu cuartel en ${conquista.coord} fue conquistado',
               error: true);
         }
       }
 
-      // 9. Actualizar estado local (el stream aplica el estado definitivo)
+      // 12. Actualizar estado local (el stream aplica el estado definitivo)
       final ptsGanados =
           resolucion.energiesPorJugador[widget.localPlayerUid] ?? 0;
       setState(() {
         _boardState = newState.copyWith(turnoActual: turnoAResolver + 1);
+        _efectosCelda = efectosCeldaFinal;
         _cerradoPor = [];
         _resolviendo = false;
         _isSendingTurn = false;
         _boardStateInicial = _boardState;
         _handInicial = List.from(_hand);
         _cartasMovidasEsteTurno.clear();
-        _energiaGastadaDespliegue = 0;
+        _accionesPendientes.clear();
+        _accionController.cancelar();
         if (ptsGanados > 0) _localPlayer.puntos += ptsGanados;
-        _puntosInicial = _localPlayer.puntos;
       });
 
-      // La mano y mazo se actualizarán cuando llegue el stream del nuevo turno
       if (_modoTurno == ModoTurno.rapida && mounted) _startTimer();
     } catch (e) {
       if (mounted) {
@@ -1424,19 +1729,17 @@ class _GameScreenState extends State<GameScreen> {
     if (lobby.turnoActual > _turnoConfirmadoStream &&
         data.containsKey('tablero')) {
       final tableroRaw = TurnService.parseTablero(data);
+      final efectosCeldaStream = TurnService.parseEfectosCelda(data);
       var restoredState = const BoardState();
       tableroRaw.forEach((coord, cartas) {
         for (final c in cartas) {
           restoredState = restoredState.placeCarta(
             coord,
-            CartaEnCelda(
-              carta: _cartaFromMap(c),
-              ownerUid: c['ownerUid'] as String? ?? '',
-              ownerZone: c['ownerZone'] as String? ?? '',
-            ),
+            CartaEnCelda.fromMap(c),
           );
         }
       });
+      restoredState = restoredState.copyWith(efectosCelda: efectosCeldaStream);
       _turnoConfirmadoStream = lobby.turnoActual;
       setState(() {
         _boardState = restoredState.copyWith(turnoActual: lobby.turnoActual);
@@ -1638,7 +1941,7 @@ class _GameScreenState extends State<GameScreen> {
                     boardState: _boardState,
                     selectedCellCoord: selectedCoord,
                     highlightEmpty: _selectedHandIndex != null,
-                    movableCoords: _movableCoords,
+                    movableCoords: _highlightCoords,
                     obeliscoLocal: _obeliscoLocal,
                     playerColors: _playerColors,
                     onCellTap: _onCellTap,
@@ -1754,6 +2057,9 @@ class _GameScreenState extends State<GameScreen> {
                 resolveEvolucion: _resolveEvolucion,
                 onEvolucionar:
                     _estoyEliminado ? (_, __, ___) async {} : _evolucionarCarta,
+                turnoActual: _boardState.turnoActual, // NUEVO
+                onLanzarHabilidad: // NUEVO
+                    _estoyEliminado ? null : _iniciarAccionDesdeTablero,
               ),
             ),
           ],
@@ -2186,4 +2492,19 @@ class _MoveNode {
 // ─────────────────────────────────────────────────────────────
 extension _StringExt on String {
   String? get nullIfEmpty => isEmpty ? null : this;
+}
+
+// ─────────────────────────────────────────────────────────────
+// REFERENCIA A UNA CARTA PROPIA EN EL TABLERO
+// Usado por _showCartaPropiaModal para elegir qué carta teletransportar.
+// ─────────────────────────────────────────────────────────────
+class _CartaPropiaRef {
+  final String coord;
+  final int indice;
+  final CartaEnCelda carta;
+  const _CartaPropiaRef({
+    required this.coord,
+    required this.indice,
+    required this.carta,
+  });
 }
