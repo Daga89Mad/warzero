@@ -14,6 +14,7 @@ import '../services/mapa_service.dart';
 import '../services/turn_service.dart';
 import '../services/combate_service.dart';
 import 'informe_batalla_screen.dart';
+import 'revision_turno_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/lobby_model.dart';
 import '../widgets/board_widget.dart';
@@ -207,14 +208,18 @@ class _GameScreenState extends State<GameScreen> {
         obeliscos[uid] = coord;
       });
       setState(() {
-        _obeliscoLocal = assigned;
-        _obeliscoOponente = all.entries
+        // No sobrescribir con null si ya teníamos un cuartel válido.
+        if (assigned != null && assigned.isNotEmpty) {
+          _obeliscoLocal = assigned;
+        }
+        final oponente = all.entries
             .firstWhere((e) => e.key != widget.localPlayerUid,
                 orElse: () => const MapEntry('', ''))
             .value
             .nullIfEmpty;
-        _playerColors = colors;
-        _obeliscosPorJugador = obeliscos;
+        if (oponente != null) _obeliscoOponente = oponente;
+        if (colors.isNotEmpty) _playerColors = colors;
+        if (obeliscos.isNotEmpty) _obeliscosPorJugador = obeliscos;
       });
     } else {
       coords.shuffle(math.Random());
@@ -462,6 +467,14 @@ class _GameScreenState extends State<GameScreen> {
           colors[uid] = _obeliscoColor(coord as String);
           obeliscosMap[uid] = coord;
         });
+        // Extraer el cuartel del jugador local y del oponente directamente
+        // del doc, para no depender de la llamada de red de _assignObeliscos.
+        final obeliscoLocalDoc = obeliscosMap[widget.localPlayerUid];
+        final obeliscoOponenteDoc = obeliscosMap.entries
+            .firstWhere((e) => e.key != widget.localPlayerUid,
+                orElse: () => const MapEntry('', ''))
+            .value
+            .nullIfEmpty;
 
         // Estado del juego
         final juegoTerminado = lobby.estado == LobbyEstado.finalizada;
@@ -474,6 +487,10 @@ class _GameScreenState extends State<GameScreen> {
           _localPlayer.puntos = puntosRestaurados;
           _playerColors = colors;
           _obeliscosPorJugador = obeliscosMap;
+          if (obeliscoLocalDoc != null) _obeliscoLocal = obeliscoLocalDoc;
+          if (obeliscoOponenteDoc != null) {
+            _obeliscoOponente = obeliscoOponenteDoc;
+          }
           _jugadoresEliminados = eliminados;
           _estoyEliminado = eliminados.contains(widget.localPlayerUid);
           _juegoTerminado = juegoTerminado;
@@ -773,16 +790,19 @@ class _GameScreenState extends State<GameScreen> {
               }
               Navigator.of(context)
                   .push(MaterialPageRoute(
-                    builder: (_) => InformeBatallaScreen(
-                      combateLog: combateLog,
-                      movimientosLog: movLog,
-                      historial: _historialCombates,
-                      localUid: widget.localPlayerUid,
-                      jugadores: _currentLobby?.jugadores ?? [],
-                      turno: turnoInforme,
-                    ),
-                  ))
-                  .whenComplete(() => _informeAbierto = false);
+                builder: (_) => InformeBatallaScreen(
+                  combateLog: combateLog,
+                  movimientosLog: movLog,
+                  historial: _historialCombates,
+                  localUid: widget.localPlayerUid,
+                  jugadores: _currentLobby?.jugadores ?? [],
+                  turno: turnoInforme,
+                ),
+              ))
+                  .whenComplete(() {
+                _informeAbierto = false;
+                _abrirRevisionTurno(turnoRevisar: turnoInforme);
+              });
             });
           }
         }
@@ -1773,6 +1793,41 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  /// Abre la pantalla de revisión del turno con los eventos del último
+  /// turno resuelto. Se llama tras cerrar el informe de batalla.
+  void _abrirRevisionTurno({required int turnoRevisar}) {
+    if (!mounted) return;
+    Map<String, dynamic>? entry;
+    for (final h in _historialCombates.reversed) {
+      final t = (h['turno'] as num?)?.toInt() ?? 0;
+      if (t == turnoRevisar) {
+        entry = h;
+        break;
+      }
+    }
+    entry ??= {
+      'turno': turnoRevisar,
+      'combateLog': _lastCombateLog,
+      'movimientosLog': _lastMovimientosLog,
+      'accionesLog': const [],
+      'conquistasLog': const [],
+    };
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => RevisionTurnoScreen(
+          config: _config,
+          boardState: _boardState,
+          historialEntry: entry!,
+          localUid: widget.localPlayerUid,
+          playerColors: _playerColors,
+          obeliscoLocal: _obeliscoLocal,
+          obeliscosPorJugador: _obeliscosPorJugador,
+        ),
+      ),
+    );
+  }
+
   // ── Diálogo de eliminación ────────────────────────────────
   void _showEliminadoDialog() {
     if (!mounted) return;
@@ -2017,16 +2072,20 @@ class _GameScreenState extends State<GameScreen> {
                     _informeAbierto = true;
                     Navigator.of(context)
                         .push(MaterialPageRoute(
-                          builder: (_) => InformeBatallaScreen(
-                            combateLog: _lastCombateLog,
-                            movimientosLog: _lastMovimientosLog,
-                            historial: _historialCombates,
-                            localUid: widget.localPlayerUid,
-                            jugadores: _currentLobby?.jugadores ?? [],
-                            turno: _boardState.turnoActual - 1,
-                          ),
-                        ))
-                        .whenComplete(() => _informeAbierto = false);
+                      builder: (_) => InformeBatallaScreen(
+                        combateLog: _lastCombateLog,
+                        movimientosLog: _lastMovimientosLog,
+                        historial: _historialCombates,
+                        localUid: widget.localPlayerUid,
+                        jugadores: _currentLobby?.jugadores ?? [],
+                        turno: _boardState.turnoActual - 1,
+                      ),
+                    ))
+                        .whenComplete(() {
+                      _informeAbierto = false;
+                      _abrirRevisionTurno(
+                          turnoRevisar: _boardState.turnoActual - 1);
+                    });
                   },
                 ),
               ),

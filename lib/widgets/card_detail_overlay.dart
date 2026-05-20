@@ -190,11 +190,15 @@ class _CardDetailPageState extends State<_CardDetailPage>
   Size _cardSize(BuildContext context) {
     final mq = MediaQuery.of(context).size;
     const double aspect = 1.5;
-    const double totalSideSpace = 68.0;
+    // No hay flecha lateral: solo un mini-padding para que la carta no
+    // toque los bordes laterales de la pantalla.
+    const double totalSideSpace = 20.0;
     final double usableWidth = mq.width - totalSideSpace;
 
-    final double maxW = (usableWidth * 0.98).clamp(0.0, 500.0);
-    final double maxH = (mq.height * 0.92).clamp(0.0, 800.0);
+    final double maxW = (usableWidth * 0.98).clamp(0.0, 560.0);
+    // Dejar espacio vertical para la flecha de evolución que ahora va
+    // debajo (64dp + spacer) y para los botones de habilidad/evolucionar.
+    final double maxH = (mq.height * 0.78).clamp(0.0, 820.0);
 
     double cardW = maxW;
     double cardH = cardW * aspect;
@@ -233,32 +237,34 @@ class _CardDetailPageState extends State<_CardDetailPage>
                   const SizedBox(height: 14),
                 ],
 
-                // ── CARTA + FLECHA EVOLUCIÓN ─────────────────
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    const SizedBox(width: 24),
-                    _FlippingCard(
-                      controller: _flipCtrl,
-                      front: widget.carta,
-                      back: _evolucion,
-                      cardWidth: sz.width,
-                      cardHeight: sz.height,
-                    ),
-                    const SizedBox(width: 8),
-                    if (_tieneEvolucion)
-                      _EvolutionArrow(
-                        enabled: !_loadingEvol && _evolucion != null,
-                        loading: _loadingEvol,
-                        showingEvolution: _showingEvolution,
-                        onTap: _toggleFlip,
-                        evolucionCost: widget.carta.evolucion,
-                      )
-                    else
-                      const SizedBox(width: 36),
-                  ],
+                // ── CARTA ─────────────────────────────────────
+                _FlippingCard(
+                  controller: _flipCtrl,
+                  front: widget.carta,
+                  back: _evolucion,
+                  cardWidth: sz.width,
+                  cardHeight: sz.height,
                 ),
+
+                // ── FLECHA EVOLUCIÓN (debajo, alineada a la derecha) ──
+                if (_tieneEvolucion) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: sz.width,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        _EvolutionArrow(
+                          enabled: !_loadingEvol && _evolucion != null,
+                          loading: _loadingEvol,
+                          showingEvolution: _showingEvolution,
+                          onTap: _toggleFlip,
+                          evolucionCost: widget.carta.evolucion,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
 
                 // ── BOTÓN EVOLUCIONAR ──────────────────────────
                 if (_showingEvolution && widget.onEvolucionar != null) ...[
@@ -450,8 +456,8 @@ class _EvolutionArrow extends StatelessWidget {
       onTap: enabled ? onTap : null,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        width: 40,
-        height: 64,
+        width: 56,
+        height: 40,
         decoration: BoxDecoration(
           color: Colors.black.withOpacity(0.55),
           borderRadius: BorderRadius.circular(8),
@@ -463,8 +469,8 @@ class _EvolutionArrow extends StatelessWidget {
         child: Center(
           child: loading
               ? SizedBox(
-                  width: 16,
-                  height: 16,
+                  width: 14,
+                  height: 14,
                   child: CircularProgressIndicator(
                     strokeWidth: 1.5,
                     valueColor: AlwaysStoppedAnimation(color),
@@ -481,7 +487,7 @@ class _EvolutionArrow extends StatelessWidget {
                         ? Icons.arrow_back_ios_new
                         : Icons.arrow_forward_ios,
                     key: ValueKey(showingEvolution),
-                    size: 22,
+                    size: 20,
                     color: color,
                   ),
                 ),
@@ -704,38 +710,66 @@ class _CardFace extends StatelessWidget {
               ),
             ),
 
-            // Nombre
+            // Nombre + Condición (chip justo debajo del nombre)
             Positioned(
               top: 0,
               left: 68,
               right: 68,
-              height: 52,
-              child: Center(
-                child: Text(
-                  carta.nombre.toUpperCase(),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFFE8C870),
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 1.2,
-                    decoration: TextDecoration.none,
+              height: 78,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    carta.nombre.toUpperCase(),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFE8C870),
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1.2,
+                      decoration: TextDecoration.none,
+                    ),
                   ),
-                ),
+                  if (carta.condicion != CondicionCarta.basica) ...[
+                    const SizedBox(height: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color:
+                            Color(carta.condicion.colorValue).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                            color: Color(carta.condicion.colorValue)
+                                .withOpacity(0.40),
+                            width: 0.8),
+                      ),
+                      child: Text(
+                        '${carta.condicion.icon} ${carta.condicion.label}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Color(carta.condicion.colorValue),
+                          fontFamily: 'Cinzel',
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
 
             // Contenido
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 52, 14, 56),
+              padding: const EdgeInsets.fromLTRB(14, 78, 14, 56),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    flex: 7,
+                    flex: 6,
                     child: Container(
                       width: double.infinity,
                       decoration: BoxDecoration(
@@ -786,7 +820,7 @@ class _CardFace extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Expanded(
-                    flex: 3,
+                    flex: 4,
                     child: Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
@@ -816,45 +850,6 @@ class _CardFace extends StatelessWidget {
                               ),
                             ),
                           ),
-                          if (carta.condicion != CondicionCarta.basica) ...[
-                            const SizedBox(height: 6),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  'CONDICIÓN',
-                                  style: TextStyle(
-                                    fontSize: 8,
-                                    color: Color(0xFF7A6A40),
-                                    fontFamily: 'Cinzel',
-                                    letterSpacing: 1.5,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Color(carta.condicion.colorValue)
-                                        .withOpacity(0.12),
-                                    borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(
-                                        color: Color(carta.condicion.colorValue)
-                                            .withOpacity(0.40),
-                                        width: 0.8),
-                                  ),
-                                  child: Text(
-                                    '${carta.condicion.icon} ${carta.condicion.label}',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: Color(carta.condicion.colorValue),
-                                      fontFamily: 'Cinzel',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
                           const SizedBox(height: 8),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
