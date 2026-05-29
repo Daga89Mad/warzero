@@ -105,6 +105,35 @@ class _GameScreenState extends State<GameScreen> {
       _yoCerreElTurno && _cerradoPor.length < _jugadoresActivos;
   bool get _todosCerraronTurno => _cerradoPor.length >= _jugadoresActivos;
 
+  /// UID del cliente encargado de RESOLVER el turno cuando todos han cerrado.
+  ///
+  /// Solo UN cliente debe ejecutar la resolución para evitar condiciones de
+  /// carrera entre dispositivos (la transacción de servidor protege la
+  /// escritura, pero no el estado local del resto). Se elige al host si sigue
+  /// activo; en caso contrario, el menor uid activo (orden lexicográfico) para
+  /// que la elección sea idéntica y determinista en todos los dispositivos.
+  String? get _resolvedorUid {
+    final lobby = _currentLobby;
+    if (lobby == null) return null;
+    final activos = lobby.jugadores
+        .map((j) => j.uid)
+        .where((u) => u.isNotEmpty && !_jugadoresEliminados.contains(u))
+        .toList()
+      ..sort();
+    if (activos.isEmpty) return null;
+    if (lobby.hostUid.isNotEmpty && activos.contains(lobby.hostUid)) {
+      return lobby.hostUid;
+    }
+    return activos.first;
+  }
+
+  bool get _soyResolvedor => _resolvedorUid == widget.localPlayerUid;
+
+  /// Timer de respaldo: si el resolvedor designado no avanza el turno en este
+  /// tiempo (p. ej. se ha desconectado), cualquier cliente que ya cerró fuerza
+  /// la resolución. La transacción de servidor impide resoluciones duplicadas.
+  Timer? _fallbackTimer;
+
   // ── Mano y mazo ───────────────────────────────────────────
   List<CartaModel> _hand = [];
   List<CartaModel> _mazoRestante = [];
@@ -582,11 +611,13 @@ class _GameScreenState extends State<GameScreen> {
         }
         _subscribeToLobby();
         _assignObeliscos().catchError((_) {});
+        // Auto-reparar el índice `participantes` para que esta partida aparezca
+        // siempre en "mis partidas" (fire-and-forget, no bloquea la carga).
+        LobbyService()
+            .asegurarParticipantes(widget.lobbyId!)
+            .catchError((_) {});
 
-        if (_todosCerraronTurno && !_resolviendo) {
-          _resolviendo = true;
-          _resolverTurno();
-        }
+        _intentarResolverSiProcede();
 
         // Mostrar pantallas de fin de juego si procede
         if (_juegoTerminado || _estoyEliminado) {
@@ -697,6 +728,7 @@ class _GameScreenState extends State<GameScreen> {
       if (lobby.turnoActual > _turnoConfirmadoStream &&
           data.containsKey('tablero')) {
         final tableroRaw = TurnService.parseTablero(data);
+        final efectosCeldaStream = TurnService.parseEfectosCelda(data);
         var restoredState = const BoardState();
         tableroRaw.forEach((coord, cartas) {
           for (final c in cartas) {
@@ -710,7 +742,10 @@ class _GameScreenState extends State<GameScreen> {
             );
           }
         });
+        restoredState =
+            restoredState.copyWith(efectosCelda: efectosCeldaStream);
         _turnoConfirmadoStream = lobby.turnoActual;
+        _fallbackTimer?.cancel();
 
         // Robar 1 carta del mazo restante (si no está eliminado)
         CartaModel? cartaRobada;
@@ -738,6 +773,9 @@ class _GameScreenState extends State<GameScreen> {
           _mazoRestante = nuevoMazo;
           _handInicial = List.from(nuevaMano);
           _cartasMovidasEsteTurno.clear();
+          _accionesPendientes.clear();
+          _accionController.cancelar();
+          _efectosCelda = efectosCeldaStream;
           _energiaGastadaDespliegue = 0;
         });
 
@@ -810,12 +848,9 @@ class _GameScreenState extends State<GameScreen> {
       }
 
       // ── Resolver turno cuando todos cierran ───────────────────
-      if (_cargaCompletada &&
-          !_resolviendo &&
-          _cerradoPor.length >= _jugadoresActivos) {
-        _resolviendo = true;
-        _resolverTurno();
-      }
+      // Delegado al resolvedor único (con fallback temporizado) para evitar
+      // que varios dispositivos resuelvan en paralelo.
+      _intentarResolverSiProcede();
     }, onError: (e) {
       if (mounted) _toast('Conexión perdida con el servidor', error: true);
     });
@@ -841,6 +876,7 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void dispose() {
     _lobbySub?.cancel();
+    _fallbackTimer?.cancel();
     _timerActivo = false;
     super.dispose();
   }
@@ -1507,6 +1543,39 @@ class _GameScreenState extends State<GameScreen> {
     _toast('Turno cerrado. Esperando a los demás…');
   }
 
+  /// Punto único de entrada para la resolución del turno.
+  ///
+  /// Se invoca desde la carga inicial, el stream del lobby y "Actualizar".
+  /// Solo el resolvedor designado resuelve de inmediato; el resto programa un
+  /// fallback temporizado por si el resolvedor no completa la resolución.
+  /// Con [forzar] = true cualquier cliente resuelve (usado por "Actualizar").
+  void _intentarResolverSiProcede({bool forzar = false}) {
+    if (widget.lobbyId == null) return;
+    if (_resolviendo || !_cargaCompletada) return;
+    if (_cerradoPor.length < _jugadoresActivos) return;
+
+    if (forzar || _soyResolvedor) {
+      _fallbackTimer?.cancel();
+      _resolviendo = true;
+      _resolverTurno();
+    } else {
+      _programarFallbackResolucion();
+    }
+  }
+
+  void _programarFallbackResolucion() {
+    _fallbackTimer?.cancel();
+    _fallbackTimer = Timer(const Duration(seconds: 8), () {
+      if (!mounted) return;
+      if (!_resolviendo &&
+          _cargaCompletada &&
+          _cerradoPor.length >= _jugadoresActivos) {
+        _resolviendo = true;
+        _resolverTurno();
+      }
+    });
+  }
+
   Future<void> _resolverTurno() async {
     if (widget.lobbyId == null) return;
     final turnoAResolver = _boardState.turnoActual;
@@ -1524,6 +1593,39 @@ class _GameScreenState extends State<GameScreen> {
           .get()
           .timeout(const Duration(seconds: 60));
       if (!mounted) return;
+
+      final dataLobby = lobbyDoc.exists
+          ? (lobbyDoc.data() as Map<String, dynamic>)
+          : <String, dynamic>{};
+
+      // 1b. Idempotencia: si el turno YA avanzó en el servidor (otro cliente lo
+      // resolvió), no es un error. Bajamos flags y dejamos que el stream aplique
+      // el nuevo estado de forma uniforme en todos los dispositivos.
+      final turnoEnDB =
+          (dataLobby['turnoActual'] as num?)?.toInt() ?? turnoAResolver;
+      if (turnoEnDB != turnoAResolver || movimientos.isEmpty) {
+        _fallbackTimer?.cancel();
+        if (mounted) {
+          setState(() {
+            _resolviendo = false;
+            _isSendingTurn = false;
+          });
+        }
+        return;
+      }
+
+      // 1c. Obeliscos LEÍDOS DEL DOCUMENTO (no del estado local, que se carga de
+      // forma asíncrona y puede diferir entre dispositivos → resultados de
+      // conquista no deterministas). Fallback al estado local si faltan.
+      final obelDataResolver =
+          dataLobby['obeliscos'] as Map<String, dynamic>? ?? {};
+      final obeliscosResolver = <String, String>{};
+      obelDataResolver.forEach((uid, coord) {
+        if (coord is String && coord.isNotEmpty) obeliscosResolver[uid] = coord;
+      });
+      final obeliscosEfectivos = obeliscosResolver.isNotEmpty
+          ? obeliscosResolver
+          : (_obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null);
 
       // 2. Fusionar tableros
       final tableroFusionado = <String, List<Map<String, dynamic>>>{};
@@ -1548,54 +1650,29 @@ class _GameScreenState extends State<GameScreen> {
         tablero: tableroFusionado,
         acciones: acciones,
         efectosCelda: efectosCeldaPrevios,
-        obeliscosPorJugador:
-            _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : const {},
+        obeliscosPorJugador: obeliscosEfectivos ?? const {},
       );
 
-      // 5. Resolver combates sobre el tablero tras acciones
+      // 5. Resolver combates sobre el tablero tras acciones.
+      // (Se usa solo para mostrar avisos de conquista al resolvedor; el estado
+      // definitivo lo recalcula y persiste resolverCombatesYAvanzar.)
       final resolucion = CombateService.resolverCombates(
         accResult.tableroResultante,
-        obeliscosPorJugador:
-            _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null,
+        obeliscosPorJugador: obeliscosEfectivos,
       );
 
-      // 6. Tick de efectos sobre el tablero post-combate
-      final tick = HabilidadService.tickEfectos(
-        tablero: resolucion.tableroResultante,
-        efectosCelda: accResult.efectosCeldaResultante,
-      );
-      final tableroFinal = tick.tableroResultante;
-      final efectosCeldaFinal = tick.efectosCeldaResultante;
-
-      // 7. Reconstruir BoardState limpio
-      var newState = const BoardState();
-      tableroFinal.forEach((coord, cartas) {
-        for (final c in cartas) {
-          newState = newState.placeCarta(
-            coord,
-            CartaEnCelda.fromMap(c),
-          );
-        }
-      });
-      newState = newState.copyWith(efectosCelda: efectosCeldaFinal);
-
-      // 8. Extraer stats actuales
+      // 6. Extraer stats actuales
       final statsActuales = <String, Map<String, int>>{};
-      if (lobbyDoc.exists) {
-        final rawS =
-            ((lobbyDoc.data() as Map<String, dynamic>?)?['statsPartida']
-                    as Map<String, dynamic>?) ??
-                {};
-        rawS.forEach((uid, v) {
-          final m = Map<String, dynamic>.from(v as Map);
-          statsActuales[uid] = {
-            'energies': (m['energies'] as num?)?.toInt() ?? 0,
-            'pc': (m['pc'] as num?)?.toInt() ?? 0,
-          };
-        });
-      }
+      final rawS = dataLobby['statsPartida'] as Map<String, dynamic>? ?? {};
+      rawS.forEach((uid, v) {
+        final m = Map<String, dynamic>.from(v as Map);
+        statsActuales[uid] = {
+          'energies': (m['energies'] as num?)?.toInt() ?? 0,
+          'pc': (m['pc'] as num?)?.toInt() ?? 0,
+        };
+      });
 
-      // 9. Log de movimientos
+      // 7. Log de movimientos
       final movimientosLog = movimientos.map((m) {
         String zona = '';
         for (final cs in m.celdas.values) {
@@ -1615,8 +1692,7 @@ class _GameScreenState extends State<GameScreen> {
             tablero: tableroFusionado,
             statsActuales: statsActuales,
             movimientosLog: movimientosLog,
-            obeliscosPorJugador:
-                _obeliscosPorJugador.isNotEmpty ? _obeliscosPorJugador : null,
+            obeliscosPorJugador: obeliscosEfectivos,
             acciones: acciones,
             efectosCeldaActual: efectosCeldaPrevios,
           )
@@ -1634,31 +1710,33 @@ class _GameScreenState extends State<GameScreen> {
         }
       }
 
-      // 12. Actualizar estado local (el stream aplica el estado definitivo)
-      final ptsGanados =
-          resolucion.energiesPorJugador[widget.localPlayerUid] ?? 0;
-      setState(() {
-        _boardState = newState.copyWith(turnoActual: turnoAResolver + 1);
-        _efectosCelda = efectosCeldaFinal;
-        _cerradoPor = [];
-        _resolviendo = false;
-        _isSendingTurn = false;
-        _boardStateInicial = _boardState;
-        _handInicial = List.from(_hand);
-        _cartasMovidasEsteTurno.clear();
-        _accionesPendientes.clear();
-        _accionController.cancelar();
-        if (ptsGanados > 0) _localPlayer.puntos += ptsGanados;
-      });
-
-      if (_modoTurno == ModoTurno.rapida && mounted) _startTimer();
-    } catch (e) {
+      // 12. NO avanzamos el estado del turno localmente. El stream del lobby
+      // (bloque "nuevo turno") es la ÚNICA fuente de verdad y aplicará el
+      // tablero, la mano, el robo de carta, los efectos y el informe de batalla
+      // de forma idéntica en TODOS los dispositivos. Aquí solo bajamos las
+      // banderas de "resolviendo" para desbloquear la UI.
+      _fallbackTimer?.cancel();
       if (mounted) {
         setState(() {
           _resolviendo = false;
           _isSendingTurn = false;
         });
-        _toast('Error al resolver turno. Pulsa Actualizar.', error: true);
+      }
+
+      // El temporizador del nuevo turno lo arranca el stream al recibir el
+      // turno avanzado (evita arrancar dos timers en paralelo).
+    } catch (_) {
+      // Un fallo aquí NO debe dejar al jugador atascado. Bajamos las banderas
+      // para que el botón "Actualizar" pueda reintentar leyendo del servidor.
+      _fallbackTimer?.cancel();
+      if (mounted) {
+        setState(() {
+          _resolviendo = false;
+          _isSendingTurn = false;
+        });
+        _toast(
+            'No se pudo resolver el turno. Pulsa Actualizar para reintentar.',
+            error: true);
       }
     }
   }
@@ -1716,14 +1794,6 @@ class _GameScreenState extends State<GameScreen> {
 
   Future<void> _checkRefresh() async {
     if (!_yoCerreElTurno) return;
-    setState(() => _resolviendo = false);
-
-    if (_todosCerraronTurno) {
-      _resolviendo = true;
-      _toast('Resolviendo turno…');
-      _resolverTurno();
-      return;
-    }
 
     if (widget.lobbyId == null) {
       final faltan = _jugadoresActivos - _cerradoPor.length;
@@ -1731,21 +1801,30 @@ class _GameScreenState extends State<GameScreen> {
       return;
     }
 
+    setState(() => _resolviendo = false);
+
+    // Lectura desde el SERVIDOR (no caché): "Actualizar" debe traer el estado
+    // real, no una copia local potencialmente obsoleta.
     DocumentSnapshot? doc;
     try {
       doc = await FirebaseFirestore.instance
           .collection('Partidas')
           .doc(widget.lobbyId)
-          .get(const GetOptions(source: Source.cache));
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 15));
     } catch (_) {
-      final faltan = _jugadoresActivos - _cerradoPor.length;
-      _toast('Faltan $faltan jugador${faltan == 1 ? '' : 'es'} por cerrar.');
+      if (mounted) {
+        _toast('No se pudo contactar con el servidor. Reintenta.', error: true);
+      }
       return;
     }
     if (doc == null || !doc.exists || !mounted) return;
     final lobby = LobbyModel.fromFirestore(doc);
     final data = doc.data() as Map<String, dynamic>;
 
+    // ── Caso 1: el turno YA avanzó en el servidor ─────────────────
+    // Aplicamos el nuevo turno manualmente (red de seguridad por si el stream
+    // se retrasó) y mostramos el informe de batalla para no perdérnoslo.
     if (lobby.turnoActual > _turnoConfirmadoStream &&
         data.containsKey('tablero')) {
       final tableroRaw = TurnService.parseTablero(data);
@@ -1760,7 +1839,20 @@ class _GameScreenState extends State<GameScreen> {
         }
       });
       restoredState = restoredState.copyWith(efectosCelda: efectosCeldaStream);
+
+      final turnoInforme = lobby.turnoActual - 1;
+      final combateLog = (data['ultimoCombateLog'] as List<dynamic>? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final movLog = (data['ultimosMovimientos'] as List<dynamic>? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final historialData = (data['historialCombates'] as List<dynamic>? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
       _turnoConfirmadoStream = lobby.turnoActual;
+      _fallbackTimer?.cancel();
       setState(() {
         _boardState = restoredState.copyWith(turnoActual: lobby.turnoActual);
         _cerradoPor = [];
@@ -1771,21 +1863,75 @@ class _GameScreenState extends State<GameScreen> {
             restoredState.copyWith(turnoActual: lobby.turnoActual);
         _handInicial = List.from(_hand);
         _cartasMovidasEsteTurno.clear();
+        _accionesPendientes.clear();
+        _accionController.cancelar();
+        _efectosCelda = efectosCeldaStream;
         _puntosInicial = _localPlayer.puntos;
         _energiaGastadaDespliegue = 0;
+        _lastCombateLog = combateLog;
+        _lastMovimientosLog = movLog;
+        _historialCombates = historialData;
       });
+
+      // Sincronizar puntos desde stats del servidor.
+      final rawSt = data['statsPartida'] as Map<String, dynamic>? ?? {};
+      if (rawSt.containsKey(widget.localPlayerUid)) {
+        final myS =
+            Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
+        final pts = (myS['energies'] as num?)?.toInt() ?? 0;
+        if (mounted && pts != _localPlayer.puntos) {
+          setState(() {
+            _localPlayer.puntos = pts;
+            _puntosInicial = pts;
+          });
+        }
+      }
+
+      // Mostrar informe de batalla (si procede y no se mostró ya).
+      if (turnoInforme >= 1 &&
+          turnoInforme > _informeMostradoTurno &&
+          !_informeAbierto &&
+          mounted) {
+        _informeMostradoTurno = turnoInforme;
+        _informeAbierto = true;
+        Navigator.of(context)
+            .push(MaterialPageRoute(
+          builder: (_) => InformeBatallaScreen(
+            combateLog: combateLog,
+            movimientosLog: movLog,
+            historial: _historialCombates,
+            localUid: widget.localPlayerUid,
+            jugadores: _currentLobby?.jugadores ?? [],
+            turno: turnoInforme,
+          ),
+        ))
+            .whenComplete(() {
+          _informeAbierto = false;
+          _abrirRevisionTurno(turnoRevisar: turnoInforme);
+        });
+      }
       return;
     }
 
+    // ── Caso 2: el turno NO ha avanzado ───────────────────────────
+    // Sincronizamos el estado de cierre desde el servidor.
+    final elimServidor =
+        List<String>.from(data['jugadoresEliminados'] as List? ?? []);
     setState(() {
       _cerradoPor = List<String>.from(lobby.cerradoPor);
       _jugadoresEnPartida = lobby.jugadores.length;
+      _jugadoresEliminados = elimServidor;
+      _estoyEliminado = elimServidor.contains(widget.localPlayerUid);
       _resolviendo = false;
     });
+
     if (_todosCerraronTurno) {
-      _resolviendo = true;
+      // Todos han cerrado pero el turno sigue sin avanzar: forzamos la
+      // resolución desde este cliente (idempotente; la transacción de servidor
+      // impide duplicados). Cubre el caso de que el resolvedor designado se
+      // haya desconectado.
       _toast('Resolviendo turno…');
-      _resolverTurno();
+      _intentarResolverSiProcede(forzar: true);
     } else {
       final faltan = _jugadoresActivos - _cerradoPor.length;
       _toast(

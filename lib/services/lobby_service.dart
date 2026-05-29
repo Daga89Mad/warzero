@@ -17,7 +17,14 @@ class LobbyService {
         .limit(30)
         .snapshots()
         .map((s) {
-      final list = s.docs.map(LobbyModel.fromFirestore).toList();
+      final list = <LobbyModel>[];
+      for (final d in s.docs) {
+        try {
+          list.add(LobbyModel.fromFirestore(d));
+        } catch (_) {
+          // Ignorar documentos malformados.
+        }
+      }
       list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
       return list;
     });
@@ -148,20 +155,68 @@ class LobbyService {
     });
   }
 
+  /// Garantiza que el campo `participantes` contiene a todos los jugadores
+  /// actuales. Idempotente y barato: solo escribe si falta alguien. Sirve para
+  /// auto-reparar partidas creadas antes de que existiera el campo (de lo
+  /// contrario no aparecerían en "mis partidas", que ahora filtra por
+  /// `participantes`). Es fire-and-forget: cualquier error se ignora.
+  Future<void> asegurarParticipantes(String lobbyId) async {
+    try {
+      final doc = await _db.collection('Partidas').doc(lobbyId).get();
+      if (!doc.exists) return;
+      final data = doc.data() as Map<String, dynamic>;
+      final jugadores = (data['jugadores'] as List? ?? [])
+          .map((j) => (j as Map)['uid'] as String? ?? '')
+          .where((u) => u.isNotEmpty)
+          .toSet();
+      final participantes = (data['participantes'] as List? ?? [])
+          .map((e) => e.toString())
+          .toSet();
+      final faltan = jugadores.difference(participantes);
+      if (faltan.isNotEmpty) {
+        await _db.collection('Partidas').doc(lobbyId).update({
+          'participantes': FieldValue.arrayUnion(faltan.toList()),
+        });
+      }
+    } catch (_) {
+      // No crítico: si falla, la lista simplemente no se auto-repara.
+    }
+  }
+
   // ── Stream de mis partidas ────────────────────────────────
+  /// Devuelve las partidas (en espera o en curso) en las que el usuario es
+  /// participante.
+  ///
+  /// Filtra EN EL SERVIDOR por el campo `participantes` con `arrayContains`,
+  /// en lugar de escanear toda la colección y filtrar en cliente. Esto evita:
+  ///   - Que reglas de seguridad basadas en participantes rechacen la consulta
+  ///     (lo que dejaba el StreamBuilder cargando indefinidamente).
+  ///   - Leer documentos de otros usuarios (rendimiento y coste).
+  /// Un único `arrayContains` no requiere índice compuesto. El estado se filtra
+  /// en cliente (excluir finalizadas) para no necesitar un índice combinado.
   Stream<List<LobbyModel>> misPartidasStream(String uid) {
     return _db
         .collection('Partidas')
-        .where('estado', whereIn: ['esperando', 'en_curso'])
+        .where('participantes', arrayContains: uid)
         .snapshots()
         .map((s) {
-          final list = s.docs
-              .map(LobbyModel.fromFirestore)
-              .where((l) => l.jugadores.any((j) => j.uid == uid))
-              .toList();
-          list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
-          return list;
-        });
+      final list = <LobbyModel>[];
+      for (final d in s.docs) {
+        try {
+          final l = LobbyModel.fromFirestore(d);
+          // Mostrar solo partidas activas (esperando o en curso) en las que el
+          // jugador sigue presente.
+          final sigueEnPartida = l.jugadores.any((j) => j.uid == uid);
+          if (l.estado != LobbyEstado.finalizada && sigueEnPartida) {
+            list.add(l);
+          }
+        } catch (_) {
+          // Documento malformado: lo ignoramos para no tumbar la lista entera.
+        }
+      }
+      list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
+      return list;
+    });
   }
 
   // ── Buscar lobby privado por ID ───────────────────────────

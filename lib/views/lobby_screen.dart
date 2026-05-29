@@ -1,5 +1,7 @@
 // lib/views/lobby_screen.dart
 
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1148,9 +1150,133 @@ class _EmptyState extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
+// CARGANDO CON OPCIÓN DE REINTENTO
+// Muestra un spinner; si la carga se prolonga, ofrece un botón para
+// reintentar, de modo que el jugador nunca quede atrapado indefinidamente.
+// ─────────────────────────────────────────────────────────────
+class _LoadingWithRetry extends StatefulWidget {
+  final VoidCallback onRetry;
+  const _LoadingWithRetry({required this.onRetry});
+
+  @override
+  State<_LoadingWithRetry> createState() => _LoadingWithRetryState();
+}
+
+class _LoadingWithRetryState extends State<_LoadingWithRetry> {
+  bool _mostrarReintento = false;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(const Duration(seconds: 10), () {
+      if (mounted) setState(() => _mostrarReintento = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const CircularProgressIndicator(color: Color(0xFFC8A860)),
+          if (_mostrarReintento) ...[
+            const SizedBox(height: 20),
+            const Text('La carga está tardando más de lo normal.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontSize: 9,
+                    color: Color(0xFF506070),
+                    fontFamily: 'Cinzel',
+                    height: 1.6,
+                    letterSpacing: 1)),
+            const SizedBox(height: 12),
+            _RetryButton(onRetry: widget.onRetry),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ESTADO DE ERROR CON REINTENTO
+// ─────────────────────────────────────────────────────────────
+class _RetryState extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _RetryState({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.cloud_off, size: 48, color: Color(0xFF2A3040)),
+          const SizedBox(height: 16),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFF506070),
+                  fontFamily: 'Cinzel',
+                  height: 1.8,
+                  letterSpacing: 1)),
+          const SizedBox(height: 16),
+          _RetryButton(onRetry: onRetry),
+        ],
+      ),
+    );
+  }
+}
+
+class _RetryButton extends StatelessWidget {
+  final VoidCallback onRetry;
+  const _RetryButton({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onRetry,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
+        decoration: BoxDecoration(
+          color: const Color(0xFFC8A860).withOpacity(0.12),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(
+              color: const Color(0xFFC8A860).withOpacity(0.6), width: 1),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.refresh, size: 13, color: Color(0xFFC8A860)),
+            SizedBox(width: 8),
+            Text('REINTENTAR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    letterSpacing: 2,
+                    color: Color(0xFFC8A860),
+                    fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // MIS PARTIDAS
 // ─────────────────────────────────────────────────────────────
-class _MisPartidasList extends StatelessWidget {
+class _MisPartidasList extends StatefulWidget {
   final LobbyService service;
   final String uid;
   final void Function(String) onJoin;
@@ -1164,18 +1290,42 @@ class _MisPartidasList extends StatelessWidget {
   });
 
   @override
+  State<_MisPartidasList> createState() => _MisPartidasListState();
+}
+
+class _MisPartidasListState extends State<_MisPartidasList> {
+  // El stream se crea UNA sola vez (no en cada build) para evitar que se
+  // reinicie a "waiting" en cada reconstrucción del árbol.
+  Stream<List<LobbyModel>>? _stream;
+
+  @override
+  void initState() {
+    super.initState();
+    _stream = widget.service.misPartidasStream(widget.uid);
+  }
+
+  /// Recrea el stream (botón "reintentar").
+  void _recargar() {
+    setState(() {
+      _stream = widget.service.misPartidasStream(widget.uid);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<LobbyModel>>(
-      stream: service.misPartidasStream(uid),
+      stream: _stream,
       builder: (ctx, snap) {
         if (snap.hasError) {
-          return _EmptyState(
-              icon: Icons.error_outline,
-              message: 'Error al cargar partidas.\n${snap.error}');
+          return _RetryState(
+            message: 'No se pudieron cargar las partidas.',
+            onRetry: _recargar,
+          );
         }
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(
-              child: CircularProgressIndicator(color: Color(0xFFC8A860)));
+          // Spinner con opción de reintentar por si la carga se atasca, para no
+          // dejar al jugador atrapado en un spinner indefinido.
+          return _LoadingWithRetry(onRetry: _recargar);
         }
 
         final lobbies = snap.data ?? [];
@@ -1201,9 +1351,9 @@ class _MisPartidasList extends StatelessWidget {
             return GestureDetector(
               onTap: () {
                 if (lobby.estado == LobbyEstado.enCurso) {
-                  onDirectGame(lobby.id);
+                  widget.onDirectGame(lobby.id);
                 } else {
-                  onJoin(lobby.id);
+                  widget.onJoin(lobby.id);
                 }
               },
               child: Container(
