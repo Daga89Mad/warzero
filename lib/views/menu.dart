@@ -10,6 +10,7 @@ import 'package:warzero/views/mazo_screen.dart';
 import 'package:warzero/views/cartas_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/edicion_cartas_screen.dart';
+import 'package:warzero/views/diagnostico_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -173,6 +174,18 @@ class MenuScreen extends StatelessWidget {
                         MaterialPageRoute(
                             builder: (_) => const SettingsScreen()),
                       ),
+                    ),
+                    _MenuTile(
+                      icon: Icons.settings_outlined,
+                      label: 'Diagnosticos',
+                      sublabel: 'Configuración\ny cuenta',
+                      accent: const Color(0xFF4060D0),
+                      onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => DiagnosticoScreen(
+                                lobbyId: 'EL_ID_DE_TU_PARTIDA'),
+                          )),
                     ),
                   ],
                 ),

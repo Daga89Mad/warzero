@@ -7,20 +7,35 @@ import '../models/mazo_model.dart';
 class MazoService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
+  // ── Lecturas con timeout ───────────────────────────────────
+  // Con la persistencia desactivada (ver main.dart) no hay caché local, así que
+  // leemos directamente del servidor con un timeout defensivo para no colgar la
+  // UI si la red está lenta.
+  Future<DocumentSnapshot<Map<String, dynamic>>> _getDoc(
+      DocumentReference<Map<String, dynamic>> ref) async {
+    return ref.get().timeout(const Duration(seconds: 15));
+  }
+
+  Future<QuerySnapshot<Map<String, dynamic>>> _getQuery(
+      Query<Map<String, dynamic>> q) async {
+    return q.get().timeout(const Duration(seconds: 15));
+  }
+
   // ── Cargar todas las cartas del juego ──────────────────────
   Future<List<CartaModel>> fetchTodasLasCartas() async {
-    final snap = await _db.collection('Cartas').get();
+    final snap = await _getQuery(_db.collection('Cartas'));
     return snap.docs.map(CartaModel.fromFirestore).toList();
   }
 
   // ── Cargar mazos de un jugador ─────────────────────────────
   Future<List<MazoModel>> fetchMazosDelJugador(String uid) async {
-    final snap =
-        await _db.collection('Jugadores').doc(uid).collection('Mazos').get();
+    final snap = await _getQuery(
+        _db.collection('Jugadores').doc(uid).collection('Mazos'));
 
     final mazos = <MazoModel>[];
     for (final mazoDoc in snap.docs) {
-      final cartasSnap = await mazoDoc.reference.collection('Cartas').get();
+      final cartasSnap =
+          await _getQuery(mazoDoc.reference.collection('Cartas'));
       final entradas = cartasSnap.docs.map(MazoEntrada.fromFirestore).toList();
       mazos.add(MazoModel(id: mazoDoc.id, entradas: entradas));
     }
@@ -31,7 +46,7 @@ class MazoService {
   Future<MazoResuelto> resolverMazo(MazoModel mazo) async {
     final cartasIds = mazo.entradas.map((e) => e.idCarta).toList();
     final snaps = await Future.wait(
-      cartasIds.map((id) => _db.collection('Cartas').doc(id).get()),
+      cartasIds.map((id) => _getDoc(_db.collection('Cartas').doc(id))),
     );
 
     final cartas = <CartaModel>[];

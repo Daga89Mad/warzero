@@ -25,10 +25,18 @@ void main() async {
     return;
   }
 
-  // Activar persistencia offline de Firestore
+  // ── Configuración de Firestore ─────────────────────────────
+  //
+  // Persistencia ACTIVADA (las escrituras se confirman en local al instante, lo
+  // que hace que cerrar turno sea rápido aunque la red esté lenta), pero con la
+  // caché LIMITADA a 20 MB. La clave del problema anterior era
+  // cacheSizeBytes:UNLIMITED, que desactiva la limpieza y deja crecer la caché
+  // hasta degradar las lecturas. Con un límite, el recolector de basura mantiene
+  // la caché pequeña y no se degrada. Este es el equilibrio recomendado:
+  // escrituras rápidas (offline-tolerant) + lecturas que no se ralentizan.
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
-    cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+    cacheSizeBytes: 20 * 1024 * 1024, // 20 MB. NUNCA CACHE_SIZE_UNLIMITED.
   );
 
   runApp(const WarZeroApp());
@@ -97,17 +105,27 @@ class WarZeroApp extends StatelessWidget {
 // ─── Auth gate ───────────────────────────────────────────────
 /// Escucha el estado de autenticación con un timeout de 8 segundos.
 /// Si Firebase tarda más (o se cuelga), redirige al login directamente.
-class _AuthGate extends StatelessWidget {
+class _AuthGate extends StatefulWidget {
   const _AuthGate();
+
+  @override
+  State<_AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<_AuthGate> {
+  // Stream cacheado: se crea UNA sola vez. Si se crea en build() (como antes),
+  // cada reconstrucción abre una suscripción nueva a authStateChanges, lo que
+  // contribuye a saturar la conexión a Firebase.
+  late final Stream<User?> _authStream =
+      FirebaseAuth.instance.authStateChanges().timeout(
+            const Duration(seconds: 8),
+            onTimeout: (sink) => sink.add(FirebaseAuth.instance.currentUser),
+          );
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
-      // Timeout: si en 8 s no llega ningún evento, tratamos como no logueado.
-      stream: FirebaseAuth.instance.authStateChanges().timeout(
-            const Duration(seconds: 8),
-            onTimeout: (sink) => sink.add(null),
-          ),
+      stream: _authStream,
       builder: (context, snapshot) {
         // Cargando → splash
         if (snapshot.connectionState == ConnectionState.waiting) {

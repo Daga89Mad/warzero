@@ -1,6 +1,7 @@
 // lib/services/turn_service.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../utils/debug_log.dart';
 import '../models/accion_pendiente.dart';
 import '../models/board_state.dart';
 import '../models/efecto_estado.dart';
@@ -91,20 +92,53 @@ class TurnService {
       acciones: acciones,
     ).toMap();
 
-    Exception? lastError;
-    for (int i = 0; i < 3; i++) {
-      try {
-        await lobbyRef.update({
-          'movimientosTurno.$uid': movData,
-          'cerradoPor': FieldValue.arrayUnion([uid]),
-        });
-        return;
-      } catch (e) {
-        lastError = Exception(e.toString());
-        if (i < 2) await Future.delayed(Duration(seconds: i + 1));
-      }
+    final sw = Stopwatch()..start();
+    try {
+      // Dos escrituras al documento de la partida (ya ligero):
+      //   Paso 1: marcar el cierre (arrayUnion de cerradoPor).
+      //   Paso 2: subir los movimientos del turno.
+      await lobbyRef.update({
+        'cerradoPor': FieldValue.arrayUnion([uid]),
+      }).timeout(const Duration(seconds: 12));
+
+      await lobbyRef.update({
+        'movimientosTurno.$uid': movData,
+      }).timeout(const Duration(seconds: 12));
+      appLog('🟦 [SVC] cierre escrito en ${sw.elapsedMilliseconds} ms');
+    } catch (e) {
+      appLog('🟥 [SVC] cierre LANZÓ/timeout tras ${sw.elapsedMilliseconds} ms: '
+          '${e.runtimeType}');
+      rethrow;
     }
-    throw lastError!;
+  }
+
+  // ── Leer historial de combates desde la subcolección ──────
+  /// Lee los últimos turnos del historial desde Partidas/{id}/historial.
+  /// Devuelve las entradas ordenadas por turno ascendente. Mantiene el
+  /// documento principal ligero (el historial ya no vive dentro de él).
+  Future<List<Map<String, dynamic>>> getHistorialCombates({
+    required String lobbyId,
+    int ultimosN = 5,
+  }) async {
+    try {
+      final snap = await _db
+          .collection('Partidas')
+          .doc(lobbyId)
+          .collection('historial')
+          .get()
+          .timeout(const Duration(seconds: 15));
+      final entradas = snap.docs.map((d) => d.data()).toList();
+      // Ordenar por turno ascendente.
+      entradas.sort((a, b) =>
+          ((a['turno'] as num?) ?? 0).compareTo((b['turno'] as num?) ?? 0));
+      if (entradas.length > ultimosN) {
+        return entradas.sublist(entradas.length - ultimosN);
+      }
+      return entradas;
+    } catch (e) {
+      appLog('🟡 [SVC] no se pudo leer historial: ${e.runtimeType}');
+      return [];
+    }
   }
 
   // ── Obtener movimientos de todos ──────────────────────────
@@ -112,7 +146,19 @@ class TurnService {
     required String lobbyId,
     required int turno,
   }) async {
-    final snap = await _db.collection('Partidas').doc(lobbyId).get();
+    // Intentamos SERVIDOR con timeout corto (los movimientos de los demás
+    // jugadores los escriben otros dispositivos y podrían no estar aún en la
+    // caché local). Si no responde rápido, caemos a la lectura normal para no
+    // colgar en entornos donde el canal seguro no se establece.
+    final ref = _db.collection('Partidas').doc(lobbyId);
+    DocumentSnapshot snap;
+    try {
+      snap = await ref
+          .get(const GetOptions(source: Source.server))
+          .timeout(const Duration(seconds: 6));
+    } catch (_) {
+      snap = await ref.get().timeout(const Duration(seconds: 15));
+    }
     if (!snap.exists) return [];
 
     final data = snap.data() as Map<String, dynamic>;
@@ -250,7 +296,12 @@ class TurnService {
       'turnoActual': turnoActual + 1,
       'cerradoPor': [],
       'movimientosTurno': {},
-      'tablero': tableroFinal,
+      // CRÍTICO: el tablero se persiste ALIGERADO (solo campos mutables). Para
+      // calcular combates se había enriquecido con todos los stats del catálogo,
+      // pero guardarlo así engordaba el documento y leerlo se colgaba. Aquí lo
+      // reducimos de nuevo a id + estado mutable; los stats se reconstruyen
+      // desde el catálogo al leer.
+      'tablero': aligerarTablero(tableroFinal),
       'statsPartida': statsActualizadas,
       'ultimoCombateLog': combateLog,
       'ultimoFarmeoLog': farmeoResultado?.farmeoLog ?? [],
@@ -271,15 +322,13 @@ class TurnService {
       final turnoEnDB = (data['turnoActual'] as num?)?.toInt() ?? 0;
       if (turnoEnDB != turnoActual) return; // ya resuelto por otro jugador
 
-      // Leer historial actual y mantener solo los últimos 3 turnos
-      final existingHistorial =
-          List<dynamic>.from((data['historialCombates'] as List?) ?? []);
-      existingHistorial.add(entradaHistorial);
-      if (existingHistorial.length > 3) {
-        existingHistorial.removeRange(0, existingHistorial.length - 3);
-      }
       final finalData = Map<String, dynamic>.from(updateData);
-      finalData['historialCombates'] = existingHistorial;
+      // El historial YA NO se guarda como campo del documento principal (eso
+      // hacía crecer y anidar el documento hasta que leerlo del servidor se
+      // colgaba en Android). Se borra el campo viejo si existe y el historial
+      // del turno se guarda aparte, en la subcolección 'historial' (fuera de la
+      // transacción, ver más abajo).
+      finalData['historialCombates'] = FieldValue.delete();
 
       // ── Manejar eliminaciones ────────────────────────────────
       if (nuevosEliminados.isNotEmpty) {
@@ -306,6 +355,21 @@ class TurnService {
 
       tx.update(lobbyRef, finalData);
     });
+
+    // ── Guardar el historial del turno en la SUBCOLECCIÓN (fuera de la
+    // transacción). Documento: Partidas/{id}/historial/{turno}. Así el
+    // documento principal queda pequeño y plano, y leerlo es instantáneo.
+    // El informe de batalla lee esta subcolección bajo demanda.
+    try {
+      await lobbyRef
+          .collection('historial')
+          .doc(turnoActual.toString())
+          .set(entradaHistorial)
+          .timeout(const Duration(seconds: 15));
+    } catch (e) {
+      appLog('🟡 [SVC] no se pudo guardar historial del turno $turnoActual '
+          '(no crítico): ${e.runtimeType}');
+    }
 
     return resolucion;
   }
@@ -334,6 +398,45 @@ class TurnService {
           .toList();
       return MapEntry(coord, cartas);
     });
+  }
+
+  /// Reduce un tablero crudo a solo los campos que cambian en partida, para que
+  /// el documento de Firestore quede ligero. Los stats base (nombre, fuerza,
+  /// defensa, etc.) se reconstruyen desde el catálogo al leer, así que no hace
+  /// falta persistirlos. Mantiene id, Condicion, owner*, y la evolución.
+  static Map<String, List<Map<String, dynamic>>> aligerarTablero(
+      Map<String, List<Map<String, dynamic>>> tablero) {
+    const mutables = {
+      'id',
+      'Id',
+      'Condicion',
+      'condicion',
+      'ownerUid',
+      'ownerZone',
+      'Evolucion',
+      'evolucion',
+      'IdEvolucion',
+      'idEvolucion',
+      'Efectos',
+      'efectos',
+      'UltimoUsoHabilidad',
+      'ultimoUsoHabilidad',
+    };
+    final result = <String, List<Map<String, dynamic>>>{};
+    tablero.forEach((coord, cartas) {
+      result[coord] = cartas.map((m) {
+        final ligera = <String, dynamic>{};
+        for (final k in mutables) {
+          if (m.containsKey(k)) ligera[k] = m[k];
+        }
+        // Garantizar que siempre va el id (clave para reconstruir).
+        if (!ligera.containsKey('id') && m.containsKey('Id')) {
+          ligera['id'] = m['Id'];
+        }
+        return ligera;
+      }).toList();
+    });
+    return result;
   }
 
   /// Parsea el campo `efectosCelda` del doc del lobby.

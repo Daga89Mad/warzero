@@ -32,6 +32,12 @@ class _RoomScreenState extends State<RoomScreen> {
   int? _selectedEjercitoId;
   bool _navigating = false; // evita doble push
 
+  // Stream cacheado: se crea UNA sola vez. Si se crea en build(), cada
+  // reconstrucción del widget abriría una conexión nueva a Firestore, lo que
+  // satura el canal y degrada toda la conectividad (incluido el login).
+  late final Stream<LobbyModel?> _lobbyStream =
+      _service.lobbyStream(widget.lobbyId);
+
   // ── Seleccionar ejército ──────────────────────────────────
   Future<void> _selectEjercito(int ejercitoId) async {
     setState(() => _selectedEjercitoId = ejercitoId);
@@ -80,7 +86,7 @@ class _RoomScreenState extends State<RoomScreen> {
       child: Scaffold(
         backgroundColor: const Color(0xFF030810),
         body: StreamBuilder<LobbyModel?>(
-          stream: _service.lobbyStream(widget.lobbyId),
+          stream: _lobbyStream,
           builder: (ctx, snap) {
             if (snap.connectionState == ConnectionState.waiting) {
               return const Center(
@@ -458,14 +464,26 @@ class _PlayerSlot extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // SELECTOR DE EJÉRCITO
 // ─────────────────────────────────────────────────────────────
-class _ArmySelector extends StatelessWidget {
+class _ArmySelector extends StatefulWidget {
   final int? selectedId;
   final void Function(int) onSelect;
 
   const _ArmySelector({required this.selectedId, required this.onSelect});
 
   @override
+  State<_ArmySelector> createState() => _ArmySelectorState();
+}
+
+class _ArmySelectorState extends State<_ArmySelector> {
+  // Catálogo estático: una sola lectura, cacheada. (Antes se abría un stream
+  // en tiempo real en cada build, una fuga de conexiones.)
+  late final Future<List<EjercitoInfo>> _ejercitosFuture =
+      EjercitoService().fetchEjercitos();
+
+  @override
   Widget build(BuildContext context) {
+    final selectedId = widget.selectedId;
+    final onSelect = widget.onSelect;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -482,8 +500,8 @@ class _ArmySelector extends StatelessWidget {
           ),
         ),
         Expanded(
-          child: StreamBuilder<List<EjercitoInfo>>(
-            stream: EjercitoService().ejercitosStream(),
+          child: FutureBuilder<List<EjercitoInfo>>(
+            future: _ejercitosFuture,
             builder: (ctx, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -202,7 +203,7 @@ class _LobbyScreenState extends State<LobbyScreen>
 // ─────────────────────────────────────────────────────────────
 // LISTA DE PARTIDAS PÚBLICAS
 // ─────────────────────────────────────────────────────────────
-class _PublicLobbiesList extends StatelessWidget {
+class _PublicLobbiesList extends StatefulWidget {
   final LobbyService service;
   final String uid;
   final String alias;
@@ -218,9 +219,24 @@ class _PublicLobbiesList extends StatelessWidget {
   });
 
   @override
+  State<_PublicLobbiesList> createState() => _PublicLobbiesListState();
+}
+
+class _PublicLobbiesListState extends State<_PublicLobbiesList> {
+  // Stream cacheado (creado una sola vez), no en cada build: evita abrir una
+  // conexión nueva a Firestore en cada reconstrucción del widget.
+  late final Stream<List<LobbyModel>> _stream =
+      widget.service.lobbiesPublicosStream();
+
+  @override
   Widget build(BuildContext context) {
+    final service = widget.service;
+    final uid = widget.uid;
+    final alias = widget.alias;
+    final onJoin = widget.onJoin;
+    final onError = widget.onError;
     return StreamBuilder<List<LobbyModel>>(
-      stream: service.lobbiesPublicosStream(),
+      stream: _stream,
       builder: (ctx, snap) {
         if (snap.hasError) {
           return Center(
@@ -1301,11 +1317,16 @@ class _MisPartidasListState extends State<_MisPartidasList> {
   @override
   void initState() {
     super.initState();
+    // "Despertar" la conexión de Firestore por si el canal quedó parado
+    // (típico en Android tras perder/recuperar red), de modo que el stream
+    // reciba datos del servidor en lugar de quedarse esperando.
+    FirebaseFirestore.instance.enableNetwork().catchError((_) {});
     _stream = widget.service.misPartidasStream(widget.uid);
   }
 
   /// Recrea el stream (botón "reintentar").
   void _recargar() {
+    FirebaseFirestore.instance.enableNetwork().catchError((_) {});
     setState(() {
       _stream = widget.service.misPartidasStream(widget.uid);
     });
