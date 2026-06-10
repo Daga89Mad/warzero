@@ -27,13 +27,8 @@ void main() async {
 
   // ── Configuración de Firestore ─────────────────────────────
   //
-  // Persistencia ACTIVADA (las escrituras se confirman en local al instante, lo
-  // que hace que cerrar turno sea rápido aunque la red esté lenta), pero con la
-  // caché LIMITADA a 20 MB. La clave del problema anterior era
-  // cacheSizeBytes:UNLIMITED, que desactiva la limpieza y deja crecer la caché
-  // hasta degradar las lecturas. Con un límite, el recolector de basura mantiene
-  // la caché pequeña y no se degrada. Este es el equilibrio recomendado:
-  // escrituras rápidas (offline-tolerant) + lecturas que no se ralentizan.
+  // Persistencia ACTIVADA (escrituras rápidas, tolerantes a red lenta) con caché
+  // limitada a 20 MB (nunca UNLIMITED, que degrada las lecturas).
   FirebaseFirestore.instance.settings = const Settings(
     persistenceEnabled: true,
     cacheSizeBytes: 20 * 1024 * 1024, // 20 MB. NUNCA CACHE_SIZE_UNLIMITED.
