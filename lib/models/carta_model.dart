@@ -12,6 +12,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 ///   1 → Evolución
 ///   3 → Estática
 ///   4 → Acción
+///   5 → Especial
 enum CondicionCarta {
   /// Carta normal, sin restricciones.
   basica,
@@ -29,6 +30,10 @@ enum CondicionCarta {
   /// referenciada por `idHabilidad`. El origen del rango es el cuartel
   /// general del jugador. Tras usarla se descarta.
   accion,
+
+  /// Carta especial: NO se reparte (ni al inicio ni cada turno), igual que las
+  /// evoluciones. Solo se obtiene comprándola en el cuartel a cambio de Energies.
+  especial,
 }
 
 extension CondicionCartaExt on CondicionCarta {
@@ -43,6 +48,8 @@ extension CondicionCartaExt on CondicionCarta {
         return 3;
       case CondicionCarta.accion:
         return 4;
+      case CondicionCarta.especial:
+        return 5;
     }
   }
 
@@ -57,6 +64,8 @@ extension CondicionCartaExt on CondicionCarta {
         return 'Estática';
       case CondicionCarta.accion:
         return 'Acción';
+      case CondicionCarta.especial:
+        return 'Especial';
     }
   }
 
@@ -71,6 +80,8 @@ extension CondicionCartaExt on CondicionCarta {
         return '🏰';
       case CondicionCarta.accion:
         return '⚡';
+      case CondicionCarta.especial:
+        return '⭐';
     }
   }
 
@@ -85,6 +96,8 @@ extension CondicionCartaExt on CondicionCarta {
         return 0xFFE0A030;
       case CondicionCarta.accion:
         return 0xFF40C0FF;
+      case CondicionCarta.especial:
+        return 0xFFE0C040;
     }
   }
 
@@ -97,6 +110,8 @@ extension CondicionCartaExt on CondicionCarta {
         return CondicionCarta.estatica;
       case 4:
         return CondicionCarta.accion;
+      case 5:
+        return CondicionCarta.especial;
       default:
         return CondicionCarta.basica;
     }
@@ -154,6 +169,11 @@ class CartaModel {
   /// Condición especial de la carta. Determina reglas de juego.
   final CondicionCarta condicion;
 
+  /// True si esta carta forma parte del MAZO POR DEFECTO de su ejército (la que
+  /// reciben los jugadores que no han creado un mazo propio). Se marca con un
+  /// check en la edición de cartas. Campo Firestore: `PorDefecto`.
+  final bool porDefecto;
+
   const CartaModel({
     required this.id,
     required this.nombre,
@@ -171,6 +191,7 @@ class CartaModel {
     this.idEvolucion = '',
     this.evolucion = 0,
     this.condicion = CondicionCarta.basica,
+    this.porDefecto = false,
   });
 
   /// True si esta carta tiene una evolución configurada.
@@ -185,6 +206,9 @@ class CartaModel {
   /// True si la carta es de Acción: se juega desde la mano para lanzar una
   /// habilidad y se descarta tras su uso.
   bool get esAccion => condicion == CondicionCarta.accion;
+
+  /// True si la carta es Especial: no se reparte; solo se compra en el cuartel.
+  bool get esEspecial => condicion == CondicionCarta.especial;
 
   /// True si la carta tiene una habilidad asignada (id > 0 en el catálogo).
   bool get tieneHabilidad => idHabilidad > 0;
@@ -229,6 +253,7 @@ class CartaModel {
       idEvolucion: d['IdEvolucion']?.toString() ?? '',
       evolucion: _parseInt(d['Evolucion']),
       condicion: CondicionCartaExt.fromInt(_parseInt(d['Condicion'])),
+      porDefecto: d['PorDefecto'] == true,
     );
   }
 
@@ -252,6 +277,7 @@ class CartaModel {
         evolucion: _field(d, 'Evolucion', 'evolucion'),
         condicion:
             CondicionCartaExt.fromInt(_field(d, 'Condicion', 'condicion')),
+        porDefecto: (d['PorDefecto'] ?? d['porDefecto']) == true,
       );
 
   // ── Serialización ─────────────────────────────────────────
@@ -272,6 +298,7 @@ class CartaModel {
         'IdEvolucion': idEvolucion,
         'Evolucion': evolucion,
         'Condicion': condicion.value,
+        'PorDefecto': porDefecto,
       };
 
   CartaModel copyWith({
@@ -291,6 +318,7 @@ class CartaModel {
     String? idEvolucion,
     int? evolucion,
     CondicionCarta? condicion,
+    bool? porDefecto,
   }) =>
       CartaModel(
         id: id ?? this.id,
@@ -310,6 +338,7 @@ class CartaModel {
         idEvolucion: idEvolucion ?? this.idEvolucion,
         evolucion: evolucion ?? this.evolucion,
         condicion: condicion ?? this.condicion,
+        porDefecto: porDefecto ?? this.porDefecto,
       );
 
   String get tipoLabel {

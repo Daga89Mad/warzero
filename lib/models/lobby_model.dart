@@ -139,7 +139,12 @@ class LobbyModel {
 
   factory LobbyModel.fromFirestore(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
+    return LobbyModel.fromMap(doc.id, d);
+  }
 
+  /// Construye un LobbyModel desde un mapa plano (p. ej. el estado que devuelve
+  /// la API por HTTP). `creadoEn` puede venir como Timestamp o como epoch millis.
+  factory LobbyModel.fromMap(String id, Map<String, dynamic> d) {
     final rawStats = d['statsPartida'] as Map<String, dynamic>? ?? {};
     final stats = rawStats.map(
       (uid, v) => MapEntry(
@@ -155,18 +160,28 @@ class LobbyModel {
     final rawElim = d['jugadoresEliminados'] as List<dynamic>? ?? [];
     final eliminados = rawElim.map((e) => e.toString()).toList();
 
+    DateTime creadoEn;
+    final rawCreado = d['creadoEn'];
+    if (rawCreado is Timestamp) {
+      creadoEn = rawCreado.toDate();
+    } else if (rawCreado is num) {
+      creadoEn = DateTime.fromMillisecondsSinceEpoch(rawCreado.toInt());
+    } else {
+      creadoEn = DateTime.now();
+    }
+
     return LobbyModel(
-      id: doc.id,
+      id: id,
       nombre: d['nombre'] as String? ?? 'Partida',
       hostUid: d['hostUid'] as String? ?? '',
       esPrivada: d['esPrivada'] as bool? ?? false,
       contrasena: d['contrasena'] as String? ?? '',
       maxJugadores: (d['maxJugadores'] as num?)?.toInt() ?? 4,
       jugadores: ((d['jugadores'] as List<dynamic>?) ?? [])
-          .map((j) => LobbyJugador.fromMap(j as Map<String, dynamic>))
+          .map((j) => LobbyJugador.fromMap(Map<String, dynamic>.from(j as Map)))
           .toList(),
       estado: _parseEstado(d['estado'] as String?),
-      creadoEn: (d['creadoEn'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      creadoEn: creadoEn,
       modoTurno: _parseModoTurno(d['modoTurno'] as String?),
       turnoActual: (d['turnoActual'] as num?)?.toInt() ?? 1,
       cerradoPor: List<String>.from(d['cerradoPor'] as List? ?? []),

@@ -9,18 +9,24 @@ class LobbyService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   // ── Stream de lobbies públicos en espera ──────────────────
+  /// Filtra SOLO por estado en el servidor (índice de campo único, siempre
+  /// disponible) y descarta las privadas en cliente. Antes combinaba dos
+  /// `where` (esPrivada + estado), lo que exige un índice COMPUESTO en
+  /// Firestore: si no está desplegado, el stream lanza error y la lista deja de
+  /// mostrar partidas ("dejó de buscar partidas"). Mismo criterio que en
+  /// [misPartidasStream].
   Stream<List<LobbyModel>> lobbiesPublicosStream() {
     return _db
         .collection('Partidas')
-        .where('esPrivada', isEqualTo: false)
         .where('estado', isEqualTo: 'esperando')
-        .limit(30)
+        .limit(50)
         .snapshots()
         .map((s) {
       final list = <LobbyModel>[];
       for (final d in s.docs) {
         try {
-          list.add(LobbyModel.fromFirestore(d));
+          final l = LobbyModel.fromFirestore(d);
+          if (!l.esPrivada) list.add(l); // privadas fuera, en cliente
         } catch (_) {
           // Ignorar documentos malformados.
         }

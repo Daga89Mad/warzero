@@ -16,6 +16,9 @@ enum RangoTipo {
 
   /// Cualquier celda del tablero (excluido siempre el propio origen).
   cualquiera,
+
+  /// Solo la propia celda de origen (donde se marca/lanza).
+  propia,
 }
 
 class RangoHabilidad {
@@ -34,6 +37,10 @@ class RangoHabilidad {
       : tipo = RangoTipo.cualquiera,
         distancia = 0;
 
+  const RangoHabilidad.propia()
+      : tipo = RangoTipo.propia,
+        distancia = 0;
+
   String get label {
     switch (tipo) {
       case RangoTipo.frontera:
@@ -42,6 +49,8 @@ class RangoHabilidad {
         return 'Medio (radio $distancia)';
       case RangoTipo.cualquiera:
         return 'Lejano (cualquiera)';
+      case RangoTipo.propia:
+        return 'Cercano (misma celda)';
     }
   }
 }
@@ -65,6 +74,16 @@ enum EfectoTipo {
   /// Las cartas envenenadas pierden [defensaReducida] de defensa durante el
   /// resto de la duración (la carta arrastra el efecto aunque se mueva).
   veneno,
+
+  /// Marca la celda como paralizada durante N turnos. Las cartas que estén o
+  /// entren en la celda durante esa duración no pueden moverse hasta que el
+  /// efecto expire (la carta arrastra el efecto aunque cambie de celda).
+  paralisis,
+
+  /// Marca la celda como escudada durante N turnos. Las cartas del LANZADOR
+  /// que estén o entren en la celda ganan [defensaReducida] de defensa extra
+  /// (el mismo campo se reutiliza como magnitud; aquí SUMA en vez de restar).
+  escudo,
 }
 
 class EfectoHabilidad {
@@ -90,6 +109,16 @@ class EfectoHabilidad {
     this.defensaReducida = 3,
     this.duracionTurnos = 3,
   }) : tipo = EfectoTipo.veneno;
+
+  const EfectoHabilidad.paralisis({
+    this.duracionTurnos = 3,
+  })  : tipo = EfectoTipo.paralisis,
+        defensaReducida = 0;
+
+  const EfectoHabilidad.escudo({
+    this.defensaReducida = 3,
+    this.duracionTurnos = 3,
+  }) : tipo = EfectoTipo.escudo;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -148,7 +177,9 @@ class Habilidad {
 ///   1, 2, 3 → disparo (cercano, medio, lejano)
 ///   4, 5    → teletransporte (medio, lejano) ← invertido a propósito
 ///   6, 7, 8 → veneno (cercano, medio, lejano)
-///   9+      → reservado (parálisis y futuras)
+///   9, 10, 11 → parálisis (cercano, medio, lejano)
+///   12, 13, 14 → escudo (propia, adyacente, lejano)
+///   15+      → reservado (futuras)
 class CatalogoHabilidades {
   CatalogoHabilidades._();
 
@@ -245,6 +276,72 @@ class CatalogoHabilidades {
       icon: '☠',
       rango: RangoHabilidad.cualquiera(),
       efecto: EfectoHabilidad.veneno(),
+    ),
+
+    // ── PARÁLISIS ──────────────────────────────────────────
+    9: Habilidad(
+      id: 9,
+      nombre: 'Parálisis cercana',
+      descripcion:
+          'Paraliza una celda adyacente al origen. Durante 3 turnos las cartas '
+          'en esa celda (o que entren) no pueden moverse.',
+      icon: '⏱',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.paralisis(),
+    ),
+    10: Habilidad(
+      id: 10,
+      nombre: 'Parálisis media',
+      descripcion:
+          'Paraliza una celda dentro de un radio de 7 desde el origen, excepto '
+          'cuarteles. Durante 3 turnos las cartas en ella (o que entren) no '
+          'pueden moverse.',
+      icon: '⏱',
+      rango: RangoHabilidad.radioN(7),
+      efecto: EfectoHabilidad.paralisis(),
+      excluyeCG: true,
+    ),
+    11: Habilidad(
+      id: 11,
+      nombre: 'Parálisis lejana',
+      descripcion:
+          'Paraliza cualquier celda del mapa. Durante 3 turnos las cartas en '
+          'ella (o que entren) no pueden moverse.',
+      icon: '⏱',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.paralisis(),
+    ),
+
+    // ── ESCUDO ─────────────────────────────────────────────
+    12: Habilidad(
+      id: 12,
+      nombre: 'Escudo cercano',
+      descripcion:
+          'Escuda la propia celda de origen. Durante 3 turnos tus cartas en '
+          'ella (o que entren) ganan 3 de defensa.',
+      icon: '🛡',
+      rango: RangoHabilidad.propia(),
+      efecto: EfectoHabilidad.escudo(),
+    ),
+    13: Habilidad(
+      id: 13,
+      nombre: 'Escudo medio',
+      descripcion:
+          'Escuda una celda adyacente al origen. Durante 3 turnos tus cartas '
+          'en ella (o que entren) ganan 3 de defensa.',
+      icon: '🛡',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.escudo(),
+    ),
+    14: Habilidad(
+      id: 14,
+      nombre: 'Escudo lejano',
+      descripcion:
+          'Escuda cualquier celda del mapa. Durante 3 turnos tus cartas en '
+          'ella (o que entren) ganan 3 de defensa.',
+      icon: '🛡',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.escudo(),
     ),
   };
 

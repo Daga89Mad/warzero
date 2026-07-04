@@ -86,6 +86,13 @@ class RevisionTurnoScreen extends StatelessWidget {
       final m = Map<String, dynamic>.from(e as Map);
       final origen = m['origen'] as String?;
       if (origen != null && origen.isNotEmpty) result.add(origen);
+      // El servidor escribe `objetivo` (singular) por acción; se mantiene el
+      // soporte de `objetivos` (lista) por compatibilidad, y `destino` para el
+      // teletransporte. Esto marca la celda DONDE cayó la habilidad.
+      final objetivo = m['objetivo'] as String?;
+      if (objetivo != null && objetivo.isNotEmpty) result.add(objetivo);
+      final destino = m['destino'] as String?;
+      if (destino != null && destino.isNotEmpty) result.add(destino);
       final objetivos = m['objetivos'] as List? ?? [];
       for (final o in objetivos) {
         if (o is String && o.isNotEmpty) result.add(o);
@@ -149,11 +156,23 @@ class RevisionTurnoScreen extends StatelessWidget {
                     // Cada celda es cuadrada. Calcular el tamaño que cabe en
                     // ambas dimensiones, respetando un mini-margen para labels.
                     const labelGutter = 18.0;
-                    final cellW = (maxW - labelGutter) / config.cols;
-                    final cellH = (maxH - labelGutter) / config.rows;
+                    // Cada _MiniCell añade margin EdgeInsets.all(0.5) → 1px de
+                    // ancho/alto extra por celda. Hay que descontarlo o la fila
+                    // desborda (p. ej. 10 columnas = 10px de overflow).
+                    const cellMargin = 1.0;
+                    final cellW =
+                        (maxW - labelGutter - config.cols * cellMargin) /
+                            config.cols;
+                    final cellH =
+                        (maxH - labelGutter - config.rows * cellMargin) /
+                            config.rows;
                     final cellSize = cellW < cellH ? cellW : cellH; // cuadrada
-                    final gridW = cellSize * config.cols + labelGutter;
-                    final gridH = cellSize * config.rows + labelGutter;
+                    final gridW = cellSize * config.cols +
+                        config.cols * cellMargin +
+                        labelGutter;
+                    final gridH = cellSize * config.rows +
+                        config.rows * cellMargin +
+                        labelGutter;
 
                     return Center(
                       child: SizedBox(
@@ -567,6 +586,7 @@ class _MiniCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final cartas = boardState.getCelda(coord).cartas;
     final tieneCartas = cartas.isNotEmpty;
+    final isRayo = boardState.esRayo(coord); // ← rayo de farmeo
 
     // ── Color de fondo base ──────────────────────────────────
     Color bgColor = const Color(0xFF0A1525);
@@ -574,6 +594,9 @@ class _MiniCell extends StatelessWidget {
       bgColor = isLocalObelisco
           ? const Color(0xFF1A1A0A) // dorado oscuro
           : const Color(0xFF1A0A0A); // rojo oscuro
+    }
+    if (isRayo && !isObelisco && !isMovRival) {
+      bgColor = const Color(0xFFD4A800).withOpacity(0.14); // tinte dorado rayo
     }
     if (isMovRival) {
       // Amarillo translúcido (prioritario sobre el fondo de obelisco).
@@ -605,6 +628,13 @@ class _MiniCell extends StatelessWidget {
       shadows = [
         BoxShadow(
             color: const Color(0xFF40C0FF).withOpacity(0.35), blurRadius: 6),
+      ];
+    } else if (isRayo) {
+      borderColor = const Color(0xFFD4A800);
+      borderWidth = 1.6;
+      shadows = [
+        BoxShadow(
+            color: const Color(0xFFD4A800).withOpacity(0.45), blurRadius: 8),
       ];
     } else if (isObelisco) {
       borderColor = isLocalObelisco
@@ -652,6 +682,13 @@ class _MiniCell extends StatelessWidget {
               top: 2,
               right: 2,
               child: Icon(Icons.flash_on, size: 9, color: Color(0xFF40C0FF)),
+            ),
+          // Icono del rayo de farmeo (abajo-derecha, para no chocar con los de arriba)
+          if (isRayo)
+            const Positioned(
+              bottom: 2,
+              right: 2,
+              child: Icon(Icons.bolt, size: 10, color: Color(0xFFFFE066)),
             ),
           // Fichas de cartas en el centro (puntos coloreados por jugador)
           if (tieneCartas)

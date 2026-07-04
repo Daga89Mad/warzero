@@ -16,6 +16,11 @@ class HandWidget extends StatelessWidget {
   /// Resolver carta de evolución (para preview al hacer long press).
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
 
+  /// Sacrificar la carta de índice [i] a cambio de la mitad de su coste.
+  /// `null` o [permiteSacrificio] = false → no se muestra el botón.
+  final Future<void> Function(int index)? onSacrificar;
+  final bool permiteSacrificio;
+
   const HandWidget({
     super.key,
     required this.cartas,
@@ -23,6 +28,8 @@ class HandWidget extends StatelessWidget {
     required this.onCardTap,
     this.energiesDisponibles = 0,
     this.resolveEvolucion,
+    this.onSacrificar,
+    this.permiteSacrificio = false,
   });
 
   @override
@@ -63,6 +70,10 @@ class HandWidget extends StatelessWidget {
               context,
               carta,
               resolveEvolucion: resolveEvolucion,
+              onSacrificar: (onSacrificar != null && permiteSacrificio)
+                  ? () async => onSacrificar!(i)
+                  : null,
+              recompensaSacrificio: carta.coste ~/ 2,
             ),
           );
         },

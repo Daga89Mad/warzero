@@ -1,10 +1,10 @@
 // lib/views/cartas_screen.dart
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart';
+import '../services/warzero_api.dart';
 import '../widgets/card_detail_overlay.dart';
 import 'card_skin_selector_screen.dart';
 
@@ -30,7 +30,7 @@ class CartasScreen extends StatefulWidget {
 
 class _CartasScreenState extends State<CartasScreen>
     with SingleTickerProviderStateMixin {
-  final _db = FirebaseFirestore.instance;
+  final _api = WarZeroApi();
   final _uid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
   bool _loading = true;
@@ -55,36 +55,60 @@ class _CartasScreenState extends State<CartasScreen>
 
   Future<void> _loadData() async {
     try {
-      final results = await Future.wait([
-        _db.collection('Cartas').get(),
-        _db.collection('Jugadores').doc(_uid).collection('Coleccion').get(),
-        _db.collection('Jugadores').doc(_uid).get(),
-      ]);
+      // Una sola llamada HTTP trae catálogo + colección + stats + skins.
+      final res = await _api.obtenerColeccion(_uid);
 
-      final cartasSnap = results[0] as QuerySnapshot;
-      final coleccionSnap = results[1] as QuerySnapshot;
-      final jugadorSnap = results[2] as DocumentSnapshot;
+      if (res == null) {
+        if (!mounted) return;
+        _tabController = TabController(length: 1, vsync: this);
+        setState(() {
+          _catalogoGlobal = {};
+          _coleccion = {};
+          _cartasPorEjercito = {};
+          _ejercitosConCartas = [];
+          _jugadorStats = null;
+          _loading = false;
+        });
+        return;
+      }
 
-      final catalogo = <String, CartaModel>{
-        for (final doc in cartasSnap.docs) doc.id: CartaModel.fromFirestore(doc)
-      };
-
+      final catalogo = <String, CartaModel>{};
       final coleccion = <String, _ColeccionEntry>{};
-      for (final doc in coleccionSnap.docs) {
-        final d = doc.data() as Map<String, dynamic>;
-        coleccion[doc.id] = _ColeccionEntry(
-          cartaId: doc.id,
-          cantidad: int.tryParse(d['cantidad']?.toString() ?? '1') ?? 1,
-          skinSeleccionada: d['skinSeleccionada'] as String?,
+      final skinCache = <String, String>{};
+
+      // Cartas poseídas: cada una trae los campos de catálogo + datos de colección.
+      for (final raw in (res['cartas'] as List? ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final carta = CartaModel.fromMap(m);
+        if (carta.id.isEmpty) continue;
+        catalogo[carta.id] = carta;
+        coleccion[carta.id] = _ColeccionEntry(
+          cartaId: carta.id,
+          cantidad: (m['cantidad'] as num?)?.toInt() ?? 1,
+          skinSeleccionada: m['skinSeleccionada'] as String?,
           skinsDesbloqueadas:
-              List<String>.from(d['skinsDesbloqueadas'] as List? ?? []),
-          fechaObtenida: (d['fechaObtenida'] as Timestamp?)?.toDate(),
+              List<String>.from(m['skinsDesbloqueadas'] as List? ?? []),
+          fechaObtenida: m['fechaObtenida'] is num
+              ? DateTime.fromMillisecondsSinceEpoch(
+                  (m['fechaObtenida'] as num).toInt())
+              : null,
         );
+        final skinImg = m['skinImagen'] as String?;
+        if (skinImg != null && skinImg.isNotEmpty)
+          skinCache[carta.id] = skinImg;
+      }
+
+      // Evoluciones referenciadas → al catálogo (para verlas desde la base).
+      for (final raw in (res['evoluciones'] as List? ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final carta = CartaModel.fromMap(m);
+        if (carta.id.isNotEmpty) catalogo[carta.id] = carta;
       }
 
       _JugadorStats? stats;
-      if (jugadorSnap.exists) {
-        final d = jugadorSnap.data() as Map<String, dynamic>;
+      final jug = res['jugador'];
+      if (jug is Map) {
+        final d = Map<String, dynamic>.from(jug);
         stats = _JugadorStats(
           alias: d['alias']?.toString() ?? 'Comandante',
           nivel: (d['nivel'] as num?)?.toInt() ?? 1,
@@ -122,10 +146,11 @@ class _CartasScreenState extends State<CartasScreen>
         _cartasPorEjercito = agrupadas;
         _ejercitosConCartas = ejercitosConCartas;
         _jugadorStats = stats;
+        _skinImageCache
+          ..clear()
+          ..addAll(skinCache);
         _loading = false;
       });
-
-      _resolverImagenesSkins(coleccion);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -136,37 +161,13 @@ class _CartasScreenState extends State<CartasScreen>
     }
   }
 
-  Future<void> _resolverImagenesSkins(
-      Map<String, _ColeccionEntry> coleccion) async {
-    for (final entry in coleccion.entries) {
-      final skinId = entry.value.skinSeleccionada;
-      if (skinId == null || skinId.isEmpty) continue;
-      try {
-        final doc = await _db.collection('Skins').doc(skinId).get();
-        if (!doc.exists || !mounted) continue;
-        final url = (doc.data() as Map<String, dynamic>)['imagen'] as String?;
-        if (url != null && url.isNotEmpty && mounted) {
-          setState(() => _skinImageCache[entry.key] = url);
-        }
-      } catch (_) {}
-    }
-  }
-
   String _imagenEfectiva(CartaModel carta) =>
       _skinImageCache[carta.id] ?? carta.imagen;
 
-  // ── Resuelve la carta evolucionada — primero catálogo local, luego Firestore
-  Future<CartaModel?> _resolveEvolucion(String idEvolucion) async {
-    final local = _catalogoGlobal[idEvolucion];
-    if (local != null) return local;
-    try {
-      final doc = await _db.collection('Cartas').doc(idEvolucion).get();
-      if (!doc.exists) return null;
-      return CartaModel.fromFirestore(doc);
-    } catch (_) {
-      return null;
-    }
-  }
+  // ── Resuelve la carta evolucionada desde el catálogo local (ya incluye las
+  //    evoluciones devueltas por la API). Sin acceso a Firestore.
+  Future<CartaModel?> _resolveEvolucion(String idEvolucion) async =>
+      _catalogoGlobal[idEvolucion];
 
   // ── Abre el detalle con la flecha de evolución (solo visualización).
   // Precachea la imagen antes de abrir el dialog para que se pinte

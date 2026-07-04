@@ -42,6 +42,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
   CartaModel? _evolucionCarta;
   bool _saving = false;
   bool _loadingEvol = false;
+  bool _porDefecto = false;
 
   @override
   void initState() {
@@ -59,6 +60,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
     _ejercito = c?.ejercito ?? 1;
     _tipo = c?.tipo ?? 1;
     _condicion = c?.condicion ?? CondicionCarta.basica;
+    _porDefecto = c?.porDefecto ?? false;
 
     // Cargar carta de evolución si existe
     if (c != null && c.idEvolucion.isNotEmpty) {
@@ -126,6 +128,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         'IdEvolucion': _evolucionCarta?.id ?? '',
         'Evolucion': int.tryParse(_evolucionCosteCtrl.text) ?? 0,
         'Condicion': _condicion.value,
+        'PorDefecto': _porDefecto,
       };
 
   Future<void> _guardar() async {
@@ -382,6 +385,26 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
                   .toList(),
               onChanged: (v) =>
                   setState(() => _condicion = CondicionCartaExt.fromInt(v!)),
+            ),
+            // ── Check: pertenece al MAZO POR DEFECTO de su ejército ──────
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                value: _porDefecto,
+                activeColor: const Color(0xFFC8A860),
+                title: const Text('Mazo por defecto',
+                    style: TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 12,
+                        color: Color(0xFFC8A860))),
+                subtitle: const Text(
+                    'Si se marca, esta carta forma el mazo inicial de su '
+                    'ejército para jugadores sin mazo propio.',
+                    style: TextStyle(fontSize: 9, color: Color(0xFF7A8898))),
+                onChanged: (v) => setState(() => _porDefecto = v),
+              ),
             ),
             if (_condicion == CondicionCarta.evolucion)
               const Padding(

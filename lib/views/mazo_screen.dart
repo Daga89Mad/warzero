@@ -5,8 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart';
-import '../services/ejercito_service.dart';
-import '../services/mazo_service.dart';
+import '../services/warzero_api.dart';
 
 // ─────────────────────────────────────────────────────────────
 // MAZO SCREEN  (gestión de mazos por ejército)
@@ -41,6 +40,18 @@ class _MazoPerfil {
       total: (d['total'] as num?)?.toInt() ?? 0,
     );
   }
+
+  /// Igual que [fromFirestore] pero desde el JSON de la API (GET /warzero/mismazos).
+  factory _MazoPerfil.fromMap(Map<String, dynamic> d) {
+    return _MazoPerfil(
+      id: d['id'] as String? ?? '',
+      nombre: d['nombre'] as String? ?? 'Mazo sin nombre',
+      ejercitoId: (d['ejercitoId'] as num?)?.toInt() ?? 1,
+      esPrincipal: d['esPrincipal'] as bool? ?? false,
+      cartaIds: List<String>.from(d['cartaIds'] as List? ?? []),
+      total: (d['total'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 class MazoScreen extends StatefulWidget {
@@ -59,6 +70,8 @@ class _MazoScreenState extends State<MazoScreen> {
   List<_MazoPerfil> _mazos = [];
   List<CartaModel> _todasLasCartas = [];
   bool _loading = true;
+  bool _error = false;
+  final _api = WarZeroApi();
 
   @override
   void initState() {
@@ -66,31 +79,57 @@ class _MazoScreenState extends State<MazoScreen> {
     _loadData();
   }
 
+  EjercitoInfo _ejercitoFromMap(Map<String, dynamic> m) => EjercitoInfo(
+        id: (m['id'] as num?)?.toInt() ?? 0,
+        nombre: (m['nombre'] as String?)?.isNotEmpty == true
+            ? m['nombre'] as String
+            : 'Ejército ${m['id']}',
+        descripcion: m['descripcion'] as String? ?? '',
+        icono: (m['icono'] as String?)?.isNotEmpty == true
+            ? m['icono'] as String
+            : '⚔️',
+      );
+
   Future<void> _loadData() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _error = false;
+    });
     try {
-      // Cargar ejércitos, cartas y mazos en paralelo
-      final results = await Future.wait([
-        EjercitoService().fetchEjercitos(),
-        MazoService().fetchTodasLasCartas(),
-        _db.collection('Jugadores').doc(_uid).collection('Mazos').get(),
-      ]);
+      // Vía API (sin Firestore realtime, que se cuelga en Android tras la
+      // partida). El servidor devuelve ejércitos + catálogo + perfiles de mazo
+      // en una sola llamada con timeout, así nunca se queda colgado.
+      final data = await _api.obtenerMisMazos(_uid);
 
-      final ejercitos = results[0] as List<EjercitoInfo>;
-      final cartas = results[1] as List<CartaModel>;
-      final snap = results[2] as QuerySnapshot;
+      final ejercitos = ((data['ejercitos'] as List?) ?? [])
+          .map((e) => _ejercitoFromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      final cartas = ((data['cartas'] as List?) ?? [])
+          .map((e) => CartaModel.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
+      final mazos = ((data['mazos'] as List?) ?? [])
+          .map((e) => _MazoPerfil.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
 
+      if (!mounted) return;
       setState(() {
-        _ejercitos = ejercitos;
-        _selectedEjercitoId = ejercitos.isNotEmpty ? ejercitos.first.id : 1;
+        _ejercitos = ejercitos.isNotEmpty ? ejercitos : kEjercitos;
+        _selectedEjercitoId = _ejercitos.isNotEmpty ? _ejercitos.first.id : 1;
         _todasLasCartas = cartas;
-        _mazos = snap.docs.map(_MazoPerfil.fromFirestore).toList();
+        _mazos = mazos;
         _loading = false;
       });
     } catch (e) {
-      setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = true;
+      });
     }
   }
+
+  /// Reintento del botón de error.
+  Future<void> _retry() => _loadData();
 
   // ── Mazos del ejército activo ─────────────────────────────
   List<_MazoPerfil> get _mazosDelEjercito =>
@@ -315,31 +354,75 @@ class _MazoScreenState extends State<MazoScreen> {
       body: _loading
           ? const Center(
               child: CircularProgressIndicator(color: Color(0xFFC8A860)))
-          : Column(
-              children: [
-                // ── Selector de ejército ──
-                _EjercitoTabs(
-                  ejercitos: _ejercitos,
-                  selected: _selectedEjercitoId,
-                  onSelect: (id) => setState(() => _selectedEjercitoId = id),
-                ),
+          : _error
+              ? _MazosErrorState(onRetry: _retry)
+              : Column(
+                  children: [
+                    // ── Selector de ejército ──
+                    _EjercitoTabs(
+                      ejercitos: _ejercitos,
+                      selected: _selectedEjercitoId,
+                      onSelect: (id) =>
+                          setState(() => _selectedEjercitoId = id),
+                    ),
 
-                const Divider(color: Color(0x20C8A860), height: 1),
+                    const Divider(color: Color(0x20C8A860), height: 1),
 
-                // ── Lista de mazos ──
-                Expanded(
-                  child: _MazoList(
-                    mazos: _mazosDelEjercito,
-                    canAdd: _mazosDelEjercito.length < 3,
-                    onAdd: _crearMazo,
-                    onEdit: _openBuilder,
-                    onRename: _renombrarMazo,
-                    onDelete: _eliminarMazo,
-                    onSetPrincipal: _setPrincipal,
-                  ),
+                    // ── Lista de mazos ──
+                    Expanded(
+                      child: _MazoList(
+                        mazos: _mazosDelEjercito,
+                        canAdd: _mazosDelEjercito.length < 3,
+                        onAdd: _crearMazo,
+                        onEdit: _openBuilder,
+                        onRename: _renombrarMazo,
+                        onDelete: _eliminarMazo,
+                        onSetPrincipal: _setPrincipal,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ESTADO DE ERROR / REINTENTO
+// ─────────────────────────────────────────────────────────────
+class _MazosErrorState extends StatelessWidget {
+  final Future<void> Function() onRetry;
+  const _MazosErrorState({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.cloud_off, size: 40, color: Color(0xFF7A4040)),
+          const SizedBox(height: 12),
+          const Text('No se pudieron cargar los mazos.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  color: Color(0xFF8A9AAA),
+                  fontFamily: 'Cinzel',
+                  fontSize: 11)),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh, size: 16, color: Color(0xFFC8A860)),
+            label: const Text('REINTENTAR',
+                style: TextStyle(
+                    color: Color(0xFFC8A860),
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    letterSpacing: 1.5)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0x55C8A860)),
             ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -759,22 +842,38 @@ class _DeckBuilderScreen extends StatefulWidget {
 
 class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
   final _db = FirebaseFirestore.instance;
-  late Map<String, int> _cantidades; // cartaId → cantidad (0, 1 o 2)
+  late Map<String, int>
+      _cantidades; // cartaId → seleccionada (0 o 1, sin duplicados)
   bool _saving = false;
+
+  /// Límite de cartas por mazo.
+  static const int _maxCartasMazo = 8;
 
   int get _total => _cantidades.values.fold(0, (s, v) => s + v);
 
   @override
   void initState() {
     super.initState();
-    // Inicializar con 0 y rellenar con lo guardado
+    // Inicializar con 0 y marcar las guardadas (máximo 1 por carta: sin
+    // duplicados, aunque un mazo antiguo tuviera 2 copias).
     _cantidades = {for (final c in widget.cartasDisponibles) c.id: 0};
     for (final id in widget.mazo.cartaIds) {
-      _cantidades[id] = (_cantidades[id] ?? 0) + 1;
+      if (_cantidades.containsKey(id)) _cantidades[id] = 1;
     }
   }
 
   Future<void> _save() async {
+    // Defensa: no permitir guardar mazos con más de 8 cartas (p. ej. mazos
+    // antiguos creados antes del límite).
+    if (_total > _maxCartasMazo) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('Quita cartas: el máximo es $_maxCartasMazo'),
+          duration: Duration(seconds: 2),
+        ));
+      return;
+    }
     setState(() => _saving = true);
     final expandido = <String>[];
     for (final entry in _cantidades.entries) {
@@ -800,9 +899,23 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
 
   void _toggle(String cartaId) {
     final current = _cantidades[cartaId] ?? 0;
-    setState(() {
-      _cantidades[cartaId] = current >= 2 ? 0 : current + 1;
-    });
+    // Sin duplicados: cada carta solo puede seleccionarse una vez.
+    // Si ya está seleccionada → quitarla.
+    if (current >= 1) {
+      setState(() => _cantidades[cartaId] = 0);
+      return;
+    }
+    // Añadir: respetar el límite de cartas del mazo.
+    if (_total >= _maxCartasMazo) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('El mazo está limitado a $_maxCartasMazo cartas'),
+          duration: Duration(seconds: 2),
+        ));
+      return;
+    }
+    setState(() => _cantidades[cartaId] = 1);
   }
 
   @override
@@ -825,7 +938,7 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
               ),
             ),
             Text(
-              '$_total cartas seleccionadas',
+              '$_total / $_maxCartasMazo cartas',
               style: const TextStyle(
                 fontSize: 9,
                 color: Color(0xFF506070),
@@ -902,7 +1015,7 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
 
 class _CardPickerTile extends StatelessWidget {
   final CartaModel carta;
-  final int qty; // 0, 1 o 2
+  final int qty; // 0 o 1
   final VoidCallback onTap;
 
   const _CardPickerTile({
@@ -985,10 +1098,10 @@ class _CardPickerTile extends StatelessWidget {
               ),
               const SizedBox(height: 6),
 
-              // Cantidad
+              // Seleccionada (sin duplicados: un solo indicador)
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(2, (i) {
+                children: List.generate(1, (i) {
                   final filled = i < qty;
                   return Container(
                     margin: const EdgeInsets.symmetric(horizontal: 2),

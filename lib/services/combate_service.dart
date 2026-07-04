@@ -9,7 +9,7 @@
 ///   • poderNeto(X) = Σfuerza(X) − Σdefensa(todos los enemigos de X)
 ///   • El grupo con mayor poderNeto gana.
 ///   • Las cartas de los grupos perdedores se destruyen.
-///   • En empate exacto → todos destruidos.
+///   • En empate exacto → no se resuelve
 ///
 /// REGLA CUARTEL GENERAL (OBELISCO):
 ///   Si se produce combate en la celda obelisco de un jugador, ese jugador
@@ -400,14 +400,17 @@ class CombateService {
               (pcPorJugador[ganadorUid] ?? 0) + pcConquista;
         }
       } else {
-        // Empate: todos los grupos empatados se destruyen.
+        // Empate EN CABEZA: solo permanecen los grupos empatados al máximo
+        // poderNeto (standoff). Los de menos poder (perdedores claros) caen.
         ganadorUid = null;
         ganadorZone = null;
-        derrotadosUid = grupos.keys.toList();
-        supervivientes = [];
-
-        // Si en un empate el obelisco propietario está entre los derrotados
-        // no se registra conquista (nadie capturó el cuartel).
+        final empatados = ganadoresUid.toSet();
+        derrotadosUid =
+            grupos.keys.where((uid) => !empatados.contains(uid)).toList();
+        supervivientes = grupos.entries
+            .where((e) => empatados.contains(e.key))
+            .expand((e) => e.value.cartas)
+            .toList();
       }
 
       if (supervivientes.isNotEmpty) {
@@ -468,7 +471,7 @@ class CombateService {
           '(+$energiesConquista Energies, +$pcConquista PC)';
     }
     if (r.ganadorUid == null) {
-      return '[${r.coord}] Empate — todas las cartas destruidas';
+      return '[${r.coord}] Empate — las cartas se mantienen hasta el desempate';
     }
     final energies = r.energiesGanadas[r.ganadorUid] ?? 0;
     final pc = r.pcGanados[r.ganadorUid] ?? 0;

@@ -8,9 +8,10 @@ import 'package:warzero/views/settingsScreen.dart';
 import 'package:warzero/views/lobby_screen.dart';
 import 'package:warzero/views/mazo_screen.dart';
 import 'package:warzero/views/cartas_screen.dart';
+import 'package:warzero/views/historias_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/edicion_cartas_screen.dart';
-import 'package:warzero/views/diagnostico_screen.dart';
+import 'package:warzero/views/edicion_historias_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -26,6 +27,10 @@ class MenuScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    // Solo estos correos pueden ver/usar la edición de cartas.
+    const editores = {'qa85@daga.com', 'dagahh89@gmail.com'};
+    final puedeEditar =
+        editores.contains((user?.email ?? '').trim().toLowerCase());
     final alias =
         user?.displayName ?? user?.email?.split('@').first ?? 'Comandante';
 
@@ -132,6 +137,16 @@ class MenuScreen extends StatelessWidget {
                       ),
                     ),
                     _MenuTile(
+                      icon: Icons.auto_stories_outlined,
+                      label: 'HISTORIAS',
+                      sublabel: 'Relatos por\nejército',
+                      accent: const Color(0xFFE0A030),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const HistoriasScreen()),
+                      ),
+                    ),
+                    _MenuTile(
                       icon: Icons.person_outline,
                       label: 'PERFIL',
                       sublabel: 'Tu alias e\nimagen de perfil',
@@ -140,16 +155,28 @@ class MenuScreen extends StatelessWidget {
                         MaterialPageRoute(builder: (_) => const PerfilScreen()),
                       ),
                     ),
-                    _MenuTile(
-                      icon: Icons.edit_note,
-                      label: 'EDICIÓN',
-                      sublabel: 'Crear y editar\ncartas del juego',
-                      accent: const Color(0xFFA040C0),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const EdicionCartasScreen()),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.edit_note,
+                        label: 'EDICIÓN',
+                        sublabel: 'Crear y editar\ncartas del juego',
+                        accent: const Color(0xFFA040C0),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionCartasScreen()),
+                        ),
                       ),
-                    ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.auto_stories,
+                        label: 'ED. HISTORIAS',
+                        sublabel: 'Crear y editar\nhistorias por ejército',
+                        accent: const Color(0xFFB060D0),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionHistoriasScreen()),
+                        ),
+                      ),
                     _MenuTile(
                       icon: Icons.emoji_events_outlined,
                       label: 'RANKINGS',
@@ -174,18 +201,6 @@ class MenuScreen extends StatelessWidget {
                         MaterialPageRoute(
                             builder: (_) => const SettingsScreen()),
                       ),
-                    ),
-                    _MenuTile(
-                      icon: Icons.settings_outlined,
-                      label: 'Diagnosticos',
-                      sublabel: 'Configuración\ny cuenta',
-                      accent: const Color(0xFF4060D0),
-                      onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DiagnosticoScreen(
-                                lobbyId: 'EL_ID_DE_TU_PARTIDA'),
-                          )),
                     ),
                   ],
                 ),

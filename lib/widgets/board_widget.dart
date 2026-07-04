@@ -15,6 +15,9 @@ class BoardWidget extends StatefulWidget {
 
   /// uid → color del obelisco para colorear cartas
   final Map<String, Color> playerColors;
+
+  /// uid del jugador local (para el +80 de defensa del cuartel en el preview).
+  final String? localPlayerUid;
   final Function(String coord, int ri, int ci) onCellTap;
 
   const BoardWidget({
@@ -26,6 +29,7 @@ class BoardWidget extends StatefulWidget {
     this.movableCoords = const {},
     this.obeliscoLocal,
     this.playerColors = const {},
+    this.localPlayerUid,
     required this.onCellTap,
   });
 
@@ -176,6 +180,7 @@ class _BoardWidgetState extends State<BoardWidget>
                     movableCoords: widget.movableCoords,
                     obeliscoLocal: widget.obeliscoLocal,
                     playerColors: widget.playerColors,
+                    localPlayerUid: widget.localPlayerUid,
                     onCellTap: widget.onCellTap,
                   ),
                 ),
@@ -307,6 +312,7 @@ class _PerspectiveBoard extends StatelessWidget {
   final Set<String> movableCoords;
   final String? obeliscoLocal;
   final Map<String, Color> playerColors;
+  final String? localPlayerUid;
   final Function(String, int, int) onCellTap;
 
   const _PerspectiveBoard({
@@ -317,6 +323,7 @@ class _PerspectiveBoard extends StatelessWidget {
     this.movableCoords = const {},
     this.obeliscoLocal,
     this.playerColors = const {},
+    this.localPlayerUid,
     required this.onCellTap,
   });
 
@@ -336,6 +343,7 @@ class _PerspectiveBoard extends StatelessWidget {
           movableCoords: movableCoords,
           obeliscoLocal: obeliscoLocal,
           playerColors: playerColors,
+          localPlayerUid: localPlayerUid,
           onCellTap: onCellTap,
         ),
       ),
@@ -693,6 +701,7 @@ class _GridContent extends StatelessWidget {
   final Set<String> movableCoords;
   final String? obeliscoLocal;
   final Map<String, Color> playerColors;
+  final String? localPlayerUid;
   final Function(String, int, int) onCellTap;
 
   const _GridContent({
@@ -703,6 +712,7 @@ class _GridContent extends StatelessWidget {
     this.movableCoords = const {},
     this.obeliscoLocal,
     this.playerColors = const {},
+    this.localPlayerUid,
     required this.onCellTap,
   });
 
@@ -730,7 +740,14 @@ class _GridContent extends StatelessWidget {
                     isHighlighted: highlightEmpty && coord == obeliscoLocal,
                     isMovable: movableCoords.contains(coord),
                     isObelisco: coord == obeliscoLocal,
+                    isRayo: boardState.esRayo(coord), // ← nuevo
+                    isEnvenenada: boardState.celdaTieneVeneno(coord),
+                    isParalizada: boardState.celdaTieneParalisis(coord),
+                    isEscudada: boardState.celdaTieneEscudo(coord),
+                    venenosCelda: boardState.venenosCelda(coord),
+                    escudosCelda: boardState.escudosCelda(coord),
                     playerColors: playerColors,
+                    localPlayerUid: localPlayerUid,
                     onTap: () => onCellTap(coord, ri, ci),
                   );
                 }),
@@ -755,7 +772,6 @@ class _GridContent extends StatelessWidget {
           height: _gridH,
           child: Stack(
             children: [
-              // Imagen del mapa exactamente sobre el área de celdas
               Positioned(
                 left: kLabelW,
                 top: 0,
@@ -763,10 +779,9 @@ class _GridContent extends StatelessWidget {
                 height: _gridH,
                 child: Image.asset(
                   'assets/images/map_background.png',
-                  fit: BoxFit.fill, // rellena exactamente el tamaño del grid
+                  fit: BoxFit.fill,
                 ),
               ),
-              // Celdas transparentes encima
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: cellRows,

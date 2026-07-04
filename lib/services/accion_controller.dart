@@ -74,6 +74,7 @@ class AccionController {
 
   String? _cartaTeleportCoord;
   int? _cartaTeleportIndice;
+  String? _cartaTeleportId;
 
   // ── Getters públicos ──────────────────────────────────────
 
@@ -210,10 +211,11 @@ class AccionController {
   /// Para teletransporte: registra la carta propia que se moverá. Debe
   /// llamarse cuando la fase es `seleccionandoCartaTeleport`.
   /// Devuelve false si la fase es otra.
-  bool setCartaTeleport(String coord, int indice) {
+  bool setCartaTeleport(String coord, int indice, {String? cartaId}) {
     if (_fase != FaseAccion.seleccionandoCartaTeleport) return false;
     _cartaTeleportCoord = coord;
     _cartaTeleportIndice = indice;
+    _cartaTeleportId = cartaId;
     return true;
   }
 
@@ -243,6 +245,7 @@ class AccionController {
       turno: turno,
       cartaOrigenCoord: _cartaTeleportCoord,
       cartaOrigenIndice: _cartaTeleportIndice,
+      cartaOrigenId: _cartaTeleportId,
       cartaAccionId: _cartaAccionDeMano?.id,
       costePagado: _costeHabilidad,
     );
@@ -263,5 +266,6 @@ class AccionController {
     _objetivosValidos = const {};
     _cartaTeleportCoord = null;
     _cartaTeleportIndice = null;
+    _cartaTeleportId = null;
   }
 }

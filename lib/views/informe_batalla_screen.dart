@@ -13,6 +13,7 @@ class InformeBatallaScreen extends StatefulWidget {
   final List<Map<String, dynamic>> combateLog;
   final List<Map<String, dynamic>> movimientosLog;
   final List<Map<String, dynamic>> farmeoLog;
+  final List<Map<String, dynamic>> accionesLog;
   final String? rayoCoord;
   final List<Map<String, dynamic>> historial;
   final String localUid;
@@ -31,6 +32,7 @@ class InformeBatallaScreen extends StatefulWidget {
     required this.jugadores,
     required this.turno,
     this.farmeoLog = const [],
+    this.accionesLog = const [],
     this.rayoCoord,
     this.ultimaCartaRepartida,
   });
@@ -44,6 +46,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
   late List<Map<String, dynamic>> _combateActual;
   late List<Map<String, dynamic>> _movActual;
   late List<Map<String, dynamic>> _farmeoActual;
+  late List<Map<String, dynamic>> _accionesActual;
   String? _rayoActual;
 
   @override
@@ -53,6 +56,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
     _combateActual = widget.combateLog;
     _movActual = widget.movimientosLog;
     _farmeoActual = widget.farmeoLog;
+    _accionesActual = widget.accionesLog;
     _rayoActual = widget.rayoCoord;
   }
 
@@ -61,6 +65,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
     List<Map<String, dynamic>> combate,
     List<Map<String, dynamic>> mov,
     List<Map<String, dynamic>> farmeo,
+    List<Map<String, dynamic>> acciones,
     String? rayoCoord,
   ) {
     setState(() {
@@ -68,6 +73,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
       _combateActual = combate;
       _movActual = mov;
       _farmeoActual = farmeo;
+      _accionesActual = acciones;
       _rayoActual = rayoCoord;
     });
   }
@@ -101,6 +107,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
         List<Map<String, dynamic>> combate,
         List<Map<String, dynamic>> mov,
         List<Map<String, dynamic>> farmeo,
+        List<Map<String, dynamic>> acciones,
         String? rayoCoord,
       })> get _opciones {
     final result = <({
@@ -108,6 +115,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
       List<Map<String, dynamic>> combate,
       List<Map<String, dynamic>> mov,
       List<Map<String, dynamic>> farmeo,
+      List<Map<String, dynamic>> acciones,
       String? rayoCoord,
     })>[];
 
@@ -122,9 +130,19 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
       final f = (entry['farmeoLog'] as List? ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
+      final ac = (entry['accionesLog'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
       final r = entry['rayoCoord'] as String?;
       if (!result.any((o) => o.turno == t)) {
-        result.add((turno: t, combate: c, mov: m, farmeo: f, rayoCoord: r));
+        result.add((
+          turno: t,
+          combate: c,
+          mov: m,
+          farmeo: f,
+          acciones: ac,
+          rayoCoord: r
+        ));
       }
     }
 
@@ -134,6 +152,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
         combate: widget.combateLog,
         mov: widget.movimientosLog,
         farmeo: widget.farmeoLog,
+        acciones: widget.accionesLog,
         rayoCoord: widget.rayoCoord,
       ));
     }
@@ -197,7 +216,8 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                   onChanged: (t) {
                     if (t == null) return;
                     final o = opciones.firstWhere((o) => o.turno == t);
-                    _selectTurno(t, o.combate, o.mov, o.farmeo, o.rayoCoord);
+                    _selectTurno(
+                        t, o.combate, o.mov, o.farmeo, o.acciones, o.rayoCoord);
                   },
                 ),
               ),
@@ -221,6 +241,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
           children: [
             _CombatesTab(
               combateLog: _combateActual,
+              accionesLog: _accionesActual,
               localUid: widget.localUid,
               alias: _alias,
               colorZona: _colorZona,
@@ -501,12 +522,14 @@ class _CartaPlaceholder extends StatelessWidget {
 
 class _CombatesTab extends StatelessWidget {
   final List<Map<String, dynamic>> combateLog;
+  final List<Map<String, dynamic>> accionesLog;
   final String localUid;
   final String Function(String) alias;
   final Color Function(String?) colorZona;
 
   const _CombatesTab(
       {required this.combateLog,
+      required this.accionesLog,
       required this.localUid,
       required this.alias,
       required this.colorZona});
@@ -517,9 +540,24 @@ class _CombatesTab extends StatelessWidget {
     return g == localUid || d.contains(localUid);
   }
 
+  /// Disparos que impactaron sobre alguna carta (destruyeron algo). La carta
+  /// enemiga desaparece del tablero (correcto), pero el impacto debe verse aquí.
+  List<Map<String, dynamic>> get _disparosConImpacto {
+    return accionesLog
+        .where((a) {
+          if (a['tipo'] != 'disparo') return false;
+          final destruidas = a['cartasDestruidas'] as List? ?? [];
+          return destruidas.isNotEmpty;
+        })
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (combateLog.isEmpty) {
+    final disparos = _disparosConImpacto;
+
+    if (combateLog.isEmpty && disparos.isEmpty) {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(32),
@@ -550,21 +588,161 @@ class _CombatesTab extends StatelessWidget {
     }
     final locales = combateLog.where(_meImplica).toList();
     final otros = combateLog.where((c) => !_meImplica(c)).toList();
+    final total = locales.length + otros.length + disparos.length;
     return ListView.separated(
       padding: const EdgeInsets.all(14),
-      itemCount: locales.length + otros.length,
+      itemCount: total,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (_, i) {
-        final data =
-            i < locales.length ? locales[i] : otros[i - locales.length];
-        return _CombateTile(
-          data: data,
+        // Primero combates (locales y luego ajenos), después los disparos.
+        if (i < locales.length + otros.length) {
+          final data =
+              i < locales.length ? locales[i] : otros[i - locales.length];
+          return _CombateTile(
+            data: data,
+            localUid: localUid,
+            alias: alias,
+            colorZona: colorZona,
+            esLocal: i < locales.length,
+          );
+        }
+        final d = disparos[i - locales.length - otros.length];
+        return _DisparoTile(
+          data: d,
           localUid: localUid,
           alias: alias,
           colorZona: colorZona,
-          esLocal: i < locales.length,
         );
       },
+    );
+  }
+}
+
+/// Ficha para un disparo que impactó: quién disparó, celda objetivo y cartas
+/// enemigas destruidas por el impacto.
+class _DisparoTile extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final String localUid;
+  final String Function(String) alias;
+  final Color Function(String?) colorZona;
+
+  const _DisparoTile(
+      {required this.data,
+      required this.localUid,
+      required this.alias,
+      required this.colorZona});
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFF40C0FF);
+    final uid = data['uid'] as String? ?? '';
+    final zona = data['zona'] as String?;
+    final objetivo = data['objetivo'] as String? ?? '?';
+    final habilidad = data['habilidadNombre'] as String? ?? 'Disparo';
+    final esLocal = uid == localUid;
+    final destruidas = (data['cartasDestruidas'] as List? ?? [])
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+    final zonaColor = colorZona(zona);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A1525),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accent.withOpacity(0.35), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Cabecera ──
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: accent.withOpacity(0.08),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(7)),
+            ),
+            child: Row(
+              children: [
+                const Text('⚡', style: TextStyle(fontSize: 12)),
+                const SizedBox(width: 6),
+                Text('CELDA $objetivo',
+                    style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        letterSpacing: 1.5,
+                        color: accent)),
+                const Spacer(),
+                _Badge(label: habilidad.toUpperCase(), color: accent),
+              ],
+            ),
+          ),
+          // ── Cuerpo ──
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                            shape: BoxShape.circle, color: zonaColor)),
+                    const SizedBox(width: 8),
+                    Text(
+                      esLocal
+                          ? 'TÚ disparaste'
+                          : '${alias(uid).toUpperCase()} disparó',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel', fontSize: 9, color: zonaColor),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text('CARTAS DESTRUIDAS',
+                    style: TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 8,
+                        letterSpacing: 1,
+                        color: Color(0xFF506070))),
+                const SizedBox(height: 4),
+                ...destruidas.map((c) {
+                  final nombre =
+                      (c['Nombre'] ?? c['nombre'] ?? 'Carta').toString();
+                  final ownerUid = (c['ownerUid'] ?? '').toString();
+                  final owner = ownerUid == localUid
+                      ? '(tuya)'
+                      : ownerUid.isNotEmpty
+                          ? '(${alias(ownerUid)})'
+                          : '';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Row(
+                      children: [
+                        const Text('✖',
+                            style: TextStyle(
+                                fontSize: 9, color: Color(0xFFC04040))),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text('$nombre $owner',
+                              style: const TextStyle(
+                                  fontFamily: 'Cinzel',
+                                  fontSize: 9,
+                                  color: Color(0xFF8A9AAA)),
+                              overflow: TextOverflow.ellipsis),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -637,7 +815,8 @@ class _CombateTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (esEmpate)
-                  const Text('💥  EMPATE — todas las cartas destruidas',
+                  const Text(
+                      '🤝  EMPATE — las cartas se mantienen hasta el desempate',
                       style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 9,
@@ -756,6 +935,8 @@ class _GrupoDesglose extends StatelessWidget {
                   final f = ((c['fuerza'] ?? c['Fuerza'] ?? 0) as num).toInt();
                   final d =
                       ((c['defensa'] ?? c['Defensa'] ?? 0) as num).toInt();
+                  final red = ((c['reduccionVeneno'] ?? 0) as num).toInt();
+                  final esc = ((c['bonusEscudo'] ?? 0) as num).toInt();
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 3),
                     child: Row(children: [
@@ -766,7 +947,8 @@ class _GrupoDesglose extends StatelessWidget {
                                   fontSize: 8,
                                   color: Color(0xFF506070)),
                               overflow: TextOverflow.ellipsis)),
-                      _CardStatRow(fuerza: f, defensa: d),
+                      _CardStatRow(
+                          fuerza: f, defensa: d, reduccion: red, escudo: esc),
                     ]),
                   );
                 }).toList(),
@@ -930,6 +1112,8 @@ class _ReglasFarmeoCard extends StatelessWidget {
               icon: '⚡',
               label: 'Carta en posición del rayo',
               bonus: '+10 / carta'),
+          const SizedBox(height: 4),
+          _ReglaRow(icon: '🍀', label: 'Turno sin ganar energías', bonus: '+3'),
         ],
       ),
     );
@@ -985,6 +1169,7 @@ class _FarmeoTile extends StatelessWidget {
     final contEnemigo = (detalle['continenteEnemigo'] as num?)?.toInt() ?? 0;
     final isla = (detalle['islaCentral'] as num?)?.toInt() ?? 0;
     final rayo = (detalle['rayo'] as num?)?.toInt() ?? 0;
+    final suerte = (detalle['suerteDelPerdedor'] as num?)?.toInt() ?? 0;
     final esLocal = uid == localUid;
     final color = colorZona(zona);
 
@@ -1065,7 +1250,13 @@ class _FarmeoTile extends StatelessWidget {
                 if (rayo > 0)
                   _FarmeoRow(
                       icon: '⚡', label: 'Rayo', value: rayo, highlight: true),
-                if (contEnemigo == 0 && isla == 0 && rayo == 0)
+                if (suerte > 0)
+                  _FarmeoRow(
+                      icon: '🍀',
+                      label: 'Suerte del perdedor',
+                      value: suerte,
+                      highlight: true),
+                if (contEnemigo == 0 && isla == 0 && rayo == 0 && suerte == 0)
                   const Text('Sin fuentes de farmeo.',
                       style: TextStyle(
                           fontFamily: 'Cinzel',
@@ -1348,25 +1539,58 @@ class _StatBadge extends StatelessWidget {
 class _CardStatRow extends StatelessWidget {
   final int fuerza;
   final int defensa;
-  const _CardStatRow({required this.fuerza, required this.defensa});
+  final int reduccion;
+  final int escudo;
+  const _CardStatRow(
+      {required this.fuerza,
+      required this.defensa,
+      this.reduccion = 0,
+      this.escudo = 0});
 
   @override
-  Widget build(BuildContext context) => Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('⚔', style: TextStyle(fontSize: 9)),
-          const SizedBox(width: 2),
-          Text('$fuerza',
-              style: const TextStyle(
-                  fontFamily: 'Cinzel', fontSize: 9, color: Color(0xFFE08040))),
-          const SizedBox(width: 8),
-          const Text('🛡', style: TextStyle(fontSize: 9)),
-          const SizedBox(width: 2),
+  Widget build(BuildContext context) {
+    final efectivaRaw = defensa - reduccion + escudo;
+    final efectiva = efectivaRaw > 0 ? efectivaRaw : 0;
+    final modificada = reduccion > 0 || escudo > 0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('⚔', style: TextStyle(fontSize: 9)),
+        const SizedBox(width: 2),
+        Text('$fuerza',
+            style: const TextStyle(
+                fontFamily: 'Cinzel', fontSize: 9, color: Color(0xFFE08040))),
+        const SizedBox(width: 8),
+        const Text('🛡', style: TextStyle(fontSize: 9)),
+        const SizedBox(width: 2),
+        if (modificada) ...[
+          Text('$efectiva',
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 9,
+                  color: escudo > 0 && reduccion == 0
+                      ? const Color(0xFF9AD0FF)
+                      : const Color(0xFF5AD07A))),
+          const SizedBox(width: 3),
+          if (reduccion > 0)
+            Text('☠-$reduccion',
+                style: const TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 8,
+                    color: Color(0xFF2BA046))),
+          if (escudo > 0)
+            Text(' 🛡+$escudo',
+                style: const TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 8,
+                    color: Color(0xFF6AB0FF))),
+        ] else
           Text('$defensa',
               style: const TextStyle(
                   fontFamily: 'Cinzel', fontSize: 9, color: Color(0xFF4090D0))),
-        ],
-      );
+      ],
+    );
+  }
 }
 
 class _Badge extends StatelessWidget {

@@ -106,13 +106,19 @@ class _CellSidebarState extends State<CellSidebar> {
     // Cuartel propio  → base + defensa de las cartas.
     // Celda normal    → solo defensa de las cartas (null si no hay cartas).
     final int? defensa;
+    int defensaReducida = 0;
     if (widget.isEnemyObelisco) {
       defensa = CellSidebar.defensaBase;
     } else if (widget.isObelisco) {
-      defensa = CellSidebar.defensaBase + (widget.celda?.defensaTotal ?? 0);
+      defensa =
+          CellSidebar.defensaBase + (widget.celda?.defensaTotalEfectiva ?? 0);
+      defensaReducida = (widget.celda?.defensaTotal ?? 0) -
+          (widget.celda?.defensaTotalEfectiva ?? 0);
     } else {
-      final d = widget.celda?.defensaTotal;
+      final d = widget.celda?.defensaTotalEfectiva;
       defensa = (d != null && d > 0) ? d : null;
+      defensaReducida = (widget.celda?.defensaTotal ?? 0) -
+          (widget.celda?.defensaTotalEfectiva ?? 0);
     }
 
     // Movimiento mínimo entre cartas seleccionadas
@@ -121,6 +127,26 @@ class _CellSidebarState extends State<CellSidebar> {
       minMov = _selected
           .map((i) => cards[i].carta.movimiento)
           .reduce((a, b) => a < b ? a : b);
+    }
+
+    // Totales por ejército: en celdas en disputa (varios dueños) se muestran
+    // por separado en vez de sumar fuerza/defensa de ambos.
+    final ejercitos = <_ArmyTotal>[];
+    if (!widget.isEnemyObelisco && !widget.isObelisco) {
+      final byUid = <String, _ArmyTotal>{};
+      for (final c in cards) {
+        final prev = byUid[c.ownerUid];
+        byUid[c.ownerUid] = _ArmyTotal(
+          uid: c.ownerUid,
+          zone: c.ownerZone,
+          esLocal: c.ownerUid == widget.localUid,
+          fuerza: (prev?.fuerza ?? 0) + c.carta.fuerza,
+          defensa: (prev?.defensa ?? 0) + c.defensaEfectiva,
+          reduccion: (prev?.reduccion ?? 0) + c.defensaReducidaPorEfectos,
+          color: widget.playerColors[c.ownerUid] ?? ownerColor(c.ownerZone),
+        );
+      }
+      ejercitos.addAll(byUid.values);
     }
 
     return AnimatedContainer(
@@ -141,6 +167,8 @@ class _CellSidebarState extends State<CellSidebar> {
             terrain: widget.terrain,
             total: total,
             defensa: defensa,
+            defensaReducida: defensaReducida,
+            ejercitos: ejercitos,
             isObelisco: widget.isObelisco,
             isEnemyObelisco: widget.isEnemyObelisco,
             onClose: widget.onClose,
@@ -190,6 +218,8 @@ class _Header extends StatelessWidget {
   final TerrainType? terrain;
   final int? total;
   final int? defensa;
+  final int defensaReducida;
+  final List<_ArmyTotal> ejercitos;
   final bool isObelisco;
   final bool isEnemyObelisco;
   final VoidCallback onClose;
@@ -199,10 +229,74 @@ class _Header extends StatelessWidget {
     required this.terrain,
     required this.total,
     required this.defensa,
+    this.defensaReducida = 0,
+    this.ejercitos = const [],
     required this.isObelisco,
     required this.isEnemyObelisco,
     required this.onClose,
   });
+
+  Widget _armyBlock(_ArmyTotal a) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+        Text(a.esLocal ? 'TÚ' : _ownerZoneLabel(a.zone),
+            style: TextStyle(
+                fontSize: 7,
+                color: a.color,
+                letterSpacing: 1.5,
+                fontFamily: 'Cinzel')),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          const Text('⚔ ',
+              style: TextStyle(fontSize: 9, color: Color(0xFFE0C060))),
+          Text('${a.fuerza}',
+              style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFE0C060),
+                  fontFamily: 'Cinzel',
+                  height: 1)),
+          const SizedBox(width: 8),
+          Text(a.reduccion > 0 ? '☠ ' : '🛡 ',
+              style: const TextStyle(fontSize: 9)),
+          Text('${a.defensa}',
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: a.reduccion > 0
+                      ? const Color(0xFF5AD07A)
+                      : const Color(0xFF60A0D0),
+                  fontFamily: 'Cinzel',
+                  height: 1)),
+          if (a.reduccion > 0)
+            Padding(
+              padding: const EdgeInsets.only(left: 2),
+              child: Text('-${a.reduccion}',
+                  style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF2BA046),
+                      fontFamily: 'Cinzel',
+                      height: 1)),
+            ),
+        ]),
+      ]),
+    );
+  }
+
+  static String _ownerZoneLabel(String zone) {
+    const m = {
+      'north': 'NORTE',
+      'south': 'SUR',
+      'west': 'OESTE',
+      'east': 'ESTE',
+      'ne': 'NE',
+      'nw': 'NO',
+      'se': 'SE',
+      'sw': 'SO'
+    };
+    return m[zone] ?? zone.toUpperCase();
+  }
 
   String _label(TerrainType? t) {
     switch (t) {
@@ -331,23 +425,42 @@ class _Header extends StatelessWidget {
             ]),
           ),
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            if (defensa != null) ...[
-              const Text('DEFENSA',
+            // Celda en disputa: un bloque por ejército (no se suman entre sí).
+            if (ejercitos.length > 1) ...ejercitos.map(_armyBlock),
+            if (ejercitos.length <= 1 && defensa != null) ...[
+              Text(defensaReducida > 0 ? '☠ DEFENSA' : 'DEFENSA',
                   style: TextStyle(
                       fontSize: 7,
-                      color: Color(0xFF506070),
+                      color: defensaReducida > 0
+                          ? const Color(0xFF2BA046)
+                          : const Color(0xFF506070),
                       letterSpacing: 1.5,
                       fontFamily: 'Cinzel')),
-              Text('$defensa',
-                  style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF60A0D0),
-                      fontFamily: 'Cinzel',
-                      height: 1)),
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('$defensa',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: defensaReducida > 0
+                            ? const Color(0xFF5AD07A)
+                            : const Color(0xFF60A0D0),
+                        fontFamily: 'Cinzel',
+                        height: 1)),
+                if (defensaReducida > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 3),
+                    child: Text('-$defensaReducida',
+                        style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF2BA046),
+                            fontFamily: 'Cinzel',
+                            height: 1)),
+                  ),
+              ]),
               const SizedBox(height: 6),
             ],
-            if (total != null && total! > 0) ...[
+            if (ejercitos.length <= 1 && total != null && total! > 0) ...[
               const Text('FUERZA',
                   style: TextStyle(
                       fontSize: 7,
@@ -373,6 +486,28 @@ class _Header extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Totales de un ejército dentro de una celda en disputa.
+// ─────────────────────────────────────────────────────────────
+class _ArmyTotal {
+  final String uid;
+  final String zone;
+  final bool esLocal;
+  final int fuerza;
+  final int defensa;
+  final int reduccion;
+  final Color color;
+  const _ArmyTotal({
+    required this.uid,
+    required this.zone,
+    required this.esLocal,
+    required this.fuerza,
+    required this.defensa,
+    required this.reduccion,
+    required this.color,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -612,6 +747,9 @@ class _CardTile extends StatelessWidget {
       onLanzarHabilidad:
           puedeLanzar ? () => onLanzarHabilidad!(entry, coord!, indice) : null,
       enfriamientoRestante: enfriamientoRestante,
+      defensaReducida: entry.defensaReducidaPorEfectos,
+      defensaExtra: entry.defensaExtraPorEfectos,
+      paralizada: entry.paralizado,
     );
   }
 
@@ -707,6 +845,36 @@ class _CardTile extends StatelessWidget {
                                       letterSpacing: 1,
                                       fontFamily: 'Cinzel')),
                             ),
+                            if (entry.envenenada) ...[
+                              const Text('☠',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Color(0xFF2BA046))),
+                              const SizedBox(width: 4),
+                              Text('🛡${entry.defensaEfectiva}',
+                                  style: const TextStyle(
+                                      fontSize: 9,
+                                      color: Color(0xFF5AD07A),
+                                      fontFamily: 'Cinzel')),
+                              const SizedBox(width: 6),
+                            ],
+                            if (entry.paralizado) ...[
+                              const Text('⏱',
+                                  style: TextStyle(
+                                      fontSize: 11, color: Color(0xFF2C90C8))),
+                              const SizedBox(width: 6),
+                            ],
+                            if (entry.escudada) ...[
+                              const Text('🛡',
+                                  style: TextStyle(
+                                      fontSize: 10, color: Color(0xFF6AB0FF))),
+                              const SizedBox(width: 2),
+                              Text('${entry.defensaEfectiva}',
+                                  style: const TextStyle(
+                                      fontSize: 9,
+                                      color: Color(0xFF9AD0FF),
+                                      fontFamily: 'Cinzel')),
+                              const SizedBox(width: 6),
+                            ],
                             Text('${carta.fuerza}',
                                 style: TextStyle(
                                     fontSize: 14,

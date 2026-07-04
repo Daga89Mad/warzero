@@ -38,6 +38,11 @@ class AccionPendiente {
   /// (puede haber varias cartas apiladas).
   final int? cartaOrigenIndice;
 
+  /// Solo para teletransporte: id de la `CartaModel` a mover. Permite al
+  /// servidor localizar la carta exacta aunque los índices hayan cambiado
+  /// (p. ej. al colocar otra carta en la misma celda antes de resolver).
+  final String? cartaOrigenId;
+
   /// Solo para carta de acción jugada desde la mano: id de la `CartaModel`
   /// que se debe descartar de la mano después de aplicar el efecto.
   /// Si es null → es una habilidad de carta del tablero (no se descarta nada).
@@ -59,6 +64,7 @@ class AccionPendiente {
     required this.turno,
     this.cartaOrigenCoord,
     this.cartaOrigenIndice,
+    this.cartaOrigenId,
     this.cartaAccionId,
     this.costePagado = 0,
   });
@@ -75,6 +81,7 @@ class AccionPendiente {
         'costePagado': costePagado,
         if (cartaOrigenCoord != null) 'cartaOrigenCoord': cartaOrigenCoord,
         if (cartaOrigenIndice != null) 'cartaOrigenIndice': cartaOrigenIndice,
+        if (cartaOrigenId != null) 'cartaOrigenId': cartaOrigenId,
         if (cartaAccionId != null) 'cartaAccionId': cartaAccionId,
       };
 
@@ -91,6 +98,7 @@ class AccionPendiente {
         costePagado: (d['costePagado'] as num?)?.toInt() ?? 0,
         cartaOrigenCoord: d['cartaOrigenCoord'] as String?,
         cartaOrigenIndice: (d['cartaOrigenIndice'] as num?)?.toInt(),
+        cartaOrigenId: d['cartaOrigenId'] as String?,
         cartaAccionId: d['cartaAccionId'] as String?,
       );
 
@@ -102,6 +110,7 @@ class AccionPendiente {
     List<String>? objetivos,
     String? cartaOrigenCoord,
     int? cartaOrigenIndice,
+    String? cartaOrigenId,
     String? cartaAccionId,
     int? turno,
     int? costePagado,
@@ -114,6 +123,7 @@ class AccionPendiente {
         objetivos: objetivos ?? this.objetivos,
         cartaOrigenCoord: cartaOrigenCoord ?? this.cartaOrigenCoord,
         cartaOrigenIndice: cartaOrigenIndice ?? this.cartaOrigenIndice,
+        cartaOrigenId: cartaOrigenId ?? this.cartaOrigenId,
         cartaAccionId: cartaAccionId ?? this.cartaAccionId,
         turno: turno ?? this.turno,
         costePagado: costePagado ?? this.costePagado,

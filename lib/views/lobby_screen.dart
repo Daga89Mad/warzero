@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/lobby_model.dart';
 import '../services/lobby_service.dart';
+import '../services/warzero_api.dart';
 import 'game_screen.dart';
 import '../services/mapa_service.dart';
 import 'room_screen.dart';
@@ -223,10 +224,32 @@ class _PublicLobbiesList extends StatefulWidget {
 }
 
 class _PublicLobbiesListState extends State<_PublicLobbiesList> {
-  // Stream cacheado (creado una sola vez), no en cada build: evita abrir una
-  // conexión nueva a Firestore en cada reconstrucción del widget.
-  late final Stream<List<LobbyModel>> _stream =
-      widget.service.lobbiesPublicosStream();
+  // Vía API (sin Firestore realtime, que se cuelga en Android). El future se
+  // recrea al recargar.
+  final WarZeroApi _api = WarZeroApi();
+  Future<List<LobbyModel>>? _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _cargar();
+  }
+
+  Future<List<LobbyModel>> _cargar() async {
+    final docs = await _api.obtenerPublicas();
+    final list = docs
+        .map((d) => LobbyModel.fromMap(d['id'] as String? ?? '', d))
+        .toList();
+    list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
+    return list;
+  }
+
+  Future<void> _recargar() async {
+    setState(() {
+      _future = _cargar();
+    });
+    await _future;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -235,34 +258,17 @@ class _PublicLobbiesListState extends State<_PublicLobbiesList> {
     final alias = widget.alias;
     final onJoin = widget.onJoin;
     final onError = widget.onError;
-    return StreamBuilder<List<LobbyModel>>(
-      stream: _stream,
+    return FutureBuilder<List<LobbyModel>>(
+      future: _future,
       builder: (ctx, snap) {
         if (snap.hasError) {
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.error_outline,
-                      size: 36, color: Color(0xFFC04040)),
-                  const SizedBox(height: 12),
-                  Text(snap.error.toString(),
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                          fontSize: 9,
-                          color: Color(0xFF7A4040),
-                          fontFamily: 'Cinzel',
-                          height: 1.6)),
-                ],
-              ),
-            ),
+          return _RetryState(
+            message: 'No se pudieron cargar las partidas públicas.',
+            onRetry: _recargar,
           );
         }
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(
-              child: CircularProgressIndicator(color: Color(0xFFC8A860)));
+          return _LoadingWithRetry(onRetry: _recargar);
         }
         final lobbies = snap.data ?? [];
         if (lobbies.isEmpty) {
@@ -274,7 +280,7 @@ class _PublicLobbiesListState extends State<_PublicLobbiesList> {
         return RefreshIndicator(
           color: const Color(0xFFC8A860),
           backgroundColor: const Color(0xFF0A1220),
-          onRefresh: () async {},
+          onRefresh: _recargar,
           child: ListView.builder(
             padding: const EdgeInsets.all(12),
             itemCount: lobbies.length,
@@ -1310,32 +1316,39 @@ class _MisPartidasList extends StatefulWidget {
 }
 
 class _MisPartidasListState extends State<_MisPartidasList> {
-  // El stream se crea UNA sola vez (no en cada build) para evitar que se
-  // reinicie a "waiting" en cada reconstrucción del árbol.
-  Stream<List<LobbyModel>>? _stream;
+  // Vía API (sin Firestore realtime, que se cuelga en Android tras la partida).
+  // El future se recrea al recargar.
+  final WarZeroApi _api = WarZeroApi();
+  Future<List<LobbyModel>>? _future;
 
   @override
   void initState() {
     super.initState();
-    // "Despertar" la conexión de Firestore por si el canal quedó parado
-    // (típico en Android tras perder/recuperar red), de modo que el stream
-    // reciba datos del servidor en lugar de quedarse esperando.
-    FirebaseFirestore.instance.enableNetwork().catchError((_) {});
-    _stream = widget.service.misPartidasStream(widget.uid);
+    _future = _cargar();
   }
 
-  /// Recrea el stream (botón "reintentar").
-  void _recargar() {
-    FirebaseFirestore.instance.enableNetwork().catchError((_) {});
+  Future<List<LobbyModel>> _cargar() async {
+    final docs = await _api.obtenerMisPartidas(widget.uid);
+    final list = docs
+        .map((d) => LobbyModel.fromMap(d['id'] as String? ?? '', d))
+        .where((l) => l.estado != LobbyEstado.finalizada)
+        .toList();
+    list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
+    return list;
+  }
+
+  /// Recarga (botón "reintentar").
+  Future<void> _recargar() async {
     setState(() {
-      _stream = widget.service.misPartidasStream(widget.uid);
+      _future = _cargar();
     });
+    await _future;
   }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<LobbyModel>>(
-      stream: _stream,
+    return FutureBuilder<List<LobbyModel>>(
+      future: _future,
       builder: (ctx, snap) {
         if (snap.hasError) {
           return _RetryState(

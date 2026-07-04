@@ -25,6 +25,11 @@ Future<void> showCardDetail(
   VoidCallback? onCambiarDiseno,
   Future<void> Function()? onLanzarHabilidad,
   int enfriamientoRestante = 0,
+  Future<void> Function()? onSacrificar,
+  int recompensaSacrificio = 0,
+  int defensaReducida = 0,
+  int defensaExtra = 0,
+  bool paralizada = false,
 }) {
   return showGeneralDialog(
     context: context,
@@ -51,6 +56,11 @@ Future<void> showCardDetail(
       onCambiarDiseno: onCambiarDiseno,
       onLanzarHabilidad: onLanzarHabilidad,
       enfriamientoRestante: enfriamientoRestante,
+      onSacrificar: onSacrificar,
+      recompensaSacrificio: recompensaSacrificio,
+      defensaReducida: defensaReducida,
+      defensaExtra: defensaExtra,
+      paralizada: paralizada,
     ),
   );
 }
@@ -64,6 +74,11 @@ class _CardDetailPage extends StatefulWidget {
   final VoidCallback? onCambiarDiseno;
   final Future<void> Function()? onLanzarHabilidad;
   final int enfriamientoRestante;
+  final Future<void> Function()? onSacrificar;
+  final int recompensaSacrificio;
+  final int defensaReducida;
+  final int defensaExtra;
+  final bool paralizada;
 
   const _CardDetailPage({
     required this.carta,
@@ -73,6 +88,11 @@ class _CardDetailPage extends StatefulWidget {
     this.onCambiarDiseno,
     this.onLanzarHabilidad,
     this.enfriamientoRestante = 0,
+    this.onSacrificar,
+    this.recompensaSacrificio = 0,
+    this.defensaReducida = 0,
+    this.defensaExtra = 0,
+    this.paralizada = false,
   });
 
   @override
@@ -87,6 +107,7 @@ class _CardDetailPageState extends State<_CardDetailPage>
   bool _showingEvolution = false;
   bool _evolucionando = false;
   bool _lanzandoHabilidad = false;
+  bool _sacrificando = false;
 
   bool get _tieneEvolucion =>
       widget.carta.puedeEvolucionar && widget.resolveEvolucion != null;
@@ -187,6 +208,46 @@ class _CardDetailPageState extends State<_CardDetailPage>
     }
   }
 
+  Future<void> _confirmarSacrificio() async {
+    if (widget.onSacrificar == null || _sacrificando) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0C1828),
+        title: const Text(
+          'Sacrificar carta',
+          style: TextStyle(color: Color(0xFFE0C060), fontFamily: 'Cinzel'),
+        ),
+        content: Text(
+          'Sacrificar "${widget.carta.nombre}" a cambio de '
+          '+${widget.recompensaSacrificio}⚡.\nLa carta se perderá y no podrás '
+          'deshacerlo.',
+          style: const TextStyle(color: Color(0xFFB0C0D0)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(false),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF90A0B0))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(true),
+            child: const Text('Sacrificar',
+                style: TextStyle(color: Color(0xFFE06060))),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _sacrificando = true);
+    try {
+      Navigator.of(context).pop(); // cerrar el detalle
+      await widget.onSacrificar!();
+    } catch (_) {
+      if (mounted) setState(() => _sacrificando = false);
+    }
+  }
+
   Size _cardSize(BuildContext context) {
     final mq = MediaQuery.of(context).size;
     const double aspect = 1.5;
@@ -246,6 +307,87 @@ class _CardDetailPageState extends State<_CardDetailPage>
                   cardHeight: sz.height,
                 ),
 
+                // ── CHIP DE VENENO (defensa reducida) ──
+                if (widget.defensaReducida > 0) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF11331C),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: const Color(0xFF2BA046).withOpacity(0.7),
+                          width: 1),
+                    ),
+                    child: Text(
+                      '☠  Envenenada · Defensa '
+                      '${widget.carta.defensa} → '
+                      '${(widget.carta.defensa - widget.defensaReducida).clamp(0, 99999)}'
+                      '  (-${widget.defensaReducida})',
+                      style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        color: Color(0xFF5AD07A),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
+
+                // ── CHIP DE ESCUDO (defensa extra) ──
+                if (widget.defensaExtra > 0) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0E2440),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: const Color(0xFF3A78C8).withOpacity(0.7),
+                          width: 1),
+                    ),
+                    child: Text(
+                      '🛡  Escudada · Defensa '
+                      '${widget.carta.defensa} → '
+                      '${widget.carta.defensa + widget.defensaExtra}'
+                      '  (+${widget.defensaExtra})',
+                      style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        color: Color(0xFF9AD0FF),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
+
+                // ── CHIP DE PARÁLISIS ──
+                if (widget.paralizada) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0E2836),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: const Color(0xFF2C90C8).withOpacity(0.7),
+                          width: 1),
+                    ),
+                    child: const Text(
+                      '⏱  Paralizada · no puede moverse',
+                      style: TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        color: Color(0xFF7AC8E8),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
+
                 // ── FLECHA EVOLUCIÓN (debajo, alineada a la derecha) ──
                 if (_tieneEvolucion) ...[
                   const SizedBox(height: 10),
@@ -286,8 +428,65 @@ class _CardDetailPageState extends State<_CardDetailPage>
                     widget.onCambiarDiseno!();
                   }),
                 ],
+
+                // ── BOTÓN SACRIFICAR ────────────────────────────
+                if (widget.onSacrificar != null) ...[
+                  const SizedBox(height: 14),
+                  _SacrificarButton(
+                    recompensa: widget.recompensaSacrificio,
+                    busy: _sacrificando,
+                    onTap: _confirmarSacrificio,
+                  ),
+                ],
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// BOTÓN SACRIFICAR
+// ─────────────────────────────────────────────────────────────
+class _SacrificarButton extends StatelessWidget {
+  final int recompensa;
+  final bool busy;
+  final VoidCallback onTap;
+
+  const _SacrificarButton({
+    required this.recompensa,
+    required this.busy,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const accent = Color(0xFFE06060);
+    return GestureDetector(
+      onTap: busy ? null : onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: 280,
+        height: 46,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1A0E12),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: accent.withOpacity(0.7), width: 1.5),
+          boxShadow: [
+            BoxShadow(color: accent.withOpacity(0.20), blurRadius: 12),
+          ],
+        ),
+        child: Text(
+          busy ? 'SACRIFICANDO…' : 'SACRIFICAR  —  +$recompensa⚡',
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: accent,
+            fontFamily: 'Cinzel',
+            letterSpacing: 1,
           ),
         ),
       ),

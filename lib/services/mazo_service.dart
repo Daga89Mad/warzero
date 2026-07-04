@@ -7,35 +7,20 @@ import '../models/mazo_model.dart';
 class MazoService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // ── Lecturas con timeout ───────────────────────────────────
-  // Con la persistencia desactivada (ver main.dart) no hay caché local, así que
-  // leemos directamente del servidor con un timeout defensivo para no colgar la
-  // UI si la red está lenta.
-  Future<DocumentSnapshot<Map<String, dynamic>>> _getDoc(
-      DocumentReference<Map<String, dynamic>> ref) async {
-    return ref.get().timeout(const Duration(seconds: 15));
-  }
-
-  Future<QuerySnapshot<Map<String, dynamic>>> _getQuery(
-      Query<Map<String, dynamic>> q) async {
-    return q.get().timeout(const Duration(seconds: 15));
-  }
-
   // ── Cargar todas las cartas del juego ──────────────────────
   Future<List<CartaModel>> fetchTodasLasCartas() async {
-    final snap = await _getQuery(_db.collection('Cartas'));
+    final snap = await _db.collection('Cartas').get();
     return snap.docs.map(CartaModel.fromFirestore).toList();
   }
 
   // ── Cargar mazos de un jugador ─────────────────────────────
   Future<List<MazoModel>> fetchMazosDelJugador(String uid) async {
-    final snap = await _getQuery(
-        _db.collection('Jugadores').doc(uid).collection('Mazos'));
+    final snap =
+        await _db.collection('Jugadores').doc(uid).collection('Mazos').get();
 
     final mazos = <MazoModel>[];
     for (final mazoDoc in snap.docs) {
-      final cartasSnap =
-          await _getQuery(mazoDoc.reference.collection('Cartas'));
+      final cartasSnap = await mazoDoc.reference.collection('Cartas').get();
       final entradas = cartasSnap.docs.map(MazoEntrada.fromFirestore).toList();
       mazos.add(MazoModel(id: mazoDoc.id, entradas: entradas));
     }
@@ -46,7 +31,7 @@ class MazoService {
   Future<MazoResuelto> resolverMazo(MazoModel mazo) async {
     final cartasIds = mazo.entradas.map((e) => e.idCarta).toList();
     final snaps = await Future.wait(
-      cartasIds.map((id) => _getDoc(_db.collection('Cartas').doc(id))),
+      cartasIds.map((id) => _db.collection('Cartas').doc(id).get()),
     );
 
     final cartas = <CartaModel>[];
@@ -63,17 +48,18 @@ class MazoService {
   }
 
   // ── Mazo por defecto si el jugador no tiene ninguno ────────
-  /// Crea un mazo aleatorio con N cartas del ejército indicado.
-  /// Si [ejercitoId] es null o no hay cartas de ese ejército, usa todas.
+  /// Construye el mazo por defecto del ejército. Usa las cartas marcadas con el
+  /// check "Mazo por defecto" (campo `PorDefecto`) de ese ejército. Si no hay
+  /// ninguna marcada, cae a una selección aleatoria (comportamiento anterior).
   Future<MazoResuelto> crearMazoPorDefecto({
-    int tamanio = 20,
+    int tamanio = 8,
     int? ejercitoId,
   }) async {
     final todasLasCartas = await fetchTodasLasCartas();
-    // Nunca incluir cartas de Evolución en mazos.
-    todasLasCartas.removeWhere((c) => c.esEvolucion);
+    // Nunca incluir cartas de Evolución ni Especiales en mazos (no se reparten).
+    todasLasCartas.removeWhere((c) => c.esEvolucion || c.esEspecial);
 
-    // Filtrar por ejército si se especificó.
+    // Pool del ejército (o todas si no se especifica o no hay de ese ejército).
     List<CartaModel> pool = todasLasCartas;
     if (ejercitoId != null) {
       final filtradas =
@@ -81,6 +67,15 @@ class MazoService {
       if (filtradas.isNotEmpty) pool = filtradas;
     }
 
+    // Preferimos las cartas marcadas como "mazo por defecto".
+    final marcadas = pool.where((c) => c.porDefecto).toList();
+    if (marcadas.isNotEmpty) {
+      marcadas.shuffle();
+      return MazoResuelto(
+          id: 'default', cartas: marcadas.take(tamanio).toList());
+    }
+
+    // Fallback: selección aleatoria del ejército.
     pool.shuffle();
     final seleccion = pool.take(tamanio).toList();
     return MazoResuelto(id: 'default', cartas: seleccion);

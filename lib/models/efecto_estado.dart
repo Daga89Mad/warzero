@@ -4,7 +4,9 @@
 /// sobre una carta.
 enum EfectoTipoEstado {
   veneno,
-  // futuro: paralisis, regeneracion, escudo...
+  paralisis,
+  escudo,
+  // futuro: regeneracion...
 }
 
 extension EfectoTipoEstadoExt on EfectoTipoEstado {
@@ -12,6 +14,10 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
     switch (this) {
       case EfectoTipoEstado.veneno:
         return 'Veneno';
+      case EfectoTipoEstado.paralisis:
+        return 'Parálisis';
+      case EfectoTipoEstado.escudo:
+        return 'Escudo';
     }
   }
 
@@ -19,6 +25,10 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
     switch (this) {
       case EfectoTipoEstado.veneno:
         return '☠';
+      case EfectoTipoEstado.paralisis:
+        return '⏱';
+      case EfectoTipoEstado.escudo:
+        return '🛡';
     }
   }
 

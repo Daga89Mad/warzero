@@ -60,9 +60,31 @@ class CellWidget extends StatelessWidget {
   final bool isHighlighted;
   final bool isMovable;
   final bool isObelisco;
+  final bool isRayo;
+
+  /// True si la celda tiene un veneno activo (se marca con calavera ☠).
+  final bool isEnvenenada;
+
+  /// True si la celda tiene una parálisis activa (se marca con reloj ⏱).
+  final bool isParalizada;
+
+  /// True si la celda tiene un escudo activo (se marca con 🛡).
+  final bool isEscudada;
+
+  /// Venenos activos en la celda (origen + magnitud). El preview de combate
+  /// resta defensa solo a las cartas enemigas del veneno. Vacío = sin veneno.
+  final List<({String origen, int magnitud})> venenosCelda;
+
+  /// Escudos activos en la celda (origen + magnitud). Suman defensa solo a las
+  /// cartas del lanzador. Vacío = sin escudo.
+  final List<({String origen, int magnitud})> escudosCelda;
 
   /// uid → color del obelisco asignado (para colorear cartas por jugador)
   final Map<String, Color> playerColors;
+
+  /// uid del jugador local (lo pasa el tablero; reservado para futuros previews
+  /// de combate que necesiten distinguir al defensor del cuartel).
+  final String? localPlayerUid;
   final VoidCallback onTap;
 
   const CellWidget({
@@ -75,7 +97,14 @@ class CellWidget extends StatelessWidget {
     required this.isHighlighted,
     this.isMovable = false,
     this.isObelisco = false,
+    this.isRayo = false,
+    this.isEnvenenada = false,
+    this.isParalizada = false,
+    this.isEscudada = false,
+    this.venenosCelda = const [],
+    this.escudosCelda = const [],
     this.playerColors = const {},
+    this.localPlayerUid,
     required this.onTap,
   });
 
@@ -99,8 +128,8 @@ class CellWidget extends StatelessWidget {
         width: kCellW,
         height: kCellH,
         decoration: cellDeco,
-        foregroundDecoration:
-            _foregroundDeco(isSelected, isHighlighted, isMovable, isObelisco),
+        foregroundDecoration: _foregroundDeco(
+            isSelected, isHighlighted, isMovable, isObelisco, isRayo),
         child: Stack(
           children: [
             if (painter != null)
@@ -114,6 +143,21 @@ class CellWidget extends StatelessWidget {
             ),
             if (zone != null) _ZoneTriangle(color: zone.color),
 
+            // Resplandor dorado de la celda del rayo de farmeo (+10 Energies).
+            if (isRayo)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: 0.9,
+                        colors: [Color(0x55D4A800), Color(0x00D4A800)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
             // Badge de terreno — esquina inferior derecha, visible solo si no es tierra pura
             if (terrain != TerrainType.land)
               Positioned(
@@ -121,6 +165,66 @@ class CellWidget extends StatelessWidget {
                 bottom: 3,
                 child: _TerrainBadge(terrain: terrain),
               ),
+
+            // Badge del rayo — esquina superior izquierda.
+            if (isRayo) const Positioned(left: 3, top: 3, child: _RayoBadge()),
+
+            // Tinte verde tóxico de la celda envenenada.
+            if (isEnvenenada)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: 0.95,
+                        colors: [Color(0x3331C04A), Color(0x0031C04A)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Badge de veneno (calavera) — esquina superior derecha.
+            if (isEnvenenada)
+              const Positioned(right: 3, top: 3, child: _VenenoBadge()),
+
+            // Tinte gélido de la celda paralizada.
+            if (isParalizada)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: 0.95,
+                        colors: [Color(0x3340C0E0), Color(0x0040C0E0)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Badge de parálisis (reloj) — esquina inferior izquierda.
+            if (isParalizada)
+              const Positioned(left: 3, bottom: 3, child: _ParalisisBadge()),
+
+            // Tinte azulado de la celda escudada.
+            if (isEscudada)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        radius: 0.95,
+                        colors: [Color(0x333A78C8), Color(0x003A78C8)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+
+            // Badge de escudo — esquina inferior derecha.
+            if (isEscudada)
+              const Positioned(right: 3, bottom: 3, child: _EscudoBadge()),
 
             if (isSpawn && celda.isEmpty) SpawnMarker(coord: coord),
             if (!celda.isEmpty)
@@ -130,6 +234,8 @@ class CellWidget extends StatelessWidget {
                   isEnemyObelisco:
                       kObeliscoCoords.contains(coord) && !isObelisco,
                   playerColors: playerColors,
+                  venenosCelda: venenosCelda,
+                  escudosCelda: escudosCelda,
                 ),
               ),
           ],
@@ -138,8 +244,8 @@ class CellWidget extends StatelessWidget {
     );
   }
 
-  BoxDecoration? _foregroundDeco(
-      bool selected, bool highlighted, bool movable, bool isObelisco) {
+  BoxDecoration? _foregroundDeco(bool selected, bool highlighted, bool movable,
+      bool isObelisco, bool isRayo) {
     if (selected) {
       return BoxDecoration(
         border: Border.all(color: const Color(0xFFDCBE30), width: 2),
@@ -163,7 +269,115 @@ class CellWidget extends StatelessWidget {
         color: const Color(0xFF40B0FF).withOpacity(0.12),
       );
     }
+    if (isRayo) {
+      return BoxDecoration(
+        border: Border.all(color: const Color(0xFFD4A800), width: 1.5),
+      );
+    }
     return null;
+  }
+}
+
+/// Indicador de la celda del rayo de farmeo (+10 Energies).
+class _RayoBadge extends StatelessWidget {
+  const _RayoBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        color: const Color(0xFFD4A800).withOpacity(0.92),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFD4A800).withOpacity(0.6),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Text('⚡', style: TextStyle(fontSize: 10, height: 1.1)),
+    );
+  }
+}
+
+/// Indicador de celda envenenada (calavera ☠). Las cartas que estén o entren
+/// en la celda pierden defensa mientras el veneno siga activo.
+class _VenenoBadge extends StatelessWidget {
+  const _VenenoBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2BA046).withOpacity(0.92),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF2BA046).withOpacity(0.6),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Text('☠', style: TextStyle(fontSize: 11, height: 1.0)),
+    );
+  }
+}
+
+/// Indicador de celda paralizada (reloj ⏱). Las cartas que estén o entren en
+/// la celda no pueden moverse mientras la parálisis siga activa.
+class _ParalisisBadge extends StatelessWidget {
+  const _ParalisisBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        color: const Color(0xFF2C90C8).withOpacity(0.92),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF2C90C8).withOpacity(0.6),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Text('⏱', style: TextStyle(fontSize: 11, height: 1.0)),
+    );
+  }
+}
+
+/// Indicador de celda escudada (🛡). Las cartas del lanzador que estén o entren
+/// en la celda ganan defensa mientras el escudo siga activo.
+class _EscudoBadge extends StatelessWidget {
+  const _EscudoBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 18,
+      height: 18,
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A78C8).withOpacity(0.92),
+        borderRadius: BorderRadius.circular(4),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF3A78C8).withOpacity(0.6),
+            blurRadius: 6,
+          ),
+        ],
+      ),
+      alignment: Alignment.center,
+      child: const Text('🛡', style: TextStyle(fontSize: 10, height: 1.0)),
+    );
   }
 }
 
@@ -254,15 +468,43 @@ class _CardStack extends StatelessWidget {
   final CeldaState celda;
   final bool isEnemyObelisco;
   final Map<String, Color> playerColors;
+  final List<({String origen, int magnitud})> venenosCelda;
+  final List<({String origen, int magnitud})> escudosCelda;
   const _CardStack({
     required this.celda,
     this.isEnemyObelisco = false,
     this.playerColors = const {},
+    this.venenosCelda = const [],
+    this.escudosCelda = const [],
   });
 
   Color _colorFor(CartaEnCelda c) {
     if (playerColors.containsKey(c.ownerUid)) return playerColors[c.ownerUid]!;
     return ownerColor(c.ownerZone);
+  }
+
+  /// Defensa efectiva de una carta: resta el veneno de la celda (de un rival)
+  /// y suma el escudo de la celda (del propio dueño), además de los efectos que
+  /// ya lleva encima. Refleja lo que la propagación del servidor aplicará.
+  int _defEfectiva(CartaEnCelda c) {
+    int venenoCelda = 0;
+    for (final v in venenosCelda) {
+      if (v.origen == c.ownerUid) continue; // el veneno propio no le afecta
+      if (v.magnitud > venenoCelda) venenoCelda = v.magnitud;
+    }
+    int escudoCelda = 0;
+    for (final s in escudosCelda) {
+      if (s.origen != c.ownerUid) continue; // el escudo solo protege a su dueño
+      if (s.magnitud > escudoCelda) escudoCelda = s.magnitud;
+    }
+    final reduccion = c.defensaReducidaPorEfectos > venenoCelda
+        ? c.defensaReducidaPorEfectos
+        : venenoCelda;
+    final extra = c.defensaExtraPorEfectos > escudoCelda
+        ? c.defensaExtraPorEfectos
+        : escudoCelda;
+    final r = c.carta.defensa - reduccion + extra;
+    return r > 0 ? r : 0;
   }
 
   @override
@@ -306,20 +548,31 @@ class _CardStack extends StatelessWidget {
     }
 
     // ── Combate pendiente: cartas de distintos jugadores en la misma celda ──
-    // Agrupa por ownerUid y muestra la fuerza total de cada grupo con su color.
+    // En vez de la fuerza bruta se muestra el RESULTADO del ataque contra la
+    // defensa (poder neto), igual que el informe de combate, con el icono ⚡.
+    //   poderNeto(X) = Σfuerza(X) − ΣdefensaEfectiva(enemigos de X)
+    // Nota: el +80 de defensa del cuartel se aplica en la resolución del
+    // servidor; este preview usa la fórmula base (válida fuera de obeliscos).
     if (celda.hayCombate) {
-      // Construir grupos: uid → (fuerza, color, numCartas)
-      final grupos = <String, ({int fuerza, int numCartas, Color color})>{};
+      // Construir grupos: uid → (fuerza, defensa efectiva, numCartas, color)
+      final grupos =
+          <String, ({int fuerza, int defensa, int numCartas, Color color})>{};
       for (final c in celda.cartas) {
         final uid = c.ownerUid;
         final prev = grupos[uid];
         grupos[uid] = (
           fuerza: (prev?.fuerza ?? 0) + c.carta.fuerza,
+          defensa: (prev?.defensa ?? 0) + _defEfectiva(c),
           numCartas: (prev?.numCartas ?? 0) + 1,
           color: _colorFor(c),
         );
       }
       final entries = grupos.entries.toList();
+      final defensaTotal = entries.fold<int>(0, (s, e) => s + e.value.defensa);
+
+      // Poder neto de un grupo = su fuerza − defensa efectiva de los rivales.
+      int netoDe(int fuerza, int defensaPropia) =>
+          fuerza - (defensaTotal - defensaPropia);
 
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
@@ -339,60 +592,66 @@ class _CardStack extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // ⚔ icono de combate
-            const Text('⚔', style: TextStyle(fontSize: 9, height: 1)),
+            // ⚡ resultado del ataque contra la defensa
+            const Text('⚡', style: TextStyle(fontSize: 10, height: 1)),
             const SizedBox(height: 2),
-            // Fuerza de cada jugador separada por "vs"
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                for (int i = 0; i < entries.length; i++) ...[
-                  if (i > 0)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 3),
-                      child: Text(
-                        'vs',
-                        style: TextStyle(
-                          fontSize: 7,
-                          color: Color(0xFF888888),
-                          fontFamily: 'Cinzel',
-                          height: 1,
+            // Poder neto de cada jugador separado por ⚡. FittedBox escala el
+            // contenido para que no desborde en celdas estrechas.
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  for (int i = 0; i < entries.length; i++) ...[
+                    if (i > 0)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 3),
+                        child: Text(
+                          '⚡',
+                          style: TextStyle(fontSize: 8, height: 1),
                         ),
                       ),
-                    ),
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        '${entries[i].value.fuerza}',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: entries[i].value.color,
-                          fontFamily: 'Cinzel',
-                          height: 1,
-                          shadows: [
-                            Shadow(
-                              color: entries[i].value.color.withOpacity(0.6),
-                              blurRadius: 6,
+                    Builder(
+                      builder: (_) {
+                        final v = entries[i].value;
+                        final neto = netoDe(v.fuerza, v.defensa);
+                        final txt = neto >= 0 ? '+$neto' : '$neto';
+                        return Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              txt,
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: v.color,
+                                fontFamily: 'Cinzel',
+                                height: 1,
+                                shadows: [
+                                  Shadow(
+                                    color: v.color.withOpacity(0.6),
+                                    blurRadius: 6,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '${v.fuerza}/${v.defensa} · ${v.numCartas}u',
+                              style: TextStyle(
+                                fontSize: 6.5,
+                                color: v.color.withOpacity(0.70),
+                                fontFamily: 'Cinzel',
+                                height: 1.1,
+                              ),
                             ),
                           ],
-                        ),
-                      ),
-                      Text(
-                        '${entries[i].value.numCartas}u',
-                        style: TextStyle(
-                          fontSize: 7,
-                          color: entries[i].value.color.withOpacity(0.70),
-                          fontFamily: 'Cinzel',
-                          height: 1.1,
-                        ),
-                      ),
-                    ],
-                  ),
+                        );
+                      },
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ],
         ),

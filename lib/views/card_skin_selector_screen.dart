@@ -1,8 +1,8 @@
 // lib/views/card_skin_selector_screen.dart
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
+import '../services/warzero_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CardSkinSelectorScreen
@@ -45,7 +45,7 @@ class CardSkinSelectorScreen extends StatefulWidget {
 }
 
 class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
-  final _db = FirebaseFirestore.instance;
+  final _api = WarZeroApi();
 
   bool _loading = true;
   bool _saving = false;
@@ -69,39 +69,35 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
         return;
       }
 
-      // Cargamos solo las skins que el jugador tiene desbloqueadas.
-      // Firestore limita whereIn a 30 elementos; con >30 skins haría falta
-      // paginar, pero para el caso de uso actual (por carta) es más que suficiente.
-      final snap = await _db
-          .collection('Skins')
-          .where(FieldPath.documentId, whereIn: widget.skinsDesbloqueadas)
-          .where('cartaId', isEqualTo: widget.carta.id)
-          .get();
+      // El servidor resuelve las skins desbloqueadas de esta carta (lee la
+      // colección y la colección Skins). El cliente ya no toca Firestore.
+      final raw = await _api.obtenerSkins(widget.uid, widget.carta.id);
 
-      final skins = snap.docs.map((doc) {
-        final d = doc.data();
-        return _SkinItem(
-          id: doc.id,
-          nombre: d['nombre']?.toString() ?? 'Sin nombre',
-          imagen: d['imagen']?.toString() ?? '',
-          rareza: d['rareza']?.toString() ?? 'comun',
-        );
-      }).toList();
+      final skins = raw
+          .map((d) => _SkinItem(
+                id: d['id']?.toString() ?? '',
+                nombre: d['nombre']?.toString() ?? 'Sin nombre',
+                imagen: d['imagen']?.toString() ?? '',
+                rareza: d['rareza']?.toString() ?? 'comun',
+              ))
+          .toList();
 
       skins.sort(
           (a, b) => _rarezaOrder(b.rareza).compareTo(_rarezaOrder(a.rareza)));
 
-      if (mounted)
+      if (mounted) {
         setState(() {
           _skins = skins;
           _loading = false;
         });
+      }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _error = e.toString();
           _loading = false;
         });
+      }
     }
   }
 
@@ -147,16 +143,13 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
   Future<void> _confirmarSeleccion() async {
     setState(() => _saving = true);
     try {
-      // Escribimos SOLO el campo skinSeleccionada en el doc de la colección.
-      // El resto (cantidad, skinsDesbloqueadas, fechaObtenida) no se toca.
-      await _db
-          .collection('Jugadores')
-          .doc(widget.uid)
-          .collection('Coleccion')
-          .doc(widget.carta.id)
-          .update({
-        'skinSeleccionada': _selectedSkinId ?? FieldValue.delete(),
-      });
+      // El servidor escribe skinSeleccionada (o lo borra si es null) en la
+      // colección del jugador. El cliente ya no toca Firestore.
+      await _api.seleccionarSkin(
+        uid: widget.uid,
+        cartaId: widget.carta.id,
+        skinId: _selectedSkinId,
+      );
 
       if (!mounted) return;
 

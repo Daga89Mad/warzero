@@ -89,10 +89,17 @@ class HabilidadService {
       case RangoTipo.cualquiera:
         candidatos.addAll(_todasLasCeldas(config));
         break;
+      case RangoTipo.propia:
+        // La única celda válida es el propio origen (donde se marca).
+        candidatos.add(origen);
+        break;
     }
 
-    // El origen nunca es objetivo válido (no te lanzas a ti mismo).
-    candidatos.remove(origen);
+    // El origen nunca es objetivo válido (no te lanzas a ti mismo), salvo en
+    // habilidades de rango `propia`, que se marcan sobre la celda de origen.
+    if (habilidad.rango.tipo != RangoTipo.propia) {
+      candidatos.remove(origen);
+    }
 
     // Filtrar cuarteles generales si la habilidad lo requiere.
     if (habilidad.excluyeCG && obeliscosPorJugador.isNotEmpty) {
@@ -185,6 +192,8 @@ class HabilidadService {
     final teles = <AccionPendiente>[];
     final disparos = <AccionPendiente>[];
     final venenos = <AccionPendiente>[];
+    final paralisis = <AccionPendiente>[];
+    final escudos = <AccionPendiente>[];
 
     for (final a in acciones) {
       final h = CatalogoHabilidades.get(a.habilidadId);
@@ -199,6 +208,12 @@ class HabilidadService {
         case EfectoTipo.veneno:
           venenos.add(a);
           break;
+        case EfectoTipo.paralisis:
+          paralisis.add(a);
+          break;
+        case EfectoTipo.escudo:
+          escudos.add(a);
+          break;
       }
     }
 
@@ -211,9 +226,15 @@ class HabilidadService {
     for (final a in venenos) {
       _aplicarVeneno(a, t, e, log, obeliscosPorJugador);
     }
+    for (final a in paralisis) {
+      _aplicarParalisis(a, t, e, log, obeliscosPorJugador);
+    }
+    for (final a in escudos) {
+      _aplicarEscudo(a, t, e, log, obeliscosPorJugador);
+    }
 
-    // Propagar veneno preexistente a cartas que estén actualmente en la celda.
-    _propagarVenenoACeldas(t, e);
+    // Propagar efectos preexistentes a cartas que estén actualmente en la celda.
+    _propagarEfectosACeldas(t, e);
 
     return ResultadoAplicarAcciones(
       tableroResultante: t,
@@ -335,9 +356,11 @@ class HabilidadService {
       );
       _agregarOFusionarEfectoCelda(e, obj, efecto);
 
-      // Aplicar también a las cartas que estén ahora mismo en la celda.
+      // Aplicar solo a las cartas ENEMIGAS que estén ahora en la celda
+      // (no a las del lanzador; si no, en un 1v1 no cambiaría el resultado).
       final cartas = t[obj] ?? const [];
       for (final c in cartas) {
+        if ((c['ownerUid'] ?? '') == a.uid) continue;
         _agregarOFusionarEfectoCarta(c, efecto);
       }
 
@@ -355,11 +378,100 @@ class HabilidadService {
     }
   }
 
+  /// Marca celdas como paralizadas durante N turnos y aplica el efecto a las
+  /// cartas que estén ahora mismo en la celda. La parálisis no reduce defensa
+  /// (magnitud 0); su efecto es impedir el movimiento (lo aplica el cliente).
+  static void _aplicarParalisis(
+    AccionPendiente a,
+    Map<String, List<Map<String, dynamic>>> t,
+    Map<String, List<EfectoActivo>> e,
+    List<Map<String, dynamic>> log,
+    Map<String, String> obeliscosPorJugador,
+  ) {
+    final h = CatalogoHabilidades.get(a.habilidadId);
+    if (h == null) return;
+
+    for (final obj in a.objetivos) {
+      if (h.excluyeCG && obeliscosPorJugador.values.contains(obj)) {
+        continue;
+      }
+      final efecto = EfectoActivo(
+        tipo: EfectoTipoEstado.paralisis,
+        turnosRestantes: h.efecto.duracionTurnos,
+        magnitud: 0,
+        origenUid: a.uid,
+      );
+      _agregarOFusionarEfectoCelda(e, obj, efecto);
+
+      final cartas = t[obj] ?? const [];
+      for (final c in cartas) {
+        if ((c['ownerUid'] ?? '') == a.uid) continue;
+        _agregarOFusionarEfectoCarta(c, efecto);
+      }
+
+      log.add({
+        'tipo': 'paralisis',
+        'habilidadId': h.id,
+        'habilidadNombre': h.nombre,
+        'uid': a.uid,
+        'zona': a.zona,
+        'origen': a.origen,
+        'objetivo': obj,
+        'turnosRestantes': efecto.turnosRestantes,
+      });
+    }
+  }
+
+  /// Marca celdas como escudadas durante N turnos y aplica el efecto a las
+  /// cartas del LANZADOR que estén ahora en la celda (buff aliado: suma
+  /// defensa). A diferencia del veneno/parálisis, afecta a las cartas propias.
+  static void _aplicarEscudo(
+    AccionPendiente a,
+    Map<String, List<Map<String, dynamic>>> t,
+    Map<String, List<EfectoActivo>> e,
+    List<Map<String, dynamic>> log,
+    Map<String, String> obeliscosPorJugador,
+  ) {
+    final h = CatalogoHabilidades.get(a.habilidadId);
+    if (h == null) return;
+
+    for (final obj in a.objetivos) {
+      if (h.excluyeCG && obeliscosPorJugador.values.contains(obj)) {
+        continue;
+      }
+      final efecto = EfectoActivo(
+        tipo: EfectoTipoEstado.escudo,
+        turnosRestantes: h.efecto.duracionTurnos,
+        magnitud: h.efecto.defensaReducida,
+        origenUid: a.uid,
+      );
+      _agregarOFusionarEfectoCelda(e, obj, efecto);
+
+      final cartas = t[obj] ?? const [];
+      for (final c in cartas) {
+        if ((c['ownerUid'] ?? '') != a.uid) continue; // solo cartas propias
+        _agregarOFusionarEfectoCarta(c, efecto);
+      }
+
+      log.add({
+        'tipo': 'escudo',
+        'habilidadId': h.id,
+        'habilidadNombre': h.nombre,
+        'uid': a.uid,
+        'zona': a.zona,
+        'origen': a.origen,
+        'objetivo': obj,
+        'turnosRestantes': efecto.turnosRestantes,
+        'magnitud': efecto.magnitud,
+      });
+    }
+  }
+
   /// Para cada celda con efectos activos, garantiza que las cartas
   /// actualmente en la celda tienen el efecto registrado.
-  /// Cumple: "si una carta entra en una celda envenenada, también queda
-  /// envenenada".
-  static void _propagarVenenoACeldas(
+  ///   - veneno / parálisis (debuff): afectan a cartas ENEMIGAS del origen.
+  ///   - escudo (buff): afecta a las cartas PROPIAS del origen.
+  static void _propagarEfectosACeldas(
     Map<String, List<Map<String, dynamic>>> t,
     Map<String, List<EfectoActivo>> e,
   ) {
@@ -367,8 +479,11 @@ class HabilidadService {
       final cartas = t[coord];
       if (cartas == null || cartas.isEmpty) return;
       for (final ef in lista) {
-        if (ef.tipo != EfectoTipoEstado.veneno) continue;
+        if (ef.turnosRestantes <= 0) continue;
+        final esBuff = ef.tipo == EfectoTipoEstado.escudo;
         for (final c in cartas) {
+          final esPropia = (c['ownerUid'] ?? '') == ef.origenUid;
+          if (esBuff ? !esPropia : esPropia) continue;
           _agregarOFusionarEfectoCarta(c, ef);
         }
       }
