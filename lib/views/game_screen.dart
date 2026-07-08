@@ -173,6 +173,11 @@ class _GameScreenState extends State<GameScreen> {
   final Set<String> _cartasEvolucionadasEsteTurno = {};
   bool get _haEvolucionadoEsteTurno => _cartasEvolucionadasEsteTurno.isNotEmpty;
 
+  /// Exclusión mutua por CARTA: una carta que se mueve no puede usar habilidad
+  /// ese turno, y una que usa habilidad no puede moverse.
+  final Set<String> _cartasQueSeMovieron = {};
+  final Set<String> _cartasQueUsaronHabilidad = {};
+
   bool get _hayCambiosPendientes =>
       _cartasMovidasEsteTurno.isNotEmpty || _accionesPendientes.isNotEmpty;
 
@@ -326,7 +331,7 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
-    _toast('${original.carta.nombre} → ${evolucion.nombre}  (-$coste⚡)');
+    _toast('${original.carta.nombre} → ${evolucion.nombre}  (-${coste}Ø)');
   }
 
   // ── Helper para reconstruir un CartaModel desde un mapa ───
@@ -688,6 +693,8 @@ class _GameScreenState extends State<GameScreen> {
           _cartasMovidasEsteTurno.clear();
           _haMovidoEsteTurno = false;
           _cartasEvolucionadasEsteTurno.clear();
+          _cartasQueSeMovieron.clear();
+          _cartasQueUsaronHabilidad.clear();
           _energiaGastadaDespliegue = 0;
         });
         _turnoConfirmadoStream = lobby.turnoActual;
@@ -735,6 +742,8 @@ class _GameScreenState extends State<GameScreen> {
         _cartasMovidasEsteTurno.clear();
         _haMovidoEsteTurno = false;
         _cartasEvolucionadasEsteTurno.clear();
+        _cartasQueSeMovieron.clear();
+        _cartasQueUsaronHabilidad.clear();
         _puntosInicial = 0;
         _energiaGastadaDespliegue = 0;
       });
@@ -949,6 +958,8 @@ class _GameScreenState extends State<GameScreen> {
           _cartasMovidasEsteTurno.clear();
           _haMovidoEsteTurno = false;
           _cartasEvolucionadasEsteTurno.clear();
+          _cartasQueSeMovieron.clear();
+          _cartasQueUsaronHabilidad.clear();
           _energiaGastadaDespliegue = 0;
         });
 
@@ -1093,7 +1104,10 @@ class _GameScreenState extends State<GameScreen> {
         if ((visited[nCoord] ?? 999) <= newSteps) continue;
         if (!_config.canTraverse(nCoord, tipo)) continue;
         visited[nCoord] = newSteps;
-        if (nCoord != from && _config.canLand(nCoord, tipo)) {
+        if (nCoord != from &&
+            _config.canLand(nCoord, tipo) &&
+            !_boardState.celdaProtegidaPorRival(
+                nCoord, _localPlayer.datos.uid)) {
           result.add(nCoord);
         }
         if (newSteps < mov) {
@@ -1196,11 +1210,18 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
+    // ── Celda protegida por un escudo rival ───────────────────
+    if (_boardState.celdaProtegidaPorRival(coord, _localPlayer.datos.uid)) {
+      _toast('🛡 Celda escudada por un rival: no puedes desplegar aquí',
+          error: true);
+      return;
+    }
+
     // ── Comprobar coste de energía ────────────────────────────
     final coste = carta.coste;
     if (_localPlayer.puntos < coste) {
       _toast(
-        '⚡ Energía insuficiente: necesitas $coste, tienes ${_localPlayer.puntos}',
+        'Ø Zero insuficiente: necesitas $coste, tienes ${_localPlayer.puntos}',
         error: true,
       );
       return;
@@ -1240,7 +1261,7 @@ class _GameScreenState extends State<GameScreen> {
     }
 
     if (coste > 0) {
-      _toast('${carta.nombre} desplegada  (-$coste ⚡)');
+      _toast('${carta.nombre} desplegada  (-$coste Ø)');
     }
   }
 
@@ -1259,7 +1280,7 @@ class _GameScreenState extends State<GameScreen> {
     ));
   }
 
-  /// Compra una carta especial: descuenta Energies, la coloca en el cuartel y
+  /// Compra una carta especial: descuenta Zero, la coloca en el cuartel y
   /// la marca como comprada (deshabilitada para futuras compras).
   Future<CompraResult> _comprarEspecial(CartaModel carta) async {
     CompraResult fallo(String m) => CompraResult(
@@ -1351,9 +1372,22 @@ class _GameScreenState extends State<GameScreen> {
             i < celda.cartas.length &&
             celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
             !_cartasMovidasEsteTurno.contains(celda.cartas[i].carta.id) &&
+            !_cartasQueUsaronHabilidad.contains(celda.cartas[i].carta.id) &&
             !celda.cartas[i].carta.esEstatica &&
             !celda.cartas[i].paralizado)
         .toList();
+
+    if (validIndices.isEmpty) {
+      final algunaUsoHabilidad = indices.any((i) =>
+          i < celda.cartas.length &&
+          celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
+          _cartasQueUsaronHabilidad.contains(celda.cartas[i].carta.id));
+      if (algunaUsoHabilidad) {
+        _toast('Esa carta usó habilidad este turno: no puede moverse.',
+            error: true);
+        return;
+      }
+    }
 
     if (validIndices.isEmpty) {
       final algunaParalizada = indices.any((i) =>
@@ -1361,7 +1395,7 @@ class _GameScreenState extends State<GameScreen> {
           celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
           celda.cartas[i].paralizado);
       if (algunaParalizada) {
-        _toast('❄ Cartas paralizadas: no pueden moverse este turno',
+        _toast('⏱ Cartas paralizadas: no pueden moverse este turno',
             error: true);
         return;
       }
@@ -1388,7 +1422,7 @@ class _GameScreenState extends State<GameScreen> {
     }
 
     final minMov = validIndices
-        .map((i) => celda.cartas[i].carta.movimiento)
+        .map((i) => celda.cartas[i].movimientoEfectivo)
         .reduce((a, b) => a < b ? a : b);
     final tipo = _tipoEfectivo(validIndices, celda);
     if (tipo == -1) {
@@ -1427,6 +1461,7 @@ class _GameScreenState extends State<GameScreen> {
       for (final c in moving) {
         st = st.placeCarta(dest, c);
         _cartasMovidasEsteTurno.add(c.carta.id);
+        _cartasQueSeMovieron.add(c.carta.id);
       }
       _haMovidoEsteTurno = true;
       _boardState = st;
@@ -1508,6 +1543,11 @@ class _GameScreenState extends State<GameScreen> {
     if (_localPlayer.puntos < carta.carta.costeHabilidad) {
       _toast(
           'Energías insuficientes (${_localPlayer.puntos} / ${carta.carta.costeHabilidad}).',
+          error: true);
+      return;
+    }
+    if (_cartasQueSeMovieron.contains(carta.carta.id)) {
+      _toast('Esta carta ya se movió este turno: no puede usar habilidad.',
           error: true);
       return;
     }
@@ -1687,6 +1727,7 @@ class _GameScreenState extends State<GameScreen> {
         final indice = controller.cartaTableroIndice!;
         final celda = _boardState.getCelda(coord);
         if (indice >= 0 && indice < celda.cartas.length) {
+          _cartasQueUsaronHabilidad.add(celda.cartas[indice].carta.id);
           final actualizada = celda.cartas[indice]
               .copyWith(ultimoUsoHabilidad: _boardState.turnoActual);
           final nuevasCartas = [...celda.cartas];
@@ -1716,6 +1757,8 @@ class _GameScreenState extends State<GameScreen> {
       _cartasMovidasEsteTurno.clear();
       _haMovidoEsteTurno = false;
       _cartasEvolucionadasEsteTurno.clear();
+      _cartasQueSeMovieron.clear();
+      _cartasQueUsaronHabilidad.clear();
       _moveFromCoord = null;
       _moveCardIndices = [];
       _movableCoords = {};
@@ -1793,7 +1836,7 @@ class _GameScreenState extends State<GameScreen> {
       }
     }
 
-    _toast('${carta.nombre} sacrificada  (+$recompensa ⚡)');
+    _toast('${carta.nombre} sacrificada  (+$recompensa Ø)');
   }
 
   void _onHandCardTap(int index) {
@@ -2074,6 +2117,8 @@ class _GameScreenState extends State<GameScreen> {
           _cartasMovidasEsteTurno.clear();
           _haMovidoEsteTurno = false;
           _cartasEvolucionadasEsteTurno.clear();
+          _cartasQueSeMovieron.clear();
+          _cartasQueUsaronHabilidad.clear();
           // Las acciones (veneno, disparo, teletransporte…) pertenecían al
           // turno que acaba de resolverse; hay que descartarlas o se
           // reenviarían cada turno (p. ej. el veneno se refrescaría a 3

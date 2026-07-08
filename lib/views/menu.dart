@@ -12,6 +12,7 @@ import 'package:warzero/views/historias_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/edicion_cartas_screen.dart';
 import 'package:warzero/views/edicion_historias_screen.dart';
+import 'package:warzero/views/edicion_skins_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -175,6 +176,17 @@ class MenuScreen extends StatelessWidget {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const EdicionHistoriasScreen()),
+                        ),
+                      ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.palette_outlined,
+                        label: 'ED. SKINS',
+                        sublabel: 'Crear y asociar\nskins a cartas',
+                        accent: const Color(0xFF30B0A0),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionSkinsScreen()),
                         ),
                       ),
                     _MenuTile(

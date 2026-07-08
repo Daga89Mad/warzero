@@ -688,7 +688,12 @@ class _MiniCell extends StatelessWidget {
             const Positioned(
               bottom: 2,
               right: 2,
-              child: Icon(Icons.bolt, size: 10, color: Color(0xFFFFE066)),
+              child: Text('Ø',
+                  style: TextStyle(
+                      fontSize: 10,
+                      height: 1,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFFFFE066))),
             ),
           // Fichas de cartas en el centro (puntos coloreados por jugador)
           if (tieneCartas)

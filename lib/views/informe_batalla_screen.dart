@@ -6,7 +6,7 @@ import '../models/carta_model.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PANTALLA INFORME DE BATALLA
-// Pestañas: COMBATES · ENERGIES · MOVIMIENTOS · CARTA
+// Pestañas: COMBATES · ZERO · MOVIMIENTOS · CARTA
 // ─────────────────────────────────────────────────────────────────────────────
 
 class InformeBatallaScreen extends StatefulWidget {
@@ -231,7 +231,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                 fontFamily: 'Cinzel', fontSize: 9, letterSpacing: 1.5),
             tabs: [
               Tab(text: 'COMBATES'),
-              Tab(text: 'ENERGIES'),
+              Tab(text: 'ZERO'),
               Tab(text: 'CARTA'),
               Tab(text: 'MOVIMIENTOS'),
             ],
@@ -422,7 +422,7 @@ class _CartaTab extends StatelessWidget {
                   color: const Color(0xFF4090D0)),
               const SizedBox(width: 10),
               _StatCard(
-                  icon: '⚡',
+                  icon: 'Ø',
                   label: 'COSTE',
                   value: carta!.coste,
                   color: const Color(0xFFD4A800)),
@@ -937,6 +937,7 @@ class _GrupoDesglose extends StatelessWidget {
                       ((c['defensa'] ?? c['Defensa'] ?? 0) as num).toInt();
                   final red = ((c['reduccionVeneno'] ?? 0) as num).toInt();
                   final esc = ((c['bonusEscudo'] ?? 0) as num).toInt();
+                  final fBonus = ((c['bonusFuerza'] ?? 0) as num).toInt();
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 3),
                     child: Row(children: [
@@ -948,7 +949,11 @@ class _GrupoDesglose extends StatelessWidget {
                                   color: Color(0xFF506070)),
                               overflow: TextOverflow.ellipsis)),
                       _CardStatRow(
-                          fuerza: f, defensa: d, reduccion: red, escudo: esc),
+                          fuerza: f,
+                          defensa: d,
+                          reduccion: red,
+                          escudo: esc,
+                          fuerzaBonus: fBonus),
                     ]),
                   );
                 }).toList(),
@@ -964,7 +969,7 @@ class _GrupoDesglose extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TAB ENERGIES
+// TAB ZERO
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _EnergiesTab extends StatelessWidget {
@@ -1042,7 +1047,11 @@ class _RayoBanner extends StatelessWidget {
             color: const Color(0xFFD4A800).withOpacity(0.5), width: 1),
       ),
       child: Row(children: [
-        const Text('⚡', style: TextStyle(fontSize: 18)),
+        const Text('Ø',
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFD4A800))),
         const SizedBox(width: 10),
         Expanded(
           child:
@@ -1053,7 +1062,7 @@ class _RayoBanner extends StatelessWidget {
                     fontSize: 9,
                     letterSpacing: 2,
                     color: Color(0xFFD4A800))),
-            Text('Celda  $coord  →  +10 Energies',
+            Text('Celda  $coord  →  +10 Zero',
                 style: const TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 8,
@@ -1109,7 +1118,7 @@ class _ReglasFarmeoCard extends StatelessWidget {
               icon: '🏝', label: 'Carta en isla central', bonus: '+7 / carta'),
           const SizedBox(height: 4),
           _ReglaRow(
-              icon: '⚡',
+              icon: 'Ø',
               label: 'Carta en posición del rayo',
               bonus: '+10 / carta'),
           const SizedBox(height: 4),
@@ -1227,7 +1236,7 @@ class _FarmeoTile extends StatelessWidget {
                       color: const Color(0xFFD4A800).withOpacity(0.5),
                       width: 0.5),
                 ),
-                child: Text('+$total ⚡',
+                child: Text('+$total Ø',
                     style: const TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 10,
@@ -1249,7 +1258,7 @@ class _FarmeoTile extends StatelessWidget {
                   _FarmeoRow(icon: '🏝', label: 'Isla central', value: isla),
                 if (rayo > 0)
                   _FarmeoRow(
-                      icon: '⚡', label: 'Rayo', value: rayo, highlight: true),
+                      icon: 'Ø', label: 'Rayo', value: rayo, highlight: true),
                 if (suerte > 0)
                   _FarmeoRow(
                       icon: '🍀',
@@ -1541,11 +1550,13 @@ class _CardStatRow extends StatelessWidget {
   final int defensa;
   final int reduccion;
   final int escudo;
+  final int fuerzaBonus;
   const _CardStatRow(
       {required this.fuerza,
       required this.defensa,
       this.reduccion = 0,
-      this.escudo = 0});
+      this.escudo = 0,
+      this.fuerzaBonus = 0});
 
   @override
   Widget build(BuildContext context) {
@@ -1557,9 +1568,17 @@ class _CardStatRow extends StatelessWidget {
       children: [
         const Text('⚔', style: TextStyle(fontSize: 9)),
         const SizedBox(width: 2),
-        Text('$fuerza',
-            style: const TextStyle(
-                fontFamily: 'Cinzel', fontSize: 9, color: Color(0xFFE08040))),
+        Text('${fuerza + fuerzaBonus}',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 9,
+                color: fuerzaBonus > 0
+                    ? const Color(0xFFFFB84D)
+                    : const Color(0xFFE08040))),
+        if (fuerzaBonus > 0)
+          Text(' 💪+$fuerzaBonus',
+              style: const TextStyle(
+                  fontFamily: 'Cinzel', fontSize: 8, color: Color(0xFFFFCC80))),
         const SizedBox(width: 8),
         const Text('🛡', style: TextStyle(fontSize: 9)),
         const SizedBox(width: 2),

@@ -84,7 +84,20 @@ enum EfectoTipo {
   /// que estén o entren en la celda ganan [defensaReducida] de defensa extra
   /// (el mismo campo se reutiliza como magnitud; aquí SUMA en vez de restar).
   escudo,
+
+  /// Potenciaciones (buff aliado): suman a las cartas del lanzador en la celda
+  /// fuerza, defensa o movimiento durante N turnos ([defensaReducida] = magnitud).
+  potenciarFuerza,
+  potenciarDefensa,
+  potenciarMovimiento,
 }
+
+/// Magnitudes y duración por defecto de las potenciaciones. Configurables aquí
+/// (y su espejo en el servidor, `WarZeroLogic.cs`).
+const int kPotFuerzaMagnitud = 5;
+const int kPotDefensaMagnitud = 5;
+const int kPotMovimientoMagnitud = 2;
+const int kPotDuracionTurnos = 3;
 
 class EfectoHabilidad {
   final EfectoTipo tipo;
@@ -119,6 +132,21 @@ class EfectoHabilidad {
     this.defensaReducida = 3,
     this.duracionTurnos = 3,
   }) : tipo = EfectoTipo.escudo;
+
+  const EfectoHabilidad.potFuerza({
+    this.defensaReducida = kPotFuerzaMagnitud,
+    this.duracionTurnos = kPotDuracionTurnos,
+  }) : tipo = EfectoTipo.potenciarFuerza;
+
+  const EfectoHabilidad.potDefensa({
+    this.defensaReducida = kPotDefensaMagnitud,
+    this.duracionTurnos = kPotDuracionTurnos,
+  }) : tipo = EfectoTipo.potenciarDefensa;
+
+  const EfectoHabilidad.potMovimiento({
+    this.defensaReducida = kPotMovimientoMagnitud,
+    this.duracionTurnos = kPotDuracionTurnos,
+  }) : tipo = EfectoTipo.potenciarMovimiento;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -179,7 +207,10 @@ class Habilidad {
 ///   6, 7, 8 → veneno (cercano, medio, lejano)
 ///   9, 10, 11 → parálisis (cercano, medio, lejano)
 ///   12, 13, 14 → escudo (propia, adyacente, lejano)
-///   15+      → reservado (futuras)
+///   15, 16, 17 → potenciar fuerza (propia, adyacente, lejano)
+///   18, 19, 20 → potenciar defensa (propia, adyacente, lejano)
+///   21, 22, 23 → potenciar movimiento (propia, adyacente, lejano)
+///   24+      → reservado (futuras)
 class CatalogoHabilidades {
   CatalogoHabilidades._();
 
@@ -317,8 +348,8 @@ class CatalogoHabilidades {
       id: 12,
       nombre: 'Escudo cercano',
       descripcion:
-          'Escuda la propia celda de origen. Durante 3 turnos tus cartas en '
-          'ella (o que entren) ganan 3 de defensa.',
+          'Escuda la propia celda de origen durante 3 turnos: queda protegida de '
+          'acciones y movimientos enemigos (no pueden afectarla ni entrar en ella).',
       icon: '🛡',
       rango: RangoHabilidad.propia(),
       efecto: EfectoHabilidad.escudo(),
@@ -327,8 +358,8 @@ class CatalogoHabilidades {
       id: 13,
       nombre: 'Escudo medio',
       descripcion:
-          'Escuda una celda adyacente al origen. Durante 3 turnos tus cartas '
-          'en ella (o que entren) ganan 3 de defensa.',
+          'Escuda una celda adyacente durante 3 turnos: queda protegida de acciones '
+          'y movimientos enemigos (no pueden afectarla ni entrar en ella).',
       icon: '🛡',
       rango: RangoHabilidad.frontera(),
       efecto: EfectoHabilidad.escudo(),
@@ -337,11 +368,107 @@ class CatalogoHabilidades {
       id: 14,
       nombre: 'Escudo lejano',
       descripcion:
-          'Escuda cualquier celda del mapa. Durante 3 turnos tus cartas en '
-          'ella (o que entren) ganan 3 de defensa.',
+          'Escuda cualquier celda del mapa durante 3 turnos: queda protegida de '
+          'acciones y movimientos enemigos (no pueden afectarla ni entrar en ella).',
       icon: '🛡',
       rango: RangoHabilidad.cualquiera(),
       efecto: EfectoHabilidad.escudo(),
+    ),
+
+    // ── POTENCIAR FUERZA (buff aliado, +$kPotFuerzaMagnitud fuerza) ──
+    15: Habilidad(
+      id: 15,
+      nombre: 'Potenciar fuerza cercano',
+      descripcion:
+          'Potencia la propia celda: tus cartas en ella (o que entren) ganan '
+          '$kPotFuerzaMagnitud de fuerza durante $kPotDuracionTurnos turnos.',
+      icon: '💪',
+      rango: RangoHabilidad.propia(),
+      efecto: EfectoHabilidad.potFuerza(),
+    ),
+    16: Habilidad(
+      id: 16,
+      nombre: 'Potenciar fuerza medio',
+      descripcion:
+          'Potencia una celda adyacente: tus cartas en ella (o que entren) '
+          'ganan $kPotFuerzaMagnitud de fuerza durante $kPotDuracionTurnos turnos.',
+      icon: '💪',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.potFuerza(),
+    ),
+    17: Habilidad(
+      id: 17,
+      nombre: 'Potenciar fuerza lejano',
+      descripcion:
+          'Potencia cualquier celda: tus cartas en ella (o que entren) ganan '
+          '$kPotFuerzaMagnitud de fuerza durante $kPotDuracionTurnos turnos.',
+      icon: '💪',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.potFuerza(),
+    ),
+
+    // ── POTENCIAR DEFENSA (buff aliado, +$kPotDefensaMagnitud defensa) ──
+    18: Habilidad(
+      id: 18,
+      nombre: 'Potenciar defensa cercano',
+      descripcion:
+          'Potencia la propia celda: tus cartas en ella (o que entren) ganan '
+          '$kPotDefensaMagnitud de defensa durante $kPotDuracionTurnos turnos.',
+      icon: '🛡',
+      rango: RangoHabilidad.propia(),
+      efecto: EfectoHabilidad.potDefensa(),
+    ),
+    19: Habilidad(
+      id: 19,
+      nombre: 'Potenciar defensa medio',
+      descripcion:
+          'Potencia una celda adyacente: tus cartas en ella (o que entren) '
+          'ganan $kPotDefensaMagnitud de defensa durante $kPotDuracionTurnos turnos.',
+      icon: '🛡',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.potDefensa(),
+    ),
+    20: Habilidad(
+      id: 20,
+      nombre: 'Potenciar defensa lejano',
+      descripcion:
+          'Potencia cualquier celda: tus cartas en ella (o que entren) ganan '
+          '$kPotDefensaMagnitud de defensa durante $kPotDuracionTurnos turnos.',
+      icon: '🛡',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.potDefensa(),
+    ),
+
+    // ── POTENCIAR MOVIMIENTO (buff aliado, +$kPotMovimientoMagnitud mov) ──
+    21: Habilidad(
+      id: 21,
+      nombre: 'Potenciar movimiento cercano',
+      descripcion:
+          'Potencia la propia celda: tus cartas en ella (o que entren) ganan '
+          '$kPotMovimientoMagnitud de movimiento durante $kPotDuracionTurnos turnos.',
+      icon: '💨',
+      rango: RangoHabilidad.propia(),
+      efecto: EfectoHabilidad.potMovimiento(),
+    ),
+    22: Habilidad(
+      id: 22,
+      nombre: 'Potenciar movimiento medio',
+      descripcion:
+          'Potencia una celda adyacente: tus cartas en ella (o que entren) '
+          'ganan $kPotMovimientoMagnitud de movimiento durante $kPotDuracionTurnos turnos.',
+      icon: '💨',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.potMovimiento(),
+    ),
+    23: Habilidad(
+      id: 23,
+      nombre: 'Potenciar movimiento lejano',
+      descripcion:
+          'Potencia cualquier celda: tus cartas en ella (o que entren) ganan '
+          '$kPotMovimientoMagnitud de movimiento durante $kPotDuracionTurnos turnos.',
+      icon: '💨',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.potMovimiento(),
     ),
   };
 

@@ -143,7 +143,7 @@ class CellWidget extends StatelessWidget {
             ),
             if (zone != null) _ZoneTriangle(color: zone.color),
 
-            // Resplandor dorado de la celda del rayo de farmeo (+10 Energies).
+            // Resplandor dorado de la celda del rayo de farmeo (+10 Zero).
             if (isRayo)
               const Positioned.fill(
                 child: IgnorePointer(
@@ -278,7 +278,7 @@ class CellWidget extends StatelessWidget {
   }
 }
 
-/// Indicador de la celda del rayo de farmeo (+10 Energies).
+/// Indicador de la celda del rayo de farmeo (+10 Zero).
 class _RayoBadge extends StatelessWidget {
   const _RayoBadge();
 
@@ -298,7 +298,12 @@ class _RayoBadge extends StatelessWidget {
         ],
       ),
       alignment: Alignment.center,
-      child: const Text('⚡', style: TextStyle(fontSize: 10, height: 1.1)),
+      child: const Text('Ø',
+          style: TextStyle(
+              fontSize: 11,
+              height: 1.0,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF201400))),
     );
   }
 }
@@ -561,7 +566,7 @@ class _CardStack extends StatelessWidget {
         final uid = c.ownerUid;
         final prev = grupos[uid];
         grupos[uid] = (
-          fuerza: (prev?.fuerza ?? 0) + c.carta.fuerza,
+          fuerza: (prev?.fuerza ?? 0) + c.fuerzaEfectiva,
           defensa: (prev?.defensa ?? 0) + _defEfectiva(c),
           numCartas: (prev?.numCartas ?? 0) + 1,
           color: _colorFor(c),

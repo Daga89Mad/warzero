@@ -242,13 +242,13 @@ class _HudBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
 
-          // ── Stats: ENERGIES ──
+          // ── Stats: ZERO ──
           // player.puntos contiene las energías actuales (leídas de
           // statsPartida.{uid}.energies en Firestore).
           _StatColumn(
-            label: '⚡ ENERGIES',
+            label: 'Ø ZERO',
             value: player.puntos,
-            color: const Color(0xFF3A7ABA),
+            color: const Color(0xFF2EA6FF),
           ),
 
           // ── End turn button (player only) ──

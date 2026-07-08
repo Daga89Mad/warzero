@@ -28,12 +28,33 @@ class CartaEnCelda {
     return total;
   }
 
-  /// Defensa extra que aportan los escudos activos que arrastra la carta.
+  /// Defensa extra por potenciación de defensa. (El escudo YA NO suma defensa:
+  /// es solo una protección de celda.)
   int get defensaExtraPorEfectos {
     int total = 0;
     for (final e in efectos) {
       if (e.turnosRestantes <= 0) continue;
-      if (e.tipo == EfectoTipoEstado.escudo) total += e.magnitud;
+      if (e.tipo == EfectoTipoEstado.potDefensa) total += e.magnitud;
+    }
+    return total;
+  }
+
+  /// Fuerza extra que aportan las potenciaciones de fuerza activas.
+  int get fuerzaExtraPorEfectos {
+    int total = 0;
+    for (final e in efectos) {
+      if (e.turnosRestantes <= 0) continue;
+      if (e.tipo == EfectoTipoEstado.potFuerza) total += e.magnitud;
+    }
+    return total;
+  }
+
+  /// Movimiento extra que aportan las potenciaciones de movimiento activas.
+  int get movimientoExtraPorEfectos {
+    int total = 0;
+    for (final e in efectos) {
+      if (e.turnosRestantes <= 0) continue;
+      if (e.tipo == EfectoTipoEstado.potMovimiento) total += e.magnitud;
     }
     return total;
   }
@@ -44,11 +65,19 @@ class CartaEnCelda {
     return r > 0 ? r : 0;
   }
 
-  /// True si la carta arrastra un escudo activo (defensa aumentada).
-  bool get escudada {
+  /// Fuerza efectiva (con potenciación de fuerza).
+  int get fuerzaEfectiva => carta.fuerza + fuerzaExtraPorEfectos;
+
+  /// Movimiento efectivo (con potenciación de movimiento).
+  int get movimientoEfectivo => carta.movimiento + movimientoExtraPorEfectos;
+
+  /// True si la carta arrastra algún buff de potenciación activo.
+  bool get potenciada {
     for (final e in efectos) {
       if (e.turnosRestantes <= 0) continue;
-      if (e.tipo == EfectoTipoEstado.escudo) return true;
+      if (e.tipo == EfectoTipoEstado.potFuerza ||
+          e.tipo == EfectoTipoEstado.potDefensa ||
+          e.tipo == EfectoTipoEstado.potMovimiento) return true;
     }
     return false;
   }
@@ -129,6 +158,7 @@ class CeldaState {
   bool get isEmpty => cartas.isEmpty;
 
   int get fuerzaTotal => cartas.fold(0, (s, c) => s + c.carta.fuerza);
+  int get fuerzaTotalEfectiva => cartas.fold(0, (s, c) => s + c.fuerzaEfectiva);
   int get defensaTotal => cartas.fold(0, (s, c) => s + c.carta.defensa);
   int get defensaTotalEfectiva =>
       cartas.fold(0, (s, c) => s + c.defensaEfectiva);
@@ -165,7 +195,7 @@ class BoardState {
   final Map<String, List<EfectoActivo>> efectosCelda;
 
   /// Coordenada de la celda del RAYO de farmeo (la que aparece de forma
-  /// aleatoria y otorga +10 Energies). Null si no hay rayo activo.
+  /// aleatoria y otorga +10 Zero). Null si no hay rayo activo.
   final String? rayoCoord;
 
   const BoardState({
@@ -241,15 +271,25 @@ class BoardState {
     return res;
   }
 
-  /// True si la celda debe marcarse con escudo 🛡: efecto de celda activo o
-  /// alguna carta en ella arrastra escudo.
+  /// True si la celda está escudada (protección activa). El escudo es un efecto
+  /// de CELDA (no viaja en las cartas), así que solo se mira efectosCelda.
   bool celdaTieneEscudo(String coord) {
     final lista = efectosCelda[coord];
-    final celdaTiene = lista != null &&
+    return lista != null &&
         lista.any(
             (e) => e.tipo == EfectoTipoEstado.escudo && e.turnosRestantes > 0);
-    if (celdaTiene) return true;
-    return getCelda(coord).cartas.any((c) => c.escudada);
+  }
+
+  /// True si la celda está escudada por OTRO jugador (distinto de [localUid]).
+  /// Esas celdas están protegidas: no puedes mover tus cartas dentro ni
+  /// afectarlas con acciones.
+  bool celdaProtegidaPorRival(String coord, String? localUid) {
+    final lista = efectosCelda[coord];
+    if (lista == null) return false;
+    return lista.any((e) =>
+        e.tipo == EfectoTipoEstado.escudo &&
+        e.turnosRestantes > 0 &&
+        e.origenUid != localUid);
   }
 
   /// True si [coord] es la celda del rayo activo.

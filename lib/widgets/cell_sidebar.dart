@@ -100,7 +100,8 @@ class _CellSidebarState extends State<CellSidebar> {
     final cards = widget.celda?.cartas ?? [];
     final hasLocal = cards.any((c) => c.ownerUid == widget.localUid);
     final localCount = cards.where((c) => c.ownerUid == widget.localUid).length;
-    final total = widget.isEnemyObelisco ? null : widget.celda?.fuerzaTotal;
+    final total =
+        widget.isEnemyObelisco ? null : widget.celda?.fuerzaTotalEfectiva;
     // Para obeliscos: siempre incluir los 80 de defensa base.
     // Cuartel enemigo → solo base (no revelamos las cartas enemigas).
     // Cuartel propio  → base + defensa de las cartas.
@@ -140,7 +141,7 @@ class _CellSidebarState extends State<CellSidebar> {
           uid: c.ownerUid,
           zone: c.ownerZone,
           esLocal: c.ownerUid == widget.localUid,
-          fuerza: (prev?.fuerza ?? 0) + c.carta.fuerza,
+          fuerza: (prev?.fuerza ?? 0) + c.fuerzaEfectiva,
           defensa: (prev?.defensa ?? 0) + c.defensaEfectiva,
           reduccion: (prev?.reduccion ?? 0) + c.defensaReducidaPorEfectos,
           color: widget.playerColors[c.ownerUid] ?? ownerColor(c.ownerZone),
@@ -749,6 +750,8 @@ class _CardTile extends StatelessWidget {
       enfriamientoRestante: enfriamientoRestante,
       defensaReducida: entry.defensaReducidaPorEfectos,
       defensaExtra: entry.defensaExtraPorEfectos,
+      fuerzaExtra: entry.fuerzaExtraPorEfectos,
+      movimientoExtra: entry.movimientoExtraPorEfectos,
       paralizada: entry.paralizado,
     );
   }
@@ -863,7 +866,7 @@ class _CardTile extends StatelessWidget {
                                       fontSize: 11, color: Color(0xFF2C90C8))),
                               const SizedBox(width: 6),
                             ],
-                            if (entry.escudada) ...[
+                            if (entry.defensaExtraPorEfectos > 0) ...[
                               const Text('🛡',
                                   style: TextStyle(
                                       fontSize: 10, color: Color(0xFF6AB0FF))),
@@ -875,11 +878,24 @@ class _CardTile extends StatelessWidget {
                                       fontFamily: 'Cinzel')),
                               const SizedBox(width: 6),
                             ],
-                            Text('${carta.fuerza}',
+                            if (entry.movimientoExtraPorEfectos > 0) ...[
+                              const Text('💨', style: TextStyle(fontSize: 10)),
+                              Text('${entry.movimientoEfectivo}',
+                                  style: const TextStyle(
+                                      fontSize: 9,
+                                      color: Color(0xFF9AD0FF),
+                                      fontFamily: 'Cinzel')),
+                              const SizedBox(width: 6),
+                            ],
+                            if (entry.fuerzaExtraPorEfectos > 0)
+                              const Text('💪', style: TextStyle(fontSize: 10)),
+                            Text('${entry.fuerzaEfectiva}',
                                 style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.bold,
-                                    color: color,
+                                    color: entry.fuerzaExtraPorEfectos > 0
+                                        ? const Color(0xFFFFB84D)
+                                        : color,
                                     fontFamily: 'Cinzel')),
                           ]),
                       const SizedBox(height: 4),
@@ -1044,7 +1060,7 @@ class _EvolChip extends StatelessWidget {
         children: [
           const Icon(Icons.arrow_upward, size: 8, color: color),
           const SizedBox(width: 2),
-          Text('$coste⚡',
+          Text('${coste}Ø',
               style: const TextStyle(
                   fontSize: 7,
                   color: color,

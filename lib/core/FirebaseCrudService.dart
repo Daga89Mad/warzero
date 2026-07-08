@@ -20,7 +20,7 @@ class FirebaseCrudService {
   // ───────────────────────────────────────────────────────────
   // CARTAS INICIALES DEL CATÁLOGO
   //
-  // Estas 21 cartas se dan a cada jugador nuevo:
+  // Estas cartas se dan a cada jugador nuevo:
   //   - Se crean en Jugadores/{uid}/Coleccion/{cartaId}
   //   - Se añaden a Jugadores/{uid}/Mazos/{mazoId}/Cartas/{cartaId}
   //     con { Cantidad: 1 } para que el mazo inicial sea jugable.
@@ -30,25 +30,36 @@ class FirebaseCrudService {
   // ───────────────────────────────────────────────────────────
   static const Map<String, List<String>> _cartasIniciales = {
     '0ahUhgSb6oOIaqe1yxIt': ['default'],
+    '0qGtiuXP9aqAmxEwVzhc': ['default'],
     '0vL229Dy0qkJxFTv5f7O': ['default'],
     '1YpvMjECo464Dx9jvTVK': ['default'],
     '2DjgWWSU7Q5F6dFAv8wQ': ['default'],
     '2nSmuTkVPutvQV9B9CO3': ['default'],
+    '2zKQOGmsL72jl4vveJOC': ['default'],
     '4OSJYbsRbWkiNiJCmrPM': ['default'],
     '5FIrpVqO890nhRg1atDB': ['default'],
     '8KZtDtblcypCtFfDSF08': ['default'],
+    '8ROTbPT4Msl5Sf4MkSdG': ['default'],
+    '8WxyKRLvqWf6kFMcVHSw': ['default'],
+    '9Uxi9KSJmsZIN8SNQ1hD': ['default'],
+    '9Vb3p8MPmxlC0fiaZX6B': ['default'],
     'AGk9YFtmaOe99ZKUiEHz': ['default'],
     'AWfj1Y7ibCw7nkAUlUUE': ['default'],
     'BPzSAviOhq9P5OlTlyoU': ['default'],
+    'HCSN6Oy5zpVz59uXhKGN': ['default'],
+    'IV8OBgpNjDTwYV8PAILP': ['default'],
+    'JFyZ4iYEA9BfsFSh3VLa': ['default'],
     'JJ9rVGVtdaSLOImXV2j2': ['default'],
     'JeI4EaJKLQrQlBiblNLp': ['default'],
     'LpAM8celKg1gvQsp5okR': ['default'],
     'LyGg5ElbrcFgvrJjbNqP': ['default'],
     'MJOdFy1NhGnmvPGIlm7i': ['default'],
+    'MRBiWOXxtxs7fqlJrfd0': ['default'],
     'OgkbAd8qpHAwiDiiTUNn': ['default'],
     'SgxMTCB6knJe8SUrQh5F': ['default'],
     'VKM1uUkqO9GqDI6tTr47': ['default'],
     'VmhD1AghdOBjmRfpSzk4': ['default'],
+    'WXnsascHJzcddkDXVUQu': ['default'],
     'Xh0qnUlyvCvLBFYGJseH': ['default'],
     'YorhPHxb4D1CffkVeHxQ': ['default'],
     'aYqrD9mNBO7adaPHWp6i': ['default'],
@@ -57,6 +68,7 @@ class FirebaseCrudService {
     'cShsMi3IB8Pd2gu42T4O': ['default'],
     'ca0XZNWXTUMvjvzoBqu0': ['default'],
     'ch5IVwiwxaFjsaASAJVH': ['default'],
+    'cluh1nY12v6yxichmdex': ['default'],
     'dJGMcvXCCNdhLFpTms1F': ['default'],
     'emeeFFwdvz3RKHyYTxaI': ['default'],
     'h4AzHTBz0PRwjBBTxhHf': ['default'],
@@ -68,8 +80,10 @@ class FirebaseCrudService {
     'k1ExDeLkxEvUtDPUUJvt': ['default'],
     'kKJl1PyTsfIytyfOkfiS': ['default'],
     'lKG5rzUbmslpf9fb65Cz': ['default'],
+    'lQVO1N9Xi3Fe6BP7cNyw': ['default'],
     'nE3AAMcX0H7oWTVMydsZ': ['default'],
     'nKvmAoQLLynP0L91SqV3': ['default'],
+    'oVcsugdOXwTaVrpBaoEO': ['default'],
     'piqdzNbXTy1xt2ibg8Oi': ['default'],
     'qeygP8oT7WYKqmq1kvHI': ['default'],
     'qrc2GYYSEhjLoISdxQch': ['default'],
@@ -84,8 +98,11 @@ class FirebaseCrudService {
     'vy3wCVMYaQUcYw768Mnf': ['default'],
     'wU6paai60pEqfYnAx2cE': ['default'],
     'wWGvqQWEjZRZZcyab6yU': ['default'],
-    'x863YODusk6k1hezTows': ['default'],
     'xi9ys2LqcHNVfFPNRsef': ['default'],
+    'zDMmUICWuTmfsAAk6JbV': ['default'],
+    'zj2P2KoF31Hw24KQWiBu': ['default'],
+    'zqIDNsAb8dHtKf7EMISq': ['default'],
+    'YbgK01QuTY3nGT6ZTwui': ['default'],
     // Carta con 1 skin extra desbloqueada
     'xPcw2Adpdfdb8TMp4Uiy': ['default', 'XIm1pgv67us9IPZq39sV'],
     // Carta con 2 skins extra desbloqueadas

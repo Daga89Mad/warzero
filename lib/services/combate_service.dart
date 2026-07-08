@@ -14,7 +14,7 @@
 /// REGLA CUARTEL GENERAL (OBELISCO):
 ///   Si se produce combate en la celda obelisco de un jugador, ese jugador
 ///   recibe una defensa extra de 80 puntos (la fortaleza del cuartel).
-///   Si el defensor pierde → conquista: el atacante gana +100 Energies y
+///   Si el defensor pierde → conquista: el atacante gana +100 Zero y
 ///   +100 PC, y el defensor queda ELIMINADO de la partida.
 ///   Si no hay cartas defensoras pero sí atacantes, se compara la fuerza
 ///   atacante contra 80 (defensa base del cuartel vacío).
@@ -27,7 +27,7 @@
 ///   usa en `totalDefensa` (y en la fórmula del combate) es la efectiva.
 ///
 /// RECOMPENSAS NORMALES (por grupo derrotado):
-///   • Energies += Σcoste de las cartas destruidas del grupo derrotado.
+///   • Zero += Σcoste de las cartas destruidas del grupo derrotado.
 ///   • PC       += 3 × número de cartas destruidas del grupo derrotado.
 /// ─────────────────────────────────────────────────────────────────────────
 
@@ -198,7 +198,7 @@ class CombateService {
   /// Defensa base del cuartel general (obelisco).
   static const int defensaObelisco = 80;
 
-  /// Bonificación de Energies por conquistar un cuartel.
+  /// Bonificación de Zero por conquistar un cuartel.
   static const int energiesConquista = 100;
 
   /// Bonificación de PC por conquistar un cuartel.
@@ -468,13 +468,13 @@ class CombateService {
   static String resumirResultado(ResultadoCombate r) {
     if (r.esConquistaObelisco) {
       return '[${r.coord}] 🏰 CUARTEL CONQUISTADO por ${r.ganadorZone} '
-          '(+$energiesConquista Energies, +$pcConquista PC)';
+          '(+$energiesConquista Zero, +$pcConquista PC)';
     }
     if (r.ganadorUid == null) {
       return '[${r.coord}] Empate — las cartas se mantienen hasta el desempate';
     }
     final energies = r.energiesGanadas[r.ganadorUid] ?? 0;
     final pc = r.pcGanados[r.ganadorUid] ?? 0;
-    return '[${r.coord}] Gana ${r.ganadorZone} (+$energies Energies, +$pc PC)';
+    return '[${r.coord}] Gana ${r.ganadorZone} (+$energies Zero, +$pc PC)';
   }
 }

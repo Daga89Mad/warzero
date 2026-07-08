@@ -6,6 +6,9 @@ enum EfectoTipoEstado {
   veneno,
   paralisis,
   escudo,
+  potFuerza,
+  potDefensa,
+  potMovimiento,
   // futuro: regeneracion...
 }
 
@@ -18,6 +21,12 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return 'Parálisis';
       case EfectoTipoEstado.escudo:
         return 'Escudo';
+      case EfectoTipoEstado.potFuerza:
+        return 'Fuerza+';
+      case EfectoTipoEstado.potDefensa:
+        return 'Defensa+';
+      case EfectoTipoEstado.potMovimiento:
+        return 'Movimiento+';
     }
   }
 
@@ -29,6 +38,12 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return '⏱';
       case EfectoTipoEstado.escudo:
         return '🛡';
+      case EfectoTipoEstado.potFuerza:
+        return '💪';
+      case EfectoTipoEstado.potDefensa:
+        return '🛡';
+      case EfectoTipoEstado.potMovimiento:
+        return '💨';
     }
   }
 

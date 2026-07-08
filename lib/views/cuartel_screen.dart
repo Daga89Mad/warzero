@@ -11,7 +11,7 @@ class CompraResult {
   final bool ok;
   final String mensaje;
 
-  /// Energies restantes del jugador tras la operación.
+  /// Zero restantes del jugador tras la operación.
   final int energiasRestantes;
 
   const CompraResult({
@@ -22,7 +22,7 @@ class CompraResult {
 }
 
 /// Pantalla del CUARTEL: muestra las cartas ESPECIALES del ejército del jugador
-/// y permite comprarlas con Energies. Al comprar, la carta va directa al cuartel
+/// y permite comprarlas con Zero. Al comprar, la carta va directa al cuartel
 /// (lo gestiona [onComprar]) y queda deshabilitada para futuras compras del
 /// jugador durante el resto de la partida.
 class CuartelScreen extends StatefulWidget {
@@ -107,7 +107,11 @@ class _CuartelScreenState extends State<CuartelScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(children: [
-              const Icon(Icons.flash_on, color: _energy, size: 16),
+              const Text('Ø',
+                  style: TextStyle(
+                      color: Color(0xFF2EA6FF),
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold)),
               const SizedBox(width: 4),
               Text('$_energias',
                   style: const TextStyle(
@@ -284,7 +288,11 @@ class _CuartelScreenState extends State<CuartelScreen> {
                     strokeWidth: 2, color: Colors.white))
             : Column(mainAxisSize: MainAxisSize.min, children: [
                 Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.flash_on, size: 12, color: _energy),
+                  const Text('Ø ',
+                      style: TextStyle(
+                          color: Color(0xFF2EA6FF),
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold)),
                   Text('${carta.coste}',
                       style: TextStyle(
                           color: sinEnergia

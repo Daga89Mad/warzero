@@ -194,6 +194,7 @@ class HabilidadService {
     final venenos = <AccionPendiente>[];
     final paralisis = <AccionPendiente>[];
     final escudos = <AccionPendiente>[];
+    final potenciaciones = <AccionPendiente>[];
 
     for (final a in acciones) {
       final h = CatalogoHabilidades.get(a.habilidadId);
@@ -214,6 +215,11 @@ class HabilidadService {
         case EfectoTipo.escudo:
           escudos.add(a);
           break;
+        case EfectoTipo.potenciarFuerza:
+        case EfectoTipo.potenciarDefensa:
+        case EfectoTipo.potenciarMovimiento:
+          potenciaciones.add(a);
+          break;
       }
     }
 
@@ -231,6 +237,9 @@ class HabilidadService {
     }
     for (final a in escudos) {
       _aplicarEscudo(a, t, e, log, obeliscosPorJugador);
+    }
+    for (final a in potenciaciones) {
+      _aplicarPotenciacion(a, t, e, log, obeliscosPorJugador);
     }
 
     // Propagar efectos preexistentes a cartas que estén actualmente en la celda.
@@ -447,11 +456,9 @@ class HabilidadService {
       );
       _agregarOFusionarEfectoCelda(e, obj, efecto);
 
-      final cartas = t[obj] ?? const [];
-      for (final c in cartas) {
-        if ((c['ownerUid'] ?? '') != a.uid) continue; // solo cartas propias
-        _agregarOFusionarEfectoCarta(c, efecto);
-      }
+      // El escudo es SOLO protección de celda: no se aplica a las cartas
+      // (no da defensa). La protección la gestiona el servidor con el efecto
+      // de celda (bloquea acciones/movimientos enemigos).
 
       log.add({
         'tipo': 'escudo',
@@ -467,20 +474,86 @@ class HabilidadService {
     }
   }
 
+  /// Potenciaciones (buff aliado): suman fuerza / defensa / movimiento a las
+  /// cartas del LANZADOR en la celda objetivo, durante N turnos.
+  static EfectoTipoEstado _estadoDePotenciacion(EfectoTipo t) {
+    switch (t) {
+      case EfectoTipo.potenciarFuerza:
+        return EfectoTipoEstado.potFuerza;
+      case EfectoTipo.potenciarDefensa:
+        return EfectoTipoEstado.potDefensa;
+      case EfectoTipo.potenciarMovimiento:
+        return EfectoTipoEstado.potMovimiento;
+      default:
+        return EfectoTipoEstado.potFuerza;
+    }
+  }
+
+  static void _aplicarPotenciacion(
+    AccionPendiente a,
+    Map<String, List<Map<String, dynamic>>> t,
+    Map<String, List<EfectoActivo>> e,
+    List<Map<String, dynamic>> log,
+    Map<String, String> obeliscosPorJugador,
+  ) {
+    final h = CatalogoHabilidades.get(a.habilidadId);
+    if (h == null) return;
+    final estado = _estadoDePotenciacion(h.efecto.tipo);
+
+    for (final obj in a.objetivos) {
+      if (h.excluyeCG && obeliscosPorJugador.values.contains(obj)) {
+        continue;
+      }
+      final efecto = EfectoActivo(
+        tipo: estado,
+        turnosRestantes: h.efecto.duracionTurnos,
+        magnitud: h.efecto.defensaReducida,
+        origenUid: a.uid,
+      );
+      _agregarOFusionarEfectoCelda(e, obj, efecto);
+
+      final cartas = t[obj] ?? const [];
+      for (final c in cartas) {
+        if ((c['ownerUid'] ?? '') != a.uid) continue; // solo cartas propias
+        _agregarOFusionarEfectoCarta(c, efecto);
+      }
+
+      log.add({
+        'tipo': estado.name,
+        'habilidadId': h.id,
+        'habilidadNombre': h.nombre,
+        'uid': a.uid,
+        'zona': a.zona,
+        'origen': a.origen,
+        'objetivo': obj,
+        'turnosRestantes': efecto.turnosRestantes,
+        'magnitud': efecto.magnitud,
+      });
+    }
+  }
+
   /// Para cada celda con efectos activos, garantiza que las cartas
   /// actualmente en la celda tienen el efecto registrado.
   ///   - veneno / parálisis (debuff): afectan a cartas ENEMIGAS del origen.
-  ///   - escudo (buff): afecta a las cartas PROPIAS del origen.
+  ///   - potenciaciones (buff): afectan a las cartas PROPIAS del origen.
+  ///   - escudo: NO se aplica a cartas (es solo protección de celda).
   static void _propagarEfectosACeldas(
     Map<String, List<Map<String, dynamic>>> t,
     Map<String, List<EfectoActivo>> e,
   ) {
+    const buffs = {
+      EfectoTipoEstado.potFuerza,
+      EfectoTipoEstado.potDefensa,
+      EfectoTipoEstado.potMovimiento,
+    };
     e.forEach((coord, lista) {
       final cartas = t[coord];
       if (cartas == null || cartas.isEmpty) return;
       for (final ef in lista) {
         if (ef.turnosRestantes <= 0) continue;
-        final esBuff = ef.tipo == EfectoTipoEstado.escudo;
+        // El escudo es solo protección de celda: nunca se aplica a cartas.
+        if (ef.tipo == EfectoTipoEstado.escudo) continue;
+        final esBuff = buffs.contains(ef.tipo);
         for (final c in cartas) {
           final esPropia = (c['ownerUid'] ?? '') == ef.origenUid;
           if (esBuff ? !esPropia : esPropia) continue;

@@ -29,6 +29,8 @@ Future<void> showCardDetail(
   int recompensaSacrificio = 0,
   int defensaReducida = 0,
   int defensaExtra = 0,
+  int fuerzaExtra = 0,
+  int movimientoExtra = 0,
   bool paralizada = false,
 }) {
   return showGeneralDialog(
@@ -60,6 +62,8 @@ Future<void> showCardDetail(
       recompensaSacrificio: recompensaSacrificio,
       defensaReducida: defensaReducida,
       defensaExtra: defensaExtra,
+      fuerzaExtra: fuerzaExtra,
+      movimientoExtra: movimientoExtra,
       paralizada: paralizada,
     ),
   );
@@ -78,6 +82,8 @@ class _CardDetailPage extends StatefulWidget {
   final int recompensaSacrificio;
   final int defensaReducida;
   final int defensaExtra;
+  final int fuerzaExtra;
+  final int movimientoExtra;
   final bool paralizada;
 
   const _CardDetailPage({
@@ -92,6 +98,8 @@ class _CardDetailPage extends StatefulWidget {
     this.recompensaSacrificio = 0,
     this.defensaReducida = 0,
     this.defensaExtra = 0,
+    this.fuerzaExtra = 0,
+    this.movimientoExtra = 0,
     this.paralizada = false,
   });
 
@@ -220,7 +228,7 @@ class _CardDetailPageState extends State<_CardDetailPage>
         ),
         content: Text(
           'Sacrificar "${widget.carta.nombre}" a cambio de '
-          '+${widget.recompensaSacrificio}⚡.\nLa carta se perderá y no podrás '
+          '+${widget.recompensaSacrificio}Ø.\nLa carta se perderá y no podrás '
           'deshacerlo.',
           style: const TextStyle(color: Color(0xFFB0C0D0)),
         ),
@@ -335,7 +343,7 @@ class _CardDetailPageState extends State<_CardDetailPage>
                   ),
                 ],
 
-                // ── CHIP DE ESCUDO (defensa extra) ──
+                // ── CHIP DE DEFENSA (+escudo / potenciar defensa) ──
                 if (widget.defensaExtra > 0) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -349,7 +357,7 @@ class _CardDetailPageState extends State<_CardDetailPage>
                           width: 1),
                     ),
                     child: Text(
-                      '🛡  Escudada · Defensa '
+                      '🛡  Defensa '
                       '${widget.carta.defensa} → '
                       '${widget.carta.defensa + widget.defensaExtra}'
                       '  (+${widget.defensaExtra})',
@@ -357,6 +365,62 @@ class _CardDetailPageState extends State<_CardDetailPage>
                         fontFamily: 'Cinzel',
                         fontSize: 10,
                         color: Color(0xFF9AD0FF),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
+
+                // ── CHIP DE FUERZA (potenciar fuerza) ──
+                if (widget.fuerzaExtra > 0) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3A2408),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: const Color(0xFFFFB84D).withOpacity(0.7),
+                          width: 1),
+                    ),
+                    child: Text(
+                      '💪  Fuerza '
+                      '${widget.carta.fuerza} → '
+                      '${widget.carta.fuerza + widget.fuerzaExtra}'
+                      '  (+${widget.fuerzaExtra})',
+                      style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        color: Color(0xFFFFCC80),
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
+
+                // ── CHIP DE MOVIMIENTO (potenciar movimiento) ──
+                if (widget.movimientoExtra > 0) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0E2E36),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: const Color(0xFF40C0D0).withOpacity(0.7),
+                          width: 1),
+                    ),
+                    child: Text(
+                      '💨  Movimiento '
+                      '${widget.carta.movimiento} → '
+                      '${widget.carta.movimiento + widget.movimientoExtra}'
+                      '  (+${widget.movimientoExtra})',
+                      style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        color: Color(0xFF80E0E8),
                         letterSpacing: 0.5,
                       ),
                     ),
@@ -480,7 +544,7 @@ class _SacrificarButton extends StatelessWidget {
           ],
         ),
         child: Text(
-          busy ? 'SACRIFICANDO…' : 'SACRIFICAR  —  +$recompensa⚡',
+          busy ? 'SACRIFICANDO…' : 'SACRIFICAR  —  +$recompensaØ',
           style: const TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.bold,
@@ -527,7 +591,7 @@ class _HabilidadButton extends StatelessWidget {
     } else if (energiasDisponibles < coste) {
       label = 'ENERGÍAS INSUFICIENTES  ($energiasDisponibles / $coste)';
     } else {
-      label = 'LANZAR HABILIDAD  —  $coste⚡';
+      label = 'LANZAR HABILIDAD  —  $costeØ';
     }
 
     return GestureDetector(
@@ -765,7 +829,7 @@ class _EvolveButton extends StatelessWidget {
         ? 'ENERGÍAS INSUFICIENTES  ($energiasDisponibles / $cost)'
         : busy
             ? 'EVOLUCIONANDO…'
-            : 'EVOLUCIONAR  —  $cost⚡';
+            : 'EVOLUCIONAR  —  ${cost}Ø';
 
     return GestureDetector(
       onTap: enabled && !busy ? onTap : null,
