@@ -136,10 +136,11 @@ class _MazoScreenState extends State<MazoScreen> {
       _mazos.where((m) => m.ejercitoId == _selectedEjercitoId).toList();
 
   // ── Cartas del ejército activo ────────────────────────────
+  // Evolución y Especial (generales) no se pueden añadir a un mazo: la
+  // Especial solo se obtiene comprándola en el cuartel.
   List<CartaModel> get _cartasDelEjercito => _todasLasCartas
       .where((c) =>
-          c.ejercito == _selectedEjercitoId &&
-          !c.esEvolucion) // Evolución no se puede añadir a un mazo
+          c.ejercito == _selectedEjercitoId && !c.esEvolucion && !c.esEspecial)
       .toList();
 
   // ── Crear mazo vacío ──────────────────────────────────────
@@ -184,9 +185,18 @@ class _MazoScreenState extends State<MazoScreen> {
         .doc(mazo.id)
         .delete();
 
+    // Quitar el mazo eliminado del estado local ANTES de continuar. Si no lo
+    // hacemos, `_setPrincipal` recorre `_mazosDelEjercito` (que todavía
+    // incluye el mazo recién borrado, porque `_loadData()` aún no se ha
+    // vuelto a llamar) e intenta hacer `update()` sobre un documento que ya
+    // no existe → cloud_firestore/not-found.
+    setState(() {
+      _mazos = _mazos.where((m) => m.id != mazo.id).toList();
+    });
+
     // Si era principal, promover el siguiente
     if (mazo.esPrincipal) {
-      final resto = _mazosDelEjercito.where((m) => m.id != mazo.id).toList();
+      final resto = _mazosDelEjercito;
       if (resto.isNotEmpty) {
         await _setPrincipal(resto.first);
       }

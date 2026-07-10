@@ -612,13 +612,13 @@ class _GameScreenState extends State<GameScreen> {
           var restoredBoard = const BoardState();
           tableroRaw.forEach((coord, cartas) {
             for (final c in cartas) {
+              // fromMap preserva el campo `Efectos` (buffs como potenciar
+              // movimiento, venenos, etc.) y `UltimoUsoHabilidad`. El
+              // constructor manual los descartaba, por lo que los buffs no
+              // tenían efecto funcional ni visual tras repintar el tablero.
               restoredBoard = restoredBoard.placeCarta(
                 coord,
-                CartaEnCelda(
-                  carta: _cartaFromMap(c),
-                  ownerUid: c['ownerUid'] as String? ?? '',
-                  ownerZone: c['ownerZone'] as String? ?? '',
-                ),
+                CartaEnCelda.fromMap(c),
               );
             }
           });
@@ -918,13 +918,11 @@ class _GameScreenState extends State<GameScreen> {
         tableroRaw.forEach((coord, cartas) {
           for (final c in cartas) {
             try {
+              // fromMap preserva `Efectos` (buffs/venenos) y
+              // `UltimoUsoHabilidad`; el constructor manual los perdía.
               restoredState = restoredState.placeCarta(
                 coord,
-                CartaEnCelda(
-                  carta: _cartaFromMap(c),
-                  ownerUid: c['ownerUid'] as String? ?? '',
-                  ownerZone: c['ownerZone'] as String? ?? '',
-                ),
+                CartaEnCelda.fromMap(c),
               );
             } catch (e) {
               debugPrint('[WZ][stream][ERROR] carta mal formada en $coord: '
@@ -1718,8 +1716,7 @@ class _GameScreenState extends State<GameScreen> {
         if (idx >= 0 && idx < _hand.length) {
           _hand = List.from(_hand)..removeAt(idx);
         }
-      }
-      // Si es habilidad de carta en tablero: marcar ultimoUsoHabilidad.
+      } // Si es habilidad de carta en tablero: marcar ultimoUsoHabilidad.
       if (controller.esHabilidadDeTablero &&
           controller.cartaTableroCoord != null &&
           controller.cartaTableroIndice != null) {
@@ -1738,6 +1735,12 @@ class _GameScreenState extends State<GameScreen> {
       }
       _accionController.cancelar();
     });
+    // Persistir la mano de inmediato (no esperar a cerrar turno): si la
+    // acción era una carta jugada desde la mano (p.ej. Disparo lejano como
+    // carta de acción), esto evita que reaparezca en la mano —y se pueda
+    // "relanzar" al turno siguiente— si la sesión se recarga antes de que
+    // el jugador cierre turno.
+    if (controller.esCartaDeAccion) _saveHandAndDeck();
     _toast('Acción declarada. Se resolverá al cerrar el turno.');
   }
 

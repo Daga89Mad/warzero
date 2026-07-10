@@ -23,8 +23,15 @@ class MazoEntrada {
 class MazoModel {
   final String id;
   final List<MazoEntrada> entradas;
+  final bool esPrincipal;
+  final int? ejercitoId;
 
-  const MazoModel({required this.id, required this.entradas});
+  const MazoModel({
+    required this.id,
+    required this.entradas,
+    this.esPrincipal = false,
+    this.ejercitoId,
+  });
 }
 
 /// Mazo resuelto: cartas completas listas para jugar

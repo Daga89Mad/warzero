@@ -14,16 +14,30 @@ class MazoService {
   }
 
   // ── Cargar mazos de un jugador ─────────────────────────────
+  // El editor de mazos (mazo_screen.dart) guarda las cartas del mazo como un
+  // array plano `cartaIds` en el propio documento del mazo (sin duplicados:
+  // cada id aparece como máximo una vez), NO como una subcolección `Cartas`
+  // con campo `Cantidad` (ese esquema antiguo ya no lo escribe la app).
   Future<List<MazoModel>> fetchMazosDelJugador(String uid) async {
     final snap =
         await _db.collection('Jugadores').doc(uid).collection('Mazos').get();
 
     final mazos = <MazoModel>[];
     for (final mazoDoc in snap.docs) {
-      final cartasSnap = await mazoDoc.reference.collection('Cartas').get();
-      final entradas = cartasSnap.docs.map(MazoEntrada.fromFirestore).toList();
-      mazos.add(MazoModel(id: mazoDoc.id, entradas: entradas));
+      final d = mazoDoc.data();
+      final cartaIds = List<String>.from(d['cartaIds'] as List? ?? []);
+      final entradas =
+          cartaIds.map((id) => MazoEntrada(idCarta: id, cantidad: 1)).toList();
+      mazos.add(MazoModel(
+        id: mazoDoc.id,
+        entradas: entradas,
+        esPrincipal: d['esPrincipal'] as bool? ?? false,
+        ejercitoId: (d['ejercitoId'] as num?)?.toInt(),
+      ));
     }
+    // El mazo principal primero (si hay varios y ninguno está marcado, se
+    // conserva el orden de Firestore).
+    mazos.sort((a, b) => (b.esPrincipal ? 1 : 0) - (a.esPrincipal ? 1 : 0));
     return mazos;
   }
 
@@ -96,7 +110,10 @@ class MazoService {
       if (mazos.isEmpty) {
         return crearMazoPorDefecto(ejercitoId: ejercitoId);
       }
-      final resuelto = await resolverMazo(mazos.first);
+      // `esPrincipal` es por ejército: elegir el mazo del ejército en juego
+      // (principal de ese ejército → cualquiera de ese ejército → el primero).
+      final elegido = _elegirMazo(mazos, ejercitoId);
+      final resuelto = await resolverMazo(elegido);
       // Filtrar por ejército preservando el mazo original si queda vacío.
       return resuelto.filtrarPorEjercito(ejercitoId);
     } catch (e) {
@@ -104,26 +121,35 @@ class MazoService {
     }
   }
 
+  /// Elige el mazo a usar. `esPrincipal` es por ejército, así que se prioriza
+  /// el mazo del [ejercitoId] indicado:
+  ///   1) principal del ejército  2) cualquiera del ejército
+  ///   3) principal global        4) el primero
+  MazoModel _elegirMazo(List<MazoModel> mazos, int? ejercitoId) {
+    if (ejercitoId != null) {
+      final delEjercito =
+          mazos.where((m) => m.ejercitoId == ejercitoId).toList();
+      if (delEjercito.isNotEmpty) {
+        return delEjercito.firstWhere((m) => m.esPrincipal,
+            orElse: () => delEjercito.first);
+      }
+    }
+    return mazos.firstWhere((m) => m.esPrincipal, orElse: () => mazos.first);
+  }
+
   // ── Guardar mazo ───────────────────────────────────────────
+  // Mismo esquema que escribe el editor de mazos (mazo_screen.dart): un
+  // array plano `cartaIds` (sin duplicados) en el propio documento del mazo.
   Future<void> guardarMazo(String uid, MazoResuelto mazo) async {
-    final conteo = <String, int>{};
-    for (final carta in mazo.cartas) {
-      conteo[carta.id] = (conteo[carta.id] ?? 0) + 1;
-    }
+    final cartaIds = mazo.cartas.map((c) => c.id).toSet().toList();
 
-    final mazoRef = _db
-        .collection('Jugadores')
-        .doc(uid)
-        .collection('Mazos')
-        .doc(mazo.id == 'default' ? null : mazo.id);
+    final coleccion = _db.collection('Jugadores').doc(uid).collection('Mazos');
+    final mazoRef =
+        mazo.id == 'default' ? coleccion.doc() : coleccion.doc(mazo.id);
 
-    final batch = _db.batch();
-    for (final entry in conteo.entries) {
-      batch.set(
-        mazoRef.collection('Cartas').doc(entry.key),
-        {'Cantidad': entry.value},
-      );
-    }
-    await batch.commit();
+    await mazoRef.set({
+      'cartaIds': cartaIds,
+      'total': cartaIds.length,
+    }, SetOptions(merge: true));
   }
 }
