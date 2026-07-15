@@ -48,6 +48,10 @@ class _GameScreenState extends State<GameScreen> {
   late GameConfig _config;
   BoardState _boardState = const BoardState();
 
+  /// Imagen de fondo del tablero del mapa en juego (campo `imagen` del mapa).
+  /// Si es null, BoardWidget usa la imagen por defecto.
+  String? _imagenMapa;
+
   late PlayerSession _localPlayer;
   late PlayerSession _opponentPlayer;
 
@@ -403,7 +407,7 @@ class _GameScreenState extends State<GameScreen> {
         .catchError((_) => null); // fire-and-forget
   }
 
-  // ── Cargar terreno del mapa vía API (sin Firestore) ──────
+  // ── Cargar mapa vía API (terreno + rejilla + imagen), sin Firestore ──
   Future<void> _aplicarTerreno(String mapaId) async {
     try {
       final data = await _api.obtenerMapa(mapaId);
@@ -420,7 +424,24 @@ class _GameScreenState extends State<GameScreen> {
         };
       });
 
-      setState(() => _config = _config.withTerrain(terreno));
+      // Tamaño de rejilla propio del mapa (opcional): permite mapas más
+      // grandes que el preset del número de jugadores. Si el mapa no define
+      // `filas`/`columnas`, se conserva el preset.
+      final filas = (data['filas'] as num?)?.toInt();
+      final columnas = (data['columnas'] as num?)?.toInt();
+
+      // Imagen de fondo del tablero, propia de cada mapa (opcional).
+      final imagen = (data['imagen'] as String?)?.trim();
+
+      setState(() {
+        _config = _config
+            .withTerrain(terreno)
+            .withGrid(filas: filas, columnas: columnas);
+        _imagenMapa = (imagen != null && imagen.isNotEmpty) ? imagen : null;
+        // El controlador de acciones calcula rangos sobre la rejilla, así que
+        // debe usar la config ya redimensionada.
+        _accionController = AccionController(config: _config);
+      });
     } catch (_) {}
   }
 
@@ -1748,6 +1769,30 @@ class _GameScreenState extends State<GameScreen> {
     setState(() => _accionController.cancelar());
   }
 
+  /// Deselecciona TODO lo que esté seleccionado: carta de la mano, modo
+  /// movimiento y habilidad/acción en curso. Se llama al tocar cualquier punto
+  /// que no sea una celda del tablero (HUD, mano, márgenes, el océano
+  /// alrededor de la rejilla…).
+  ///
+  /// Deja el estado como si nunca se hubiese seleccionado nada: en los tres
+  /// casos la selección todavía no había mutado el tablero ni gastado energía
+  /// (el coste se descuenta en `_completarAccion`, y el despliegue/movimiento
+  /// solo se aplica al tocar una celda válida), así que basta con limpiar la
+  /// selección sin revertir nada.
+  void _deseleccionarTodo() {
+    final haySeleccion =
+        _selectedHandIndex != null || _inMoveMode || _inActionMode;
+    if (!haySeleccion) return;
+
+    setState(() {
+      _selectedHandIndex = null;
+      _moveFromCoord = null;
+      _moveCardIndices = [];
+      _movableCoords = {};
+      _accionController.cancelar();
+    });
+  }
+
   void _undoCambios() {
     // Energía persistida en el servidor este turno (despliegues). El stream
     // trae el valor ya reducido, así que hay que devolverla explícitamente o
@@ -2425,155 +2470,173 @@ class _GameScreenState extends State<GameScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF0A1F35),
       body: SafeArea(
-        child: Stack(
-          children: [
-            Column(
-              children: [
-                TopHudBar(
-                    player: _opponentPlayer,
-                    turno: _boardState.turnoActual,
-                    onBack: _confirmExit),
-                _PhaseBanner(
-                  handSelected: _selectedHandIndex != null,
-                  inMoveMode: _inMoveMode,
-                  obeliscoLocal: _obeliscoLocal,
-                  moveCount: _moveCardIndices.length,
-                ),
-                Expanded(
-                  child: BoardWidget(
-                    config: _config,
-                    boardState: _boardState,
-                    selectedCellCoord: selectedCoord,
-                    highlightEmpty: _selectedHandIndex != null,
-                    movableCoords: _highlightCoords,
+        // Tocar cualquier zona "muerta" de la pantalla (HUD, márgenes, el hueco
+        // de la mano…) deselecciona lo que hubiera seleccionado.
+        //
+        // Va como PADRE del Stack, no como hermano: siendo padre siempre está
+        // en la ruta de hit-test, mientras que un hermano por debajo nunca
+        // recibiría los toques que absorben los widgets opacos (las barras de
+        // HUD, por ejemplo). Los widgets con su propio onTap (celdas, cartas de
+        // la mano, botones) están más adentro en la ruta, así que ganan la
+        // arena de gestos y siguen funcionando exactamente igual.
+        child: GestureDetector(
+          onTap: _deseleccionarTodo,
+          behavior: HitTestBehavior.translucent,
+          child: Stack(
+            children: [
+              Column(
+                children: [
+                  TopHudBar(
+                      player: _opponentPlayer,
+                      turno: _boardState.turnoActual,
+                      onBack: _confirmExit),
+                  _PhaseBanner(
+                    handSelected: _selectedHandIndex != null,
+                    inMoveMode: _inMoveMode,
                     obeliscoLocal: _obeliscoLocal,
-                    playerColors: _playerColors,
-                    localPlayerUid: widget.localPlayerUid,
-                    onCellTap: _onCellTap,
+                    moveCount: _moveCardIndices.length,
                   ),
-                ),
-                if (_yoCerreElTurno)
-                  _TurnWaitBanner(
-                    modoTurno: _modoTurno,
-                    cerradoPor: _cerradoPor.length,
-                    totalJugadores: _jugadoresActivos,
-                    onRefresh: () => _checkRefresh(),
-                  ),
-                // Banner eliminado (modo observador)
-                if (_estoyEliminado)
-                  Container(
-                    width: double.infinity,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                    color: const Color(0xFF2A0505),
-                    child: const Text('💀 ELIMINADO — Modo Observador',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontFamily: 'Cinzel',
-                            fontSize: 9,
-                            color: Color(0xFFAA3030),
-                            letterSpacing: 1)),
-                  ),
-                if (!_estoyEliminado)
-                  BottomHudBar(
-                    player: _localPlayer,
-                    isMyTurn: !_yoCerreElTurno,
-                    isSending: _isSendingTurn,
-                    endTurnLabel: _isSendingTurn
-                        ? 'ENVIANDO'
-                        : _yoCerreElTurno
-                            ? 'TURNO CERRADO'
-                            : _modoTurno == ModoTurno.rapida
-                                ? 'FIN TURNO (${_segundosRestantes}s)'
-                                : 'FIN TURNO',
-                    onEndTurn:
-                        (_yoCerreElTurno || _isSendingTurn) ? null : _endTurn,
-                  ),
-                if (!_estoyEliminado)
-                  HandWidget(
-                    cartas: _hand,
-                    selectedIndex: _selectedHandIndex,
-                    onCardTap: _onHandCardTap,
-                    energiesDisponibles: _localPlayer.puntos,
-                    resolveEvolucion: _resolveEvolucion,
-                    onSacrificar: _sacrificarCarta,
-                    permiteSacrificio: !_yoCerreElTurno && !_estoyEliminado,
-                  ),
-              ],
-            ),
-            if (_sidebarOpen)
-              Positioned.fill(
-                child: GestureDetector(
-                  onTap: _closeSidebar,
-                  behavior: HitTestBehavior.translucent,
-                  child: const SizedBox.expand(),
-                ),
-              ),
-            // ── Menú de acciones (Cuartel / Informe / Deshacer) ──
-            // Un único botón desplegable que sustituye a los antiguos botones
-            // sueltos (que se pisaban entre sí). El contador del mazo
-            // (_DeckCounter) se elimina: ya no hay número fijo de cartas.
-            Positioned(
-              left: 10,
-              bottom: _estoyEliminado ? 8 : 58 + 105 + 6,
-              child: _GameActionsMenu(
-                puedeCuartel: !_estoyEliminado,
-                onCuartel: _abrirCuartel,
-                puedeInforme: _boardState.turnoActual > 1,
-                onInforme: () {
-                  _informeAbierto = true;
-                  Navigator.of(context)
-                      .push(MaterialPageRoute(
-                    builder: (_) => InformeBatallaScreen(
-                      combateLog: _lastCombateLog,
-                      movimientosLog: _lastMovimientosLog,
-                      historial: _historialCombates,
-                      localUid: widget.localPlayerUid,
-                      jugadores: _currentLobby?.jugadores ?? [],
-                      turno: _boardState.turnoActual - 1,
-                      farmeoLog: _lastFarmeoLog, // ← nuevo
-                      accionesLog: _lastAccionesLog, // ← nuevo
-                      rayoCoord: _lastRayoCoord, // ← nuevo
+                  Expanded(
+                    child: BoardWidget(
+                      config: _config,
+                      boardState: _boardState,
+                      selectedCellCoord: selectedCoord,
+                      highlightEmpty: _selectedHandIndex != null,
+                      movableCoords: _highlightCoords,
+                      obeliscoLocal: _obeliscoLocal,
+                      playerColors: _playerColors,
+                      localPlayerUid: widget.localPlayerUid,
+                      imagenMapa: _imagenMapa,
+                      onCellTap: _onCellTap,
+                      // Toque dentro del tablero pero FUERA de una celda (el
+                      // océano/marco alrededor de la rejilla): deselecciona.
+                      onBackgroundTap: _deseleccionarTodo,
                     ),
-                  ))
-                      .whenComplete(() {
-                    _informeAbierto = false;
-                    _abrirRevisionTurno(
-                        turnoRevisar: _boardState.turnoActual - 1);
-                  });
-                },
-                puedeDeshacer: _hayCambiosPendientes &&
-                    !_yoCerreElTurno &&
-                    !_estoyEliminado,
-                onDeshacer: _undoCambios,
+                  ),
+                  if (_yoCerreElTurno)
+                    _TurnWaitBanner(
+                      modoTurno: _modoTurno,
+                      cerradoPor: _cerradoPor.length,
+                      totalJugadores: _jugadoresActivos,
+                      onRefresh: () => _checkRefresh(),
+                    ),
+                  // Banner eliminado (modo observador)
+                  if (_estoyEliminado)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 5),
+                      color: const Color(0xFF2A0505),
+                      child: const Text('💀 ELIMINADO — Modo Observador',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 9,
+                              color: Color(0xFFAA3030),
+                              letterSpacing: 1)),
+                    ),
+                  if (!_estoyEliminado)
+                    BottomHudBar(
+                      player: _localPlayer,
+                      isMyTurn: !_yoCerreElTurno,
+                      isSending: _isSendingTurn,
+                      endTurnLabel: _isSendingTurn
+                          ? 'ENVIANDO'
+                          : _yoCerreElTurno
+                              ? 'TURNO CERRADO'
+                              : _modoTurno == ModoTurno.rapida
+                                  ? 'FIN TURNO (${_segundosRestantes}s)'
+                                  : 'FIN TURNO',
+                      onEndTurn:
+                          (_yoCerreElTurno || _isSendingTurn) ? null : _endTurn,
+                    ),
+                  if (!_estoyEliminado)
+                    HandWidget(
+                      cartas: _hand,
+                      selectedIndex: _selectedHandIndex,
+                      onCardTap: _onHandCardTap,
+                      energiesDisponibles: _localPlayer.puntos,
+                      resolveEvolucion: _resolveEvolucion,
+                      onSacrificar: _sacrificarCarta,
+                      permiteSacrificio: !_yoCerreElTurno && !_estoyEliminado,
+                    ),
+                ],
               ),
-            ),
-            Positioned(
-              top: 58,
-              right: 0,
-              bottom: _estoyEliminado ? 0 : 58 + 105,
-              width: CellSidebar.width,
-              child: CellSidebar(
-                celda: sidebarCelda,
-                coord: _sidebarCoord,
-                terrain: sidebarTerrain,
-                isOpen: _sidebarOpen,
-                isEnemyObelisco: isEnemySidebar,
-                isObelisco: isObeliscoSidebar,
-                localUid: _localPlayer.datos.uid,
-                playerColors: _playerColors,
-                onMoveSelected: _estoyEliminado ? (_) {} : _onMoveSelected,
-                onClose: _closeSidebar,
-                energiasDisponibles: _localPlayer.puntos,
-                resolveEvolucion: _resolveEvolucion,
-                onEvolucionar:
-                    _estoyEliminado ? (_, __, ___) async {} : _evolucionarCarta,
-                turnoActual: _boardState.turnoActual, // NUEVO
-                onLanzarHabilidad: // NUEVO
-                    _estoyEliminado ? null : _iniciarAccionDesdeTablero,
+              if (_sidebarOpen)
+                Positioned.fill(
+                  child: GestureDetector(
+                    onTap: _closeSidebar,
+                    behavior: HitTestBehavior.translucent,
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              // ── Menú de acciones (Cuartel / Informe / Deshacer) ──
+              // Un único botón desplegable que sustituye a los antiguos botones
+              // sueltos (que se pisaban entre sí). El contador del mazo
+              // (_DeckCounter) se elimina: ya no hay número fijo de cartas.
+              Positioned(
+                left: 10,
+                bottom: _estoyEliminado ? 8 : 58 + 105 + 6,
+                child: _GameActionsMenu(
+                  puedeCuartel: !_estoyEliminado,
+                  onCuartel: _abrirCuartel,
+                  puedeInforme: _boardState.turnoActual > 1,
+                  onInforme: () {
+                    _informeAbierto = true;
+                    Navigator.of(context)
+                        .push(MaterialPageRoute(
+                      builder: (_) => InformeBatallaScreen(
+                        combateLog: _lastCombateLog,
+                        movimientosLog: _lastMovimientosLog,
+                        historial: _historialCombates,
+                        localUid: widget.localPlayerUid,
+                        jugadores: _currentLobby?.jugadores ?? [],
+                        turno: _boardState.turnoActual - 1,
+                        farmeoLog: _lastFarmeoLog, // ← nuevo
+                        accionesLog: _lastAccionesLog, // ← nuevo
+                        rayoCoord: _lastRayoCoord, // ← nuevo
+                      ),
+                    ))
+                        .whenComplete(() {
+                      _informeAbierto = false;
+                      _abrirRevisionTurno(
+                          turnoRevisar: _boardState.turnoActual - 1);
+                    });
+                  },
+                  puedeDeshacer: _hayCambiosPendientes &&
+                      !_yoCerreElTurno &&
+                      !_estoyEliminado,
+                  onDeshacer: _undoCambios,
+                ),
               ),
-            ),
-          ],
+              Positioned(
+                top: 58,
+                right: 0,
+                bottom: _estoyEliminado ? 0 : 58 + 105,
+                width: CellSidebar.width,
+                child: CellSidebar(
+                  celda: sidebarCelda,
+                  coord: _sidebarCoord,
+                  terrain: sidebarTerrain,
+                  isOpen: _sidebarOpen,
+                  isEnemyObelisco: isEnemySidebar,
+                  isObelisco: isObeliscoSidebar,
+                  localUid: _localPlayer.datos.uid,
+                  playerColors: _playerColors,
+                  onMoveSelected: _estoyEliminado ? (_) {} : _onMoveSelected,
+                  onClose: _closeSidebar,
+                  energiasDisponibles: _localPlayer.puntos,
+                  resolveEvolucion: _resolveEvolucion,
+                  onEvolucionar: _estoyEliminado
+                      ? (_, __, ___) async {}
+                      : _evolucionarCarta,
+                  turnoActual: _boardState.turnoActual, // NUEVO
+                  onLanzarHabilidad: // NUEVO
+                      _estoyEliminado ? null : _iniciarAccionDesdeTablero,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

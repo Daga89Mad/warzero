@@ -25,6 +25,16 @@ class MapaInfo {
   /// Ejemplo mapa_clasico: ["C4","C5","C6","C7","D5","D6"]
   final List<String> islaCentral;
 
+  /// Tamaño de rejilla propio del mapa. Si son null se usa el preset de
+  /// [GameConfig.forPlayerCount], que depende del número de jugadores.
+  /// Permite mapas más grandes (más celdas) sin tocar los presets.
+  final int? filas;
+  final int? columnas;
+
+  /// Imagen de fondo del tablero para este mapa: URL http(s) o ruta de asset.
+  /// Si está vacía, el tablero usa `kImagenTableroPorDefecto`.
+  final String imagen;
+
   const MapaInfo({
     required this.id,
     required this.nombre,
@@ -32,6 +42,9 @@ class MapaInfo {
     required this.terreno,
     this.continentes = const {},
     this.islaCentral = const [],
+    this.filas,
+    this.columnas,
+    this.imagen = '',
   });
 
   factory MapaInfo.fromFirestore(DocumentSnapshot doc) {
@@ -56,6 +69,9 @@ class MapaInfo {
       terreno: MapaService._parseTerreno(terrenoRaw),
       continentes: continentes,
       islaCentral: islaCentral,
+      filas: (d['filas'] as num?)?.toInt(),
+      columnas: (d['columnas'] as num?)?.toInt(),
+      imagen: (d['imagen'] as String?)?.trim() ?? '',
     );
   }
 }
@@ -82,12 +98,14 @@ class MapaService {
     return MapaInfo.fromFirestore(doc);
   }
 
-  // ── Aplica el terreno del mapa al GameConfig proporcionado ──
+  // ── Aplica terreno + tamaño de rejilla del mapa al GameConfig ──
   Future<GameConfig> aplicarTerrenoAConfig(
       String mapaId, GameConfig config) async {
     final mapa = await obtenerMapa(mapaId);
     if (mapa == null) return config;
-    return config.withTerrain(mapa.terreno);
+    return config
+        .withTerrain(mapa.terreno)
+        .withGrid(filas: mapa.filas, columnas: mapa.columnas);
   }
 
   // ── Convierte el map raw de Firestore {"B5": "sea",...} ──

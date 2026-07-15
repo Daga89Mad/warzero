@@ -13,6 +13,7 @@ import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/edicion_cartas_screen.dart';
 import 'package:warzero/views/edicion_historias_screen.dart';
 import 'package:warzero/views/edicion_skins_screen.dart';
+import 'package:warzero/views/edicion_mapas_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -29,7 +30,7 @@ class MenuScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     // Solo estos correos pueden ver/usar la edición de cartas.
-    const editores = {'qa85@daga.com', 'dagahh89@gmail.com'};
+    const editores = {'qa85@daga.com', 'dagahh89@gmail.com', 'qa104@daga.com'};
     final puedeEditar =
         editores.contains((user?.email ?? '').trim().toLowerCase());
     final alias =
@@ -187,6 +188,17 @@ class MenuScreen extends StatelessWidget {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const EdicionSkinsScreen()),
+                        ),
+                      ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.map_outlined,
+                        label: 'ED. MAPAS',
+                        sublabel: 'Crear, editar y\nduplicar mapas',
+                        accent: const Color(0xFF40A0D0),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionMapasScreen()),
                         ),
                       ),
                     _MenuTile(

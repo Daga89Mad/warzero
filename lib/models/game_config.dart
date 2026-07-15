@@ -145,6 +145,41 @@ class GameConfig {
       );
 
   // ─────────────────────────────────────────────────────────
+  // Rejilla configurable por mapa
+  // ─────────────────────────────────────────────────────────
+
+  /// Máximo de filas/columnas admitido (las etiquetas de fila van A..Z).
+  static const int maxFilas = 26;
+  static const int maxColumnas = 40;
+
+  /// Etiquetas de fila para [n] filas: A, B, C… (tope [maxFilas]).
+  static List<String> generarRowLabels(int n) {
+    final total = n.clamp(1, maxFilas);
+    return List.generate(total, (i) => String.fromCharCode(65 + i));
+  }
+
+  /// Etiquetas de columna para [n] columnas: 1, 2, 3… (tope [maxColumnas]).
+  static List<int> generarColLabels(int n) =>
+      List.generate(n.clamp(1, maxColumnas), (i) => i + 1);
+
+  /// Copia con una rejilla de otro tamaño, conservando jugadores, zonas y
+  /// terreno. Permite que un mapa defina su propio tamaño en Firestore
+  /// (campos `filas` / `columnas`) en vez de heredar siempre el preset del
+  /// número de jugadores:
+  ///   _config = GameConfig.forPlayerCount(n).withGrid(filas: 12, columnas: 20);
+  ///
+  /// El terreno se conserva tal cual: las coordenadas que caigan fuera de la
+  /// nueva rejilla simplemente no se pintan (y `terrainAt` sigue devolviendo
+  /// `land` para las nuevas celdas sin definir).
+  GameConfig withGrid({int? filas, int? columnas}) => GameConfig(
+        playerCount: playerCount,
+        rowLabels: filas != null ? generarRowLabels(filas) : rowLabels,
+        colLabels: columnas != null ? generarColLabels(columnas) : colLabels,
+        zones: zones,
+        terrainMap: terrainMap,
+      );
+
+  // ─────────────────────────────────────────────────────────
   // Presets
   // ─────────────────────────────────────────────────────────
 

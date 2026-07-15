@@ -5,6 +5,47 @@ import '../models/game_config.dart';
 import '../models/board_state.dart';
 import 'cell_widget.dart';
 
+/// Imagen usada cuando el mapa no define una propia (campo `imagen` vacío).
+const String kImagenTableroPorDefecto = 'assets/images/map_background.png';
+
+/// Pinta la imagen de fondo del tablero a partir de la referencia del mapa.
+/// Acepta URL http(s) (Image.network) o ruta de asset (Image.asset), y cae a
+/// [kImagenTableroPorDefecto] si la referencia está vacía o falla la carga.
+/// Se reutiliza en el preview del editor de mapas.
+class BoardBackgroundImage extends StatelessWidget {
+  final String? imagen;
+  final BoxFit fit;
+
+  const BoardBackgroundImage({
+    super.key,
+    required this.imagen,
+    this.fit = BoxFit.fill,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = (imagen ?? '').trim();
+
+    if (ref.isEmpty) return _asset(kImagenTableroPorDefecto);
+
+    if (ref.startsWith('http://') || ref.startsWith('https://')) {
+      return Image.network(
+        ref,
+        fit: fit,
+        // Si la URL falla (404, sin red…) no dejamos el tablero en blanco.
+        errorBuilder: (_, __, ___) => _asset(kImagenTableroPorDefecto),
+      );
+    }
+    return _asset(ref);
+  }
+
+  Widget _asset(String path) => Image.asset(
+        path,
+        fit: fit,
+        errorBuilder: (_, __, ___) => Container(color: const Color(0xFF0A1828)),
+      );
+}
+
 class BoardWidget extends StatefulWidget {
   final GameConfig config;
   final BoardState boardState;
@@ -18,7 +59,21 @@ class BoardWidget extends StatefulWidget {
 
   /// uid del jugador local (para el +80 de defensa del cuartel en el preview).
   final String? localPlayerUid;
+
+  /// Imagen de fondo del tablero para ESTE mapa. Puede ser:
+  ///   - una URL http(s)  → se carga con Image.network
+  ///   - una ruta de asset → se carga con Image.asset
+  ///   - null / vacío      → se usa [kImagenTableroPorDefecto]
+  /// Viene del campo `imagen` del documento del mapa en Firestore.
+  final String? imagenMapa;
+
   final Function(String coord, int ri, int ci) onCellTap;
+
+  /// Toque dentro del área del tablero pero FUERA de cualquier celda (el marco
+  /// de roca, el océano alrededor de la rejilla, el canto de madera…). Las
+  /// celdas consumen su propio tap, así que esto solo salta en el "vacío".
+  /// game_screen lo usa para deseleccionar la carta/acción en curso.
+  final VoidCallback? onBackgroundTap;
 
   const BoardWidget({
     super.key,
@@ -30,6 +85,8 @@ class BoardWidget extends StatefulWidget {
     this.obeliscoLocal,
     this.playerColors = const {},
     this.localPlayerUid,
+    this.imagenMapa,
+    this.onBackgroundTap,
     required this.onCellTap,
   });
 
@@ -157,6 +214,9 @@ class _BoardWidgetState extends State<BoardWidget>
     return Stack(
       children: [
         GestureDetector(
+          // Un toque limpio (sin arrastre) sobre el tablero que NO haya sido
+          // consumido por una celda cae aquí: es "fuera del mapa".
+          onTap: widget.onBackgroundTap,
           onScaleStart: _onScaleStart,
           onScaleUpdate: _onScaleUpdate,
           onScaleEnd: _onScaleEnd,
@@ -181,6 +241,7 @@ class _BoardWidgetState extends State<BoardWidget>
                     obeliscoLocal: widget.obeliscoLocal,
                     playerColors: widget.playerColors,
                     localPlayerUid: widget.localPlayerUid,
+                    imagenMapa: widget.imagenMapa,
                     onCellTap: widget.onCellTap,
                   ),
                 ),
@@ -313,6 +374,7 @@ class _PerspectiveBoard extends StatelessWidget {
   final String? obeliscoLocal;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
+  final String? imagenMapa;
   final Function(String, int, int) onCellTap;
 
   const _PerspectiveBoard({
@@ -324,6 +386,7 @@ class _PerspectiveBoard extends StatelessWidget {
     this.obeliscoLocal,
     this.playerColors = const {},
     this.localPlayerUid,
+    this.imagenMapa,
     required this.onCellTap,
   });
 
@@ -344,6 +407,7 @@ class _PerspectiveBoard extends StatelessWidget {
           obeliscoLocal: obeliscoLocal,
           playerColors: playerColors,
           localPlayerUid: localPlayerUid,
+          imagenMapa: imagenMapa,
           onCellTap: onCellTap,
         ),
       ),
@@ -702,6 +766,7 @@ class _GridContent extends StatelessWidget {
   final String? obeliscoLocal;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
+  final String? imagenMapa;
   final Function(String, int, int) onCellTap;
 
   const _GridContent({
@@ -713,6 +778,7 @@ class _GridContent extends StatelessWidget {
     this.obeliscoLocal,
     this.playerColors = const {},
     this.localPlayerUid,
+    this.imagenMapa,
     required this.onCellTap,
   });
 
@@ -777,10 +843,7 @@ class _GridContent extends StatelessWidget {
                 top: 0,
                 width: _gridW,
                 height: _gridH,
-                child: Image.asset(
-                  'assets/images/map_background.png',
-                  fit: BoxFit.fill,
-                ),
+                child: BoardBackgroundImage(imagen: imagenMapa),
               ),
               Column(
                 mainAxisSize: MainAxisSize.min,
