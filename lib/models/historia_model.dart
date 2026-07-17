@@ -34,6 +34,12 @@ class HistoriaModel {
   final List<HistoriaPagina> paginas;
   final bool desbloqueada;
 
+  /// Historia "por defecto": está desbloqueada para todos los jugadores sin
+  /// necesidad de conseguirla. El servidor ya la devuelve con
+  /// `desbloqueada = true`; este flag solo sirve para poder distinguirla en la
+  /// UI (p.ej. mostrar una etiqueta) si hiciera falta.
+  final bool porDefecto;
+
   const HistoriaModel({
     required this.id,
     required this.ejercito,
@@ -41,6 +47,7 @@ class HistoriaModel {
     required this.titulo,
     required this.paginas,
     required this.desbloqueada,
+    this.porDefecto = false,
   });
 
   factory HistoriaModel.fromMap(Map<String, dynamic> d) {
@@ -60,6 +67,7 @@ class HistoriaModel {
       titulo: (d['titulo'] ?? d['Titulo'] ?? '').toString(),
       paginas: paginas,
       desbloqueada: d['desbloqueada'] == true,
+      porDefecto: d['porDefecto'] == true || d['PorDefecto'] == true,
     );
   }
 

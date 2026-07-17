@@ -145,6 +145,7 @@ class _HistoriasScreenState extends State<HistoriasScreen> {
                   return _HistoriaTile(
                     numero: orden,
                     titulo: desbloqueada ? h.titulo : null,
+                    porDefecto: desbloqueada && h.porDefecto,
                     onTap: desbloqueada ? () => _abrir(h) : null,
                   );
                 },
@@ -164,11 +165,15 @@ class _HistoriaTile extends StatelessWidget {
 
   /// null → historia bloqueada.
   final String? titulo;
+
+  /// Historia desbloqueada para todos por defecto (etiqueta informativa).
+  final bool porDefecto;
   final VoidCallback? onTap;
 
   const _HistoriaTile({
     required this.numero,
     this.titulo,
+    this.porDefecto = false,
     this.onTap,
   });
 
@@ -220,6 +225,28 @@ class _HistoriaTile extends StatelessWidget {
                 ),
               ),
             ),
+            if (porDefecto) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4ABB58).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                      color: const Color(0xFF4ABB58).withOpacity(0.5)),
+                ),
+                child: const Text(
+                  'INICIAL',
+                  style: TextStyle(
+                    fontSize: 7,
+                    fontFamily: 'Cinzel',
+                    letterSpacing: 1,
+                    color: Color(0xFF4ABB58),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
             Icon(
               bloqueada ? Icons.lock_outline : Icons.chevron_right,
               size: 18,

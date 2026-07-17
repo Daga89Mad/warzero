@@ -310,6 +310,10 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
   bool _saving = false;
   String? _docId;
 
+  /// Si está activo, la historia se marca como PorDefecto: aparecerá
+  /// desbloqueada en la colección de TODOS los jugadores.
+  bool _porDefecto = false;
+
   @override
   void initState() {
     super.initState();
@@ -332,6 +336,7 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
         final doc = await _col.doc(widget.docId!).get();
         final d = doc.data() ?? const {};
         _tituloCtrl.text = (d['Titulo'] ?? d['titulo'] ?? '').toString();
+        _porDefecto = d['PorDefecto'] == true || d['porDefecto'] == true;
         final paginas = (d['Paginas'] ?? d['paginas']) as List? ?? const [];
         for (final p in paginas) {
           final pm = Map<String, dynamic>.from(p as Map);
@@ -387,6 +392,7 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
       'Ejercito': widget.ejercito,
       'Orden': widget.orden,
       'Titulo': _tituloCtrl.text.trim(),
+      'PorDefecto': _porDefecto,
       'Paginas': [
         for (int i = 0; i < _paginas.length; i++)
           {
@@ -500,6 +506,70 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
                         fontFamily: 'Cinzel')),
                 const SizedBox(height: 6),
                 _campo(_tituloCtrl, hint: 'Título de la historia'),
+                const SizedBox(height: 16),
+
+                // ── Historia por defecto ─────────────────────────
+                GestureDetector(
+                  onTap: () => setState(() => _porDefecto = !_porDefecto),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A1220),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _porDefecto
+                            ? const Color(0xFF4ABB58)
+                            : const Color(0xFF506070).withOpacity(0.35),
+                        width: _porDefecto ? 1.4 : 1,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          _porDefecto
+                              ? Icons.check_circle
+                              : Icons.circle_outlined,
+                          size: 20,
+                          color: _porDefecto
+                              ? const Color(0xFF4ABB58)
+                              : const Color(0xFF506070),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'HISTORIA POR DEFECTO',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontFamily: 'Cinzel',
+                                  letterSpacing: 1,
+                                  fontWeight: FontWeight.bold,
+                                  color: _porDefecto
+                                      ? const Color(0xFF4ABB58)
+                                      : const Color(0xFF90A0B0),
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              const Text(
+                                'Aparece desbloqueada en la colección de todos '
+                                'los jugadores, sin tener que conseguirla.',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontFamily: 'Cinzel',
+                                  color: Color(0xFF506070),
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 20),
                 Row(
                   children: [
