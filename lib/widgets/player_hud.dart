@@ -3,6 +3,197 @@
 import 'package:flutter/material.dart';
 import '../models/jugador_model.dart';
 
+/// Datos de un jugador para el menú desplegable de la barra de partida.
+class HudJugadorInfo {
+  final String alias;
+  final Color color;
+  final int zeros;
+  final bool esLocal;
+
+  const HudJugadorInfo({
+    required this.alias,
+    required this.color,
+    required this.zeros,
+    this.esLocal = false,
+  });
+}
+
+/// Barra superior de la partida: a la izquierda un botón con menú desplegable
+/// (alias de cada jugador con su color y total de Zeros, y "Salir de la
+/// partida"), y en el centro el nombre de la partida con un punto del color
+/// asignado al jugador local.
+class PartidaTopBar extends StatelessWidget {
+  final String nombrePartida;
+  final Color colorAsignado;
+  final List<HudJugadorInfo> jugadores;
+  final VoidCallback onSalir;
+
+  const PartidaTopBar({
+    super.key,
+    required this.nombrePartida,
+    required this.colorAsignado,
+    required this.jugadores,
+    required this.onSalir,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 40,
+      decoration: const BoxDecoration(
+        color: Color(0xF202050D),
+        border: Border(bottom: BorderSide(color: Color(0x22C8A860), width: 1)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          // ── Botón + menú desplegable de jugadores ──
+          PopupMenuButton<String>(
+            tooltip: 'Jugadores',
+            color: const Color(0xFF0C1828),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: BorderSide(color: const Color(0xFFC8A860).withOpacity(0.3)),
+            ),
+            offset: const Offset(0, 44),
+            onSelected: (v) {
+              if (v == '__salir__') onSalir();
+            },
+            itemBuilder: (context) => [
+              for (int i = 0; i < jugadores.length; i++)
+                PopupMenuItem<String>(
+                  value: 'jugador_$i',
+                  enabled: false,
+                  height: 40,
+                  child: _FilaJugador(info: jugadores[i]),
+                ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: '__salir__',
+                height: 40,
+                child: Row(
+                  children: const [
+                    Icon(Icons.logout, size: 16, color: Color(0xFFE06060)),
+                    SizedBox(width: 10),
+                    Text(
+                      'Salir de la partida',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontFamily: 'Cinzel',
+                        color: Color(0xFFE06060),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            child: Container(
+              width: 34,
+              height: 30,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A1525),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0x40C8A860), width: 1),
+              ),
+              child: const Icon(Icons.menu, size: 18, color: Color(0xFFC8A860)),
+            ),
+          ),
+
+          // ── Nombre de la partida + color asignado ──
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: colorAsignado,
+                    border: Border.all(
+                        color: colorAsignado.withOpacity(0.6), width: 1),
+                    boxShadow: [
+                      BoxShadow(
+                          color: colorAsignado.withOpacity(0.5), blurRadius: 6),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    nombrePartida.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 2,
+                      color: Color(0xFFE0D8C0),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Espaciador simétrico al botón de la izquierda para centrar el título.
+          const SizedBox(width: 34),
+        ],
+      ),
+    );
+  }
+}
+
+/// Fila de un jugador dentro del menú: punto de color · alias · Ø total.
+class _FilaJugador extends StatelessWidget {
+  final HudJugadorInfo info;
+  const _FilaJugador({required this.info});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: info.color,
+            border: Border.all(color: info.color.withOpacity(0.7), width: 1),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            info.esLocal ? '${info.alias} (tú)' : info.alias,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontFamily: 'Cinzel',
+              color: info.esLocal
+                  ? const Color(0xFFE0D8C0)
+                  : const Color(0xFFB0C0D0),
+              fontWeight: info.esLocal ? FontWeight.bold : FontWeight.normal,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Text(
+          '${info.zeros} Ø',
+          style: const TextStyle(
+            fontSize: 12,
+            fontFamily: 'Cinzel',
+            fontWeight: FontWeight.bold,
+            color: Color(0xFF2EA6FF),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 // ── Top HUD (opponent info) ───────────────────────────────────
 class TopHudBar extends StatelessWidget {
   final PlayerSession player;

@@ -11,13 +11,34 @@ class CartaEnCelda {
   final List<EfectoActivo> efectos;
   final int? ultimoUsoHabilidad;
 
-  const CartaEnCelda({
+  /// Identidad ÚNICA de esta instancia colocada en el tablero.
+  ///
+  /// OJO: `carta.id` es el id de CATÁLOGO (la plantilla), así que dos copias de
+  /// la misma carta (p.ej. dos "Tiburón de combate") comparten `carta.id`. Para
+  /// distinguir instancias concretas —y que, por ejemplo, marcar una como
+  /// "ya movida este turno" NO afecte a otra copia recién desplegada— se usa
+  /// este `instanceId`, que es propio de cada objeto colocado.
+  ///
+  /// Se genera al crear la carta si no se aporta uno. Se preserva a través de
+  /// movimientos (misma instancia) y de `copyWith`. Al reconstruir el tablero
+  /// desde el servidor cada turno se genera uno nuevo, lo cual es correcto: el
+  /// rastreo de "movidas este turno" se reinicia en cada turno.
+  final String instanceId;
+
+  CartaEnCelda({
     required this.carta,
     required this.ownerUid,
     required this.ownerZone,
     this.efectos = const [],
     this.ultimoUsoHabilidad,
-  });
+    String? instanceId,
+  }) : instanceId = instanceId ?? _nuevaInstanceId();
+
+  static int _contador = 0;
+  static String _nuevaInstanceId() {
+    _contador++;
+    return 'i${DateTime.now().microsecondsSinceEpoch}_$_contador';
+  }
 
   int get defensaReducidaPorEfectos {
     int total = 0;
@@ -110,6 +131,7 @@ class CartaEnCelda {
         ...carta.toMap(),
         'ownerUid': ownerUid,
         'ownerZone': ownerZone,
+        'instanceId': instanceId,
         if (efectos.isNotEmpty)
           'Efectos': efectos.map((e) => e.toMap()).toList(),
         if (ultimoUsoHabilidad != null)
@@ -120,6 +142,9 @@ class CartaEnCelda {
         carta: CartaModel.fromMap(d),
         ownerUid: d['ownerUid'] as String? ?? '',
         ownerZone: d['ownerZone'] as String? ?? '',
+        // Si el servidor conserva el instanceId lo reutilizamos; si no, se
+        // genera uno nuevo (el rastreo por-turno se reinicia igualmente).
+        instanceId: d['instanceId'] as String?,
         efectos: ((d['Efectos'] ?? d['efectos']) as List?)
                 ?.map((m) =>
                     EfectoActivo.fromMap(Map<String, dynamic>.from(m as Map)))
@@ -145,6 +170,8 @@ class CartaEnCelda {
         ownerZone: ownerZone ?? this.ownerZone,
         efectos: efectos ?? this.efectos,
         ultimoUsoHabilidad: ultimoUsoHabilidad ?? this.ultimoUsoHabilidad,
+        // Preservar la identidad de instancia a través de copyWith.
+        instanceId: instanceId,
       );
 }
 

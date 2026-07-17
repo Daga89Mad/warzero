@@ -996,31 +996,68 @@ class _CardFace extends StatelessWidget {
                       decoration: TextDecoration.none,
                     ),
                   ),
-                  if (carta.condicion != CondicionCarta.basica) ...[
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color:
-                            Color(carta.condicion.colorValue).withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(
-                            color: Color(carta.condicion.colorValue)
-                                .withOpacity(0.40),
-                            width: 0.8),
-                      ),
-                      child: Text(
-                        '${carta.condicion.icon} ${carta.condicion.label}',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: Color(carta.condicion.colorValue),
-                          fontFamily: 'Cinzel',
+                  const SizedBox(height: 4),
+                  // Chips: tipo de terreno (siempre) + condición (si no básica).
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Color(carta.tipoColorValue).withOpacity(0.14),
+                          borderRadius: BorderRadius.circular(4),
+                          border: Border.all(
+                              color:
+                                  Color(carta.tipoColorValue).withOpacity(0.45),
+                              width: 0.8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(carta.tipoIconData,
+                                size: 11, color: Color(carta.tipoColorValue)),
+                            const SizedBox(width: 4),
+                            Text(
+                              carta.tipoNombre,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: Color(carta.tipoColorValue),
+                                fontFamily: 'Cinzel',
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
-                  ],
+                      if (carta.condicion != CondicionCarta.basica) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Color(carta.condicion.colorValue)
+                                .withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                                color: Color(carta.condicion.colorValue)
+                                    .withOpacity(0.40),
+                                width: 0.8),
+                          ),
+                          child: Text(
+                            '${carta.condicion.icon} ${carta.condicion.label}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: Color(carta.condicion.colorValue),
+                              fontFamily: 'Cinzel',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -1156,14 +1193,22 @@ class _CardFace extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Center(
-                    child: Text(
-                      'EJÉRCITO ${carta.ejercito}',
-                      style: const TextStyle(
-                        fontSize: 7,
-                        color: Color(0xFF506070),
-                        fontFamily: 'Cinzel',
-                        letterSpacing: 2,
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(carta.tipoIconData,
+                            size: 9, color: Color(carta.tipoColorValue)),
+                        const SizedBox(width: 4),
+                        Text(
+                          carta.tipoNombre.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 8,
+                            color: Color(carta.tipoColorValue),
+                            fontFamily: 'Cinzel',
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],

@@ -264,9 +264,10 @@ class CellWidget extends StatelessWidget {
       );
     }
     if (movable) {
+      // Verde (antes azul): destino disponible al mover una carta.
       return BoxDecoration(
-        border: Border.all(color: const Color(0xFF40B0FF), width: 1.5),
-        color: const Color(0xFF40B0FF).withOpacity(0.12),
+        border: Border.all(color: const Color(0xFF3AC65A), width: 1.5),
+        color: const Color(0xFF3AC65A).withOpacity(0.14),
       );
     }
     if (isRayo) {
@@ -514,7 +515,6 @@ class _CardStack extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total = celda.fuerzaTotal;
     final primary = celda.cartas.first;
     final color = _colorFor(primary);
     final isMulti = celda.cartas.length > 1;
@@ -664,6 +664,9 @@ class _CardStack extends StatelessWidget {
     }
 
     // ── Un solo jugador (comportamiento original) ─────────────
+    // En la miniatura se muestra el MOVIMIENTO de la carta principal (antes se
+    // mostraba la fuerza), y un icono que indica su tipo: Tierra / Mar / Aire.
+    final movimientoPrimary = primary.movimientoEfectivo;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
       decoration: BoxDecoration(
@@ -679,16 +682,30 @@ class _CardStack extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Text(
-            '$total',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: color,
-              fontFamily: 'Cinzel',
-              height: 1,
-              shadows: [Shadow(color: color.withOpacity(0.6), blurRadius: 6)],
-            ),
+          // Icono de tipo (Tierra/Mar/Aire) + valor de movimiento.
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                primary.carta.tipoIconData,
+                size: 11,
+                color: Color(primary.carta.tipoColorValue),
+              ),
+              const SizedBox(width: 3),
+              Text(
+                '$movimientoPrimary',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                  fontFamily: 'Cinzel',
+                  height: 1,
+                  shadows: [
+                    Shadow(color: color.withOpacity(0.6), blurRadius: 6)
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 2),
           if (isMulti)

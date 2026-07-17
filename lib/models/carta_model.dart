@@ -1,6 +1,7 @@
 // lib/models/carta_model.dart
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 
 // ─────────────────────────────────────────────────────────────
 // ENUM CONDICIÓN
@@ -349,6 +350,45 @@ class CartaModel {
         return 'Marino';
       default:
         return 'Terrestre';
+    }
+  }
+
+  /// Nombre corto de terreno para la UI de partida: Tierra / Mar / Aire.
+  ///   tipo 1 (Terrestre) → Tierra
+  ///   tipo 2 (Volador)   → Aire
+  ///   tipo 3 (Marino)    → Mar
+  String get tipoNombre {
+    switch (tipo) {
+      case 2:
+        return 'Aire';
+      case 3:
+        return 'Mar';
+      default:
+        return 'Tierra';
+    }
+  }
+
+  /// Icono (Material) del tipo de terreno, para miniaturas y carta grande.
+  IconData get tipoIconData {
+    switch (tipo) {
+      case 2:
+        return Icons.air; // Aire
+      case 3:
+        return Icons.waves; // Mar
+      default:
+        return Icons.terrain; // Tierra
+    }
+  }
+
+  /// Color temático del tipo de terreno.
+  int get tipoColorValue {
+    switch (tipo) {
+      case 2:
+        return 0xFF8AB4E8; // aire — azul claro
+      case 3:
+        return 0xFF2E88C8; // mar — azul
+      default:
+        return 0xFF8A9A5B; // tierra — verde oliva
     }
   }
 
