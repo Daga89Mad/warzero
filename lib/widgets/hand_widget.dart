@@ -60,12 +60,19 @@ class HandWidget extends StatelessWidget {
         separatorBuilder: (_, __) => const SizedBox(width: 7),
         itemBuilder: (context, i) {
           final carta = cartas[i];
-          final affordable = carta.coste <= energiesDisponibles;
+          // Las cartas de acción se pagan con `costeHabilidad`, no con
+          // `coste` (ese campo es el de despliegue normal). Usar el campo
+          // equivocado aquí hacía que una carta se mostrara "asequible"
+          // (y se pudiera pulsar) aunque el coste real que se cobra al
+          // jugarla fuese mayor que la energía disponible.
+          final costeReal = carta.esAccion ? carta.costeHabilidad : carta.coste;
+          final affordable = costeReal <= energiesDisponibles;
           return _HandCard(
             carta: carta,
+            costeMostrado: costeReal,
             isActive: i == selectedIndex,
             affordable: affordable,
-            onTap: () => onCardTap(i),
+            onTap: affordable ? () => onCardTap(i) : null,
             onLongPress: () => showCardDetail(
               context,
               carta,
@@ -89,13 +96,23 @@ class _HandCard extends StatelessWidget {
 
   /// False si el jugador no tiene energía suficiente para desplegarla.
   final bool affordable;
-  final VoidCallback onTap;
+
+  /// Coste real que se cobrará al jugar la carta (costeHabilidad para
+  /// cartas de acción, coste normal para el resto). Es lo que se muestra
+  /// en el círculo de coste, para que coincida con lo que de verdad se
+  /// va a descontar.
+  final int costeMostrado;
+
+  /// Null cuando la carta no es asequible: así el círculo/tap queda
+  /// deshabilitado en vez de solo "verse" bloqueado.
+  final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
   const _HandCard({
     required this.carta,
     required this.isActive,
     required this.affordable,
+    required this.costeMostrado,
     required this.onTap,
     this.onLongPress,
   });
@@ -169,7 +186,7 @@ class _HandCard extends StatelessWidget {
                     ),
                     child: Center(
                       child: Text(
-                        '${carta.coste}',
+                        '$costeMostrado',
                         style: TextStyle(
                             fontSize: 8,
                             fontWeight: FontWeight.bold,

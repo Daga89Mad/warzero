@@ -1716,6 +1716,20 @@ class _GameScreenState extends State<GameScreen> {
     );
     if (accion == null) return;
 
+    // ── Revalidación defensiva de energía ──────────────────────
+    // El coste se comprobó al iniciar la acción, pero puede haber pasado
+    // tiempo (selección de objetivos, modal de teletransporte) durante el
+    // cual la energía disponible cambió. Sin esta comprobación era posible
+    // completar una acción cuyo coste ya no se podía pagar.
+    if (_localPlayer.puntos < accion.costePagado) {
+      _toast(
+        'Energías insuficientes (${_localPlayer.puntos} / ${accion.costePagado}).',
+        error: true,
+      );
+      _cancelarAccion();
+      return;
+    }
+
     setState(() {
       _accionesPendientes.add(accion);
       _localPlayer.puntos -= accion.costePagado;
@@ -2471,6 +2485,19 @@ class _GameScreenState extends State<GameScreen> {
       body: SafeArea(
         child: Stack(
           children: [
+            // ── Deseleccionar carta al tocar fuera de una celda ────────
+            // Va DETRÁS de todo (primer hijo del Stack): las celdas del
+            // tablero y el resto de widgets interactivos absorben su
+            // propio toque, así que este detector solo se dispara cuando
+            // el toque cae fuera de cualquiera de ellos (HUD, banner,
+            // espacios entre celdas, etc.).
+            if (_selectedHandIndex != null)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () => setState(() => _selectedHandIndex = null),
+                ),
+              ),
             Column(
               children: [
                 // ── Barra de partida: nombre + color asignado + menú ──
@@ -2481,8 +2508,6 @@ class _GameScreenState extends State<GameScreen> {
                   jugadores: _infoJugadoresHud(),
                   onSalir: _confirmExit,
                 ),
-                TopHudBar(
-                    player: _opponentPlayer, turno: _boardState.turnoActual),
                 _PhaseBanner(
                   handSelected: _selectedHandIndex != null,
                   inMoveMode: _inMoveMode,

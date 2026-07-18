@@ -27,6 +27,18 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
     if (_index < _paginas.length - 1) setState(() => _index++);
   }
 
+  void _abrirImagenCompleta(BuildContext context, String url) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black,
+        pageBuilder: (_, __, ___) => _ImagenCompletaScreen(url: url),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final total = _paginas.length;
@@ -94,23 +106,28 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                                         child: Icon(Icons.image_outlined,
                                             size: 48, color: Color(0xFF334050)),
                                       )
-                                    : Image.network(
-                                        pagina.imagen,
-                                        fit: BoxFit.contain,
-                                        loadingBuilder: (c, child, p) =>
-                                            p == null
-                                                ? child
-                                                : const Center(
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                      color: Color(0xFFC8A860),
-                                                    ),
+                                    : GestureDetector(
+                                        onTap: () => _abrirImagenCompleta(
+                                            context, pagina.imagen),
+                                        child: Image.network(
+                                          pagina.imagen,
+                                          fit: BoxFit.contain,
+                                          loadingBuilder: (c, child, p) => p ==
+                                                  null
+                                              ? child
+                                              : const Center(
+                                                  child:
+                                                      CircularProgressIndicator(
+                                                    color: Color(0xFFC8A860),
                                                   ),
-                                        errorBuilder: (c, e, s) => const Center(
-                                          child: Icon(
-                                              Icons.broken_image_outlined,
-                                              size: 48,
-                                              color: Color(0xFF334050)),
+                                                ),
+                                          errorBuilder: (c, e, s) =>
+                                              const Center(
+                                            child: Icon(
+                                                Icons.broken_image_outlined,
+                                                size: 48,
+                                                color: Color(0xFF334050)),
+                                          ),
                                         ),
                                       ),
                               ),
@@ -180,6 +197,72 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                 ),
               ],
             ),
+    );
+  }
+}
+
+/// Visor de la imagen ocupando toda la pantalla. Permite hacer zoom/pan
+/// (InteractiveViewer) y se cierra tocando la imagen o el botón de cerrar.
+class _ImagenCompletaScreen extends StatelessWidget {
+  final String url;
+  const _ImagenCompletaScreen({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: InteractiveViewer(
+                minScale: 1,
+                maxScale: 5,
+                child: Center(
+                  child: Image.network(
+                    url,
+                    fit: BoxFit.contain,
+                    loadingBuilder: (c, child, p) => p == null
+                        ? child
+                        : const Center(
+                            child: CircularProgressIndicator(
+                              color: Color(0xFFC8A860),
+                            ),
+                          ),
+                    errorBuilder: (c, e, s) => const Center(
+                      child: Icon(Icons.broken_image_outlined,
+                          size: 64, color: Color(0xFF334050)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: SafeArea(
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xCC02050D),
+                    border: Border.all(
+                        color: const Color(0xFFC8A860).withOpacity(0.5),
+                        width: 1),
+                  ),
+                  child: const Icon(Icons.close,
+                      size: 20, color: Color(0xFFC8A860)),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
