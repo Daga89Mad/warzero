@@ -60,16 +60,16 @@ class HandWidget extends StatelessWidget {
         separatorBuilder: (_, __) => const SizedBox(width: 7),
         itemBuilder: (context, i) {
           final carta = cartas[i];
-          // Las cartas de acción se pagan con `costeHabilidad`, no con
-          // `coste` (ese campo es el de despliegue normal). Usar el campo
-          // equivocado aquí hacía que una carta se mostrara "asequible"
-          // (y se pudiera pulsar) aunque el coste real que se cobra al
-          // jugarla fuese mayor que la energía disponible.
-          final costeReal = carta.esAccion ? carta.costeHabilidad : carta.coste;
-          final affordable = costeReal <= energiesDisponibles;
+          // Tanto desplegar una carta normal como jugar una carta de
+          // acción se paga con el campo `coste` de la carta (el mismo que
+          // se ve en el badge y en el detalle). `costeHabilidad` es un
+          // campo aparte que solo se usa para la habilidad de una carta
+          // NO-acción ya desplegada en el tablero (botón "LANZAR
+          // HABILIDAD"), y no tiene nada que ver con este badge.
+          final affordable = carta.coste <= energiesDisponibles;
           return _HandCard(
             carta: carta,
-            costeMostrado: costeReal,
+            costeMostrado: carta.coste,
             isActive: i == selectedIndex,
             affordable: affordable,
             onTap: affordable ? () => onCardTap(i) : null,

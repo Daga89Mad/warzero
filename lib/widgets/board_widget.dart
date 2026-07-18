@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import '../models/game_config.dart';
 import '../models/board_state.dart';
+import '../models/carta_model.dart';
 import 'cell_widget.dart';
 
 /// Imagen usada cuando el mapa no define una propia (campo `imagen` vacío).
@@ -67,6 +68,10 @@ class BoardWidget extends StatefulWidget {
   /// Viene del campo `imagen` del documento del mapa en Firestore.
   final String? imagenMapa;
 
+  /// coord → cartas de acción declaradas ahí, pendientes de resolverse al
+  /// cerrar turno. Solo visión local (ver doc en CellWidget.fantasmas).
+  final Map<String, List<CartaModel>> fantasmasAccion;
+
   final Function(String coord, int ri, int ci) onCellTap;
 
   /// Toque dentro del área del tablero pero FUERA de cualquier celda (el marco
@@ -87,6 +92,7 @@ class BoardWidget extends StatefulWidget {
     this.localPlayerUid,
     this.imagenMapa,
     this.onBackgroundTap,
+    this.fantasmasAccion = const {},
     required this.onCellTap,
   });
 
@@ -242,6 +248,7 @@ class _BoardWidgetState extends State<BoardWidget>
                     playerColors: widget.playerColors,
                     localPlayerUid: widget.localPlayerUid,
                     imagenMapa: widget.imagenMapa,
+                    fantasmasAccion: widget.fantasmasAccion,
                     onCellTap: widget.onCellTap,
                   ),
                 ),
@@ -375,6 +382,7 @@ class _PerspectiveBoard extends StatelessWidget {
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
   final String? imagenMapa;
+  final Map<String, List<CartaModel>> fantasmasAccion;
   final Function(String, int, int) onCellTap;
 
   const _PerspectiveBoard({
@@ -387,6 +395,7 @@ class _PerspectiveBoard extends StatelessWidget {
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
+    this.fantasmasAccion = const {},
     required this.onCellTap,
   });
 
@@ -408,6 +417,7 @@ class _PerspectiveBoard extends StatelessWidget {
           playerColors: playerColors,
           localPlayerUid: localPlayerUid,
           imagenMapa: imagenMapa,
+          fantasmasAccion: fantasmasAccion,
           onCellTap: onCellTap,
         ),
       ),
@@ -767,6 +777,7 @@ class _GridContent extends StatelessWidget {
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
   final String? imagenMapa;
+  final Map<String, List<CartaModel>> fantasmasAccion;
   final Function(String, int, int) onCellTap;
 
   const _GridContent({
@@ -779,6 +790,7 @@ class _GridContent extends StatelessWidget {
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
+    this.fantasmasAccion = const {},
     required this.onCellTap,
   });
 
@@ -814,6 +826,7 @@ class _GridContent extends StatelessWidget {
                     escudosCelda: boardState.escudosCelda(coord),
                     playerColors: playerColors,
                     localPlayerUid: localPlayerUid,
+                    fantasmas: fantasmasAccion[coord] ?? const [],
                     onTap: () => onCellTap(coord, ri, ci),
                   );
                 }),

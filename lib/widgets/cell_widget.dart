@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'terrain_overlay.dart';
 import '../models/game_config.dart';
 import '../models/board_state.dart';
+import '../models/carta_model.dart';
 
 const double kCellW = 88;
 const double kCellH = 80;
@@ -85,6 +86,12 @@ class CellWidget extends StatelessWidget {
   /// uid del jugador local (lo pasa el tablero; reservado para futuros previews
   /// de combate que necesiten distinguir al defensor del cuartel).
   final String? localPlayerUid;
+
+  /// Cartas de acción declaradas por el jugador local sobre esta celda,
+  /// pendientes de resolverse al cerrar turno. Es un marcador puramente
+  /// visual (solo lo ve quien las lanzó): no participa en el combate ni
+  /// existe en `celda`, así que no afecta a `_CardStack`.
+  final List<CartaModel> fantasmas;
   final VoidCallback onTap;
 
   const CellWidget({
@@ -105,6 +112,7 @@ class CellWidget extends StatelessWidget {
     this.escudosCelda = const [],
     this.playerColors = const {},
     this.localPlayerUid,
+    this.fantasmas = const [],
     required this.onTap,
   });
 
@@ -238,6 +246,14 @@ class CellWidget extends StatelessWidget {
                   escudosCelda: escudosCelda,
                 ),
               ),
+
+            // Marcador fantasma de acción pendiente (solo visión local).
+            if (fantasmas.isNotEmpty)
+              Positioned(
+                left: 2,
+                top: 2,
+                child: _AccionFantasmaBadge(cartas: fantasmas),
+              ),
           ],
         ),
       ),
@@ -276,6 +292,82 @@ class CellWidget extends StatelessWidget {
       );
     }
     return null;
+  }
+}
+
+/// Marcador visual de una (o varias) carta(s) de acción declarada(s) sobre
+/// esta celda, pendiente de resolverse al cerrar turno. Solo el jugador que
+/// las lanzó las ve (viven en un mapa local de `GameScreen`, no en
+/// `BoardState`), y no se enfrenta en combate: es solo una "chincheta" para
+/// recordar dónde se apuntó.
+class _AccionFantasmaBadge extends StatelessWidget {
+  final List<CartaModel> cartas;
+  const _AccionFantasmaBadge({required this.cartas});
+
+  @override
+  Widget build(BuildContext context) {
+    final carta = cartas.last; // la más reciente, si hay varias apiladas
+    return IgnorePointer(
+      child: Opacity(
+        opacity: 0.72,
+        child: Container(
+          width: 26,
+          height: 26,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0A1220),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: const Color(0xFF40C0FF),
+              width: 1.2,
+              style: BorderStyle.solid,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                  color: Color(0x8040C0FF), blurRadius: 6, spreadRadius: 0.5),
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (carta.imagen.trim().isNotEmpty)
+                Image.network(
+                  carta.imagen,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const Icon(Icons.bolt,
+                      size: 14, color: Color(0xFF40C0FF)),
+                )
+              else
+                const Center(
+                  child: Icon(Icons.bolt, size: 14, color: Color(0xFF40C0FF)),
+                ),
+              // Velo azulado para que se note que es un marcador, no la carta real.
+              Container(color: const Color(0x5006101C)),
+              if (cartas.length > 1)
+                Positioned(
+                  right: -1,
+                  bottom: -1,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A1220),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: const Color(0xFF40C0FF), width: 0.8),
+                    ),
+                    child: Text('${cartas.length}',
+                        style: const TextStyle(
+                            fontSize: 7,
+                            color: Color(0xFF40C0FF),
+                            fontWeight: FontWeight.bold)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

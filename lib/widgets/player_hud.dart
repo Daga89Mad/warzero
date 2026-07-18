@@ -28,12 +28,29 @@ class PartidaTopBar extends StatelessWidget {
   final List<HudJugadorInfo> jugadores;
   final VoidCallback onSalir;
 
+  /// Acciones que antes vivían en el menú flotante inferior. Se muestran
+  /// en este mismo desplegable, en este orden, ANTES de "Salir de la
+  /// partida" (que se mantiene siempre al final). `enabled: false` deja el
+  /// ítem atenuado y sin poder pulsarse, igual que hacía el menú anterior.
+  final bool puedeCuartel;
+  final VoidCallback onCuartel;
+  final bool puedeInforme;
+  final VoidCallback onInforme;
+  final bool puedeDeshacer;
+  final VoidCallback onDeshacer;
+
   const PartidaTopBar({
     super.key,
     required this.nombrePartida,
     required this.colorAsignado,
     required this.jugadores,
     required this.onSalir,
+    required this.puedeCuartel,
+    required this.onCuartel,
+    required this.puedeInforme,
+    required this.onInforme,
+    required this.puedeDeshacer,
+    required this.onDeshacer,
   });
 
   @override
@@ -58,6 +75,9 @@ class PartidaTopBar extends StatelessWidget {
             offset: const Offset(0, 44),
             onSelected: (v) {
               if (v == '__salir__') onSalir();
+              if (v == '__cuartel__' && puedeCuartel) onCuartel();
+              if (v == '__informe__' && puedeInforme) onInforme();
+              if (v == '__deshacer__' && puedeDeshacer) onDeshacer();
             },
             itemBuilder: (context) => [
               for (int i = 0; i < jugadores.length; i++)
@@ -67,6 +87,40 @@ class PartidaTopBar extends StatelessWidget {
                   height: 40,
                   child: _FilaJugador(info: jugadores[i]),
                 ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: '__cuartel__',
+                enabled: puedeCuartel,
+                height: 40,
+                child: _FilaAccion(
+                  icon: Icons.castle,
+                  label: 'CUARTEL',
+                  color: const Color(0xFFC8A860),
+                  enabled: puedeCuartel,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: '__informe__',
+                enabled: puedeInforme,
+                height: 40,
+                child: _FilaAccion(
+                  icon: Icons.history,
+                  label: 'INFORME',
+                  color: const Color(0xFF6AAAD0),
+                  enabled: puedeInforme,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: '__deshacer__',
+                enabled: puedeDeshacer,
+                height: 40,
+                child: _FilaAccion(
+                  icon: Icons.undo,
+                  label: 'DESHACER CAMBIOS',
+                  color: const Color(0xFFFF8080),
+                  enabled: puedeDeshacer,
+                ),
+              ),
               const PopupMenuDivider(),
               PopupMenuItem<String>(
                 value: '__salir__',
@@ -139,6 +193,48 @@ class PartidaTopBar extends StatelessWidget {
 
           // Espaciador simétrico al botón de la izquierda para centrar el título.
           const SizedBox(width: 34),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Fila de una acción (Cuartel/Informe/Deshacer) dentro del desplegable ──
+/// Misma dinámica visual que tenían los botones del antiguo menú flotante:
+/// atenuada y sin interacción cuando `enabled` es false (el propio
+/// `PopupMenuItem.enabled` ya bloquea el toque; esto solo replica el estilo).
+class _FilaAccion extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final bool enabled;
+
+  const _FilaAccion({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.enabled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = enabled ? color : const Color(0xFF3A4A5A);
+    return Opacity(
+      opacity: enabled ? 1 : 0.5,
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: c),
+          const SizedBox(width: 10),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontFamily: 'Cinzel',
+              letterSpacing: 0.5,
+              color: c,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ],
       ),
     );

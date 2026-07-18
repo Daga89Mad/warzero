@@ -151,6 +151,12 @@ class _GameScreenState extends State<GameScreen> {
   /// Acciones declaradas en este turno (se envían al cerrar turno).
   final List<AccionPendiente> _accionesPendientes = [];
 
+  /// Marcadores puramente visuales y locales: carta(s) de acción colocadas
+  /// en una celda mientras la acción está pendiente de resolverse al cerrar
+  /// turno. Solo las ve el jugador que las lanzó; no se sincronizan con el
+  /// servidor ni afectan al cálculo de combate (no viven en `_boardState`).
+  final Map<String, List<CartaModel>> _fantasmasAccion = {};
+
   /// Efectos de celda activos (leídos de Firestore y mantenidos en memoria).
   Map<String, List<EfectoActivo>> _efectosCelda = {};
 
@@ -1289,6 +1295,76 @@ class _GameScreenState extends State<GameScreen> {
     ));
   }
 
+  /// Abre el informe de batalla del turno anterior. Antes vivía como
+  /// closure inline del extinto menú flotante; ahora lo llama el menú
+  /// único de PartidaTopBar.
+  void _abrirInformeBatalla() {
+    _informeAbierto = true;
+    Navigator.of(context)
+        .push(MaterialPageRoute(
+      builder: (_) => InformeBatallaScreen(
+        combateLog: _lastCombateLog,
+        movimientosLog: _lastMovimientosLog,
+        historial: _historialCombates,
+        localUid: widget.localPlayerUid,
+        jugadores: _currentLobby?.jugadores ?? [],
+        turno: _boardState.turnoActual - 1,
+        farmeoLog: _lastFarmeoLog,
+        accionesLog: _lastAccionesLog,
+        rayoCoord: _lastRayoCoord,
+      ),
+    ))
+        .whenComplete(() {
+      _informeAbierto = false;
+      _abrirRevisionTurno(turnoRevisar: _boardState.turnoActual - 1);
+    });
+  }
+
+  /// Pide confirmación antes de deshacer los cambios del turno. Antes vivía
+  /// dentro del extinto _GameActionsMenu; ahora lo llama el menú único de
+  /// PartidaTopBar.
+  void _pedirDeshacer() {
+    showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0D1E30),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('¿Deshacer cambios?',
+            style: TextStyle(
+                fontFamily: 'Cinzel', color: Color(0xFFC8A860), fontSize: 14)),
+        content: const Text(
+          'Se revertirán todos los movimientos de este turno.\n'
+          'El tablero volverá al estado guardado en el servidor.',
+          style: TextStyle(
+              fontFamily: 'Cinzel',
+              color: Color(0xFF8A9AAA),
+              fontSize: 10,
+              height: 1.7),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('CANCELAR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    color: Color(0xFF506070),
+                    fontSize: 10)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('DESHACER',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    color: Color(0xFFFF5050),
+                    fontSize: 10)),
+          ),
+        ],
+      ),
+    ).then((ok) {
+      if (ok == true) _undoCambios();
+    });
+  }
+
   /// Compra una carta especial: descuenta Zero, la coloca en el cuartel y
   /// la marca como comprada (deshabilitada para futuras compras).
   Future<CompraResult> _comprarEspecial(CartaModel carta) async {
@@ -1510,9 +1586,13 @@ class _GameScreenState extends State<GameScreen> {
       _toast('Necesitas un cuartel asignado.', error: true);
       return;
     }
-    if (_localPlayer.puntos < carta.costeHabilidad) {
+    // Carta de acción jugada desde la mano → se paga con el campo `coste`
+    // normal de la carta (el mismo que se ve en la mano y en el detalle),
+    // no con `costeHabilidad` (ese es para habilidades de cartas normales
+    // ya desplegadas en el tablero).
+    if (_localPlayer.puntos < carta.coste) {
       _toast(
-          'Energías insuficientes (${_localPlayer.puntos} / ${carta.costeHabilidad}).',
+          'Energías insuficientes (${_localPlayer.puntos} / ${carta.coste}).',
           error: true);
       return;
     }
@@ -1738,6 +1818,16 @@ class _GameScreenState extends State<GameScreen> {
       if (controller.esCartaDeAccion && controller.indiceMano != null) {
         final idx = controller.indiceMano!;
         if (idx >= 0 && idx < _hand.length) {
+          // ── Marcador fantasma (solo local) ──────────────────
+          // Guardamos la carta en las celdas objetivo únicamente para que
+          // el jugador que la lanzó recuerde dónde la puso hasta que se
+          // resuelva el turno. No es una CartaEnCelda real: no se envía al
+          // servidor, no participa en el cálculo de combate y desaparece
+          // en cuanto el turno se resuelve (o se deshacen los cambios).
+          final cartaUsada = _hand[idx];
+          for (final coord in accion.objetivos) {
+            (_fantasmasAccion[coord] ??= []).add(cartaUsada);
+          }
           _hand = List.from(_hand)..removeAt(idx);
         }
       }
@@ -1789,6 +1879,7 @@ class _GameScreenState extends State<GameScreen> {
       _sidebarCoord = null;
       _accionController.cancelar();
       _accionesPendientes.clear();
+      _fantasmasAccion.clear();
       // Restaurar energías locales al snapshot de inicio de turno (incluye el
       // coste de acciones, que no se persiste hasta cerrar el turno).
       _localPlayer.puntos = _puntosInicial;
@@ -2186,6 +2277,7 @@ class _GameScreenState extends State<GameScreen> {
           // indefinidamente y nunca desaparecería de la celda).
           _accionesPendientes.clear();
           _accionController.cancelar();
+          _fantasmasAccion.clear();
           _energiaGastadaDespliegue = 0;
         });
 
@@ -2485,28 +2577,47 @@ class _GameScreenState extends State<GameScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // ── Deseleccionar carta al tocar fuera de una celda ────────
+            // ── Deseleccionar carta / cancelar acción al tocar fuera ────
             // Va DETRÁS de todo (primer hijo del Stack): las celdas del
             // tablero y el resto de widgets interactivos absorben su
             // propio toque, así que este detector solo se dispara cuando
             // el toque cae fuera de cualquiera de ellos (HUD, banner,
-            // espacios entre celdas, etc.).
-            if (_selectedHandIndex != null)
+            // espacios entre celdas, etc.). Cubre dos casos:
+            //   - Carta normal seleccionada en la mano → se deselecciona.
+            //   - Carta/habilidad de acción en curso (esperando objetivo)
+            //     → se cancela, igual que si no se hubiera pulsado nunca.
+            if (_selectedHandIndex != null || _inActionMode)
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onTap: () => setState(() => _selectedHandIndex = null),
+                  onTap: () {
+                    if (_inActionMode) {
+                      _cancelarAccion();
+                    } else {
+                      setState(() => _selectedHandIndex = null);
+                    }
+                  },
                 ),
               ),
             Column(
               children: [
                 // ── Barra de partida: nombre + color asignado + menú ──
+                // Único menú de la pantalla: jugadores, Cuartel/Informe/
+                // Deshacer, y "Salir de la partida" siempre al final.
                 PartidaTopBar(
                   nombrePartida: _currentLobby?.nombre ?? 'Partida',
                   colorAsignado: _colorDeUid(_localPlayer.datos.uid,
                       zonaFallback: _localPlayer.zona),
                   jugadores: _infoJugadoresHud(),
                   onSalir: _confirmExit,
+                  puedeCuartel: !_estoyEliminado,
+                  onCuartel: _abrirCuartel,
+                  puedeInforme: _boardState.turnoActual > 1,
+                  onInforme: _abrirInformeBatalla,
+                  puedeDeshacer: _hayCambiosPendientes &&
+                      !_yoCerreElTurno &&
+                      !_estoyEliminado,
+                  onDeshacer: _pedirDeshacer,
                 ),
                 _PhaseBanner(
                   handSelected: _selectedHandIndex != null,
@@ -2524,6 +2635,7 @@ class _GameScreenState extends State<GameScreen> {
                     obeliscoLocal: _obeliscoLocal,
                     playerColors: _playerColors,
                     localPlayerUid: widget.localPlayerUid,
+                    fantasmasAccion: _fantasmasAccion,
                     onCellTap: _onCellTap,
                   ),
                 ),
@@ -2584,45 +2696,6 @@ class _GameScreenState extends State<GameScreen> {
                   child: const SizedBox.expand(),
                 ),
               ),
-            // ── Menú de acciones (Cuartel / Informe / Deshacer) ──
-            // Un único botón desplegable que sustituye a los antiguos botones
-            // sueltos (que se pisaban entre sí). El contador del mazo
-            // (_DeckCounter) se elimina: ya no hay número fijo de cartas.
-            Positioned(
-              left: 10,
-              bottom: _estoyEliminado ? 8 : 58 + 105 + 6,
-              child: _GameActionsMenu(
-                puedeCuartel: !_estoyEliminado,
-                onCuartel: _abrirCuartel,
-                puedeInforme: _boardState.turnoActual > 1,
-                onInforme: () {
-                  _informeAbierto = true;
-                  Navigator.of(context)
-                      .push(MaterialPageRoute(
-                    builder: (_) => InformeBatallaScreen(
-                      combateLog: _lastCombateLog,
-                      movimientosLog: _lastMovimientosLog,
-                      historial: _historialCombates,
-                      localUid: widget.localPlayerUid,
-                      jugadores: _currentLobby?.jugadores ?? [],
-                      turno: _boardState.turnoActual - 1,
-                      farmeoLog: _lastFarmeoLog, // ← nuevo
-                      accionesLog: _lastAccionesLog, // ← nuevo
-                      rayoCoord: _lastRayoCoord, // ← nuevo
-                    ),
-                  ))
-                      .whenComplete(() {
-                    _informeAbierto = false;
-                    _abrirRevisionTurno(
-                        turnoRevisar: _boardState.turnoActual - 1);
-                  });
-                },
-                puedeDeshacer: _hayCambiosPendientes &&
-                    !_yoCerreElTurno &&
-                    !_estoyEliminado,
-                onDeshacer: _undoCambios,
-              ),
-            ),
             Positioned(
               top: 58,
               right: 0,
@@ -2806,207 +2879,6 @@ class _TurnWaitBannerState extends State<_TurnWaitBanner> {
           ),
         ),
       ]),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
-// MENÚ DE ACCIONES (Cuartel / Informe / Deshacer cambios)
-// Un único disparador que despliega los 3, habilitados o no.
-// ─────────────────────────────────────────────────────────────
-class _GameActionsMenu extends StatefulWidget {
-  final bool puedeCuartel;
-  final VoidCallback onCuartel;
-
-  final bool puedeInforme;
-  final VoidCallback onInforme;
-
-  final bool puedeDeshacer;
-  final VoidCallback onDeshacer; // se llama TRAS confirmar
-
-  const _GameActionsMenu({
-    required this.puedeCuartel,
-    required this.onCuartel,
-    required this.puedeInforme,
-    required this.onInforme,
-    required this.puedeDeshacer,
-    required this.onDeshacer,
-  });
-
-  @override
-  State<_GameActionsMenu> createState() => _GameActionsMenuState();
-}
-
-class _GameActionsMenuState extends State<_GameActionsMenu> {
-  bool _open = false;
-
-  void _toggle() => setState(() => _open = !_open);
-  void _close() => setState(() => _open = false);
-
-  void _pedirDeshacer() {
-    _close();
-    showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1E30),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('¿Deshacer cambios?',
-            style: TextStyle(
-                fontFamily: 'Cinzel', color: Color(0xFFC8A860), fontSize: 14)),
-        content: const Text(
-          'Se revertirán todos los movimientos de este turno.\n'
-          'El tablero volverá al estado guardado en el servidor.',
-          style: TextStyle(
-              fontFamily: 'Cinzel',
-              color: Color(0xFF8A9AAA),
-              fontSize: 10,
-              height: 1.7),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('CANCELAR',
-                style: TextStyle(
-                    fontFamily: 'Cinzel',
-                    color: Color(0xFF506070),
-                    fontSize: 10)),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('DESHACER',
-                style: TextStyle(
-                    fontFamily: 'Cinzel',
-                    color: Color(0xFFFF5050),
-                    fontSize: 10)),
-          ),
-        ],
-      ),
-    ).then((ok) {
-      if (ok == true) widget.onDeshacer();
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (_open) ...[
-          _MenuItem(
-            icon: Icons.castle,
-            label: 'CUARTEL',
-            color: const Color(0xFFC8A860),
-            enabled: widget.puedeCuartel,
-            onTap: () {
-              _close();
-              widget.onCuartel();
-            },
-          ),
-          const SizedBox(height: 6),
-          _MenuItem(
-            icon: Icons.history,
-            label: 'INFORME',
-            color: const Color(0xFF6AAAD0),
-            enabled: widget.puedeInforme,
-            onTap: () {
-              _close();
-              widget.onInforme();
-            },
-          ),
-          const SizedBox(height: 6),
-          _MenuItem(
-            icon: Icons.undo,
-            label: 'DESHACER CAMBIOS',
-            color: const Color(0xFFFF8080),
-            enabled: widget.puedeDeshacer,
-            onTap: _pedirDeshacer,
-          ),
-          const SizedBox(height: 8),
-        ],
-        GestureDetector(
-          onTap: _toggle,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xCC0D1E30),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF3A5A7A), width: 1.2),
-              boxShadow: const [
-                BoxShadow(
-                    color: Color(0x88000000),
-                    blurRadius: 8,
-                    offset: Offset(0, 2)),
-              ],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(_open ? Icons.close : Icons.menu,
-                    size: 14, color: const Color(0xFFC8A860)),
-                const SizedBox(width: 6),
-                const Text('ACCIONES',
-                    style: TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 9,
-                        letterSpacing: 1.5,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFFC8A860))),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _MenuItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _MenuItem({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.enabled,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = enabled ? color : const Color(0xFF3A4A5A);
-    return Opacity(
-      opacity: enabled ? 1 : 0.5,
-      child: GestureDetector(
-        onTap: enabled ? onTap : null,
-        child: Container(
-          width: 168,
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xEE0A1626),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: c.withOpacity(0.7), width: 1),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 13, color: c),
-              const SizedBox(width: 8),
-              Text(label,
-                  style: TextStyle(
-                      fontFamily: 'Cinzel',
-                      fontSize: 9,
-                      letterSpacing: 1.2,
-                      fontWeight: FontWeight.bold,
-                      color: c)),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

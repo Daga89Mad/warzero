@@ -33,6 +33,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
   late final TextEditingController _defensaCtrl;
   late final TextEditingController _costeCtrl;
   late final TextEditingController _idHabilidadCtrl;
+  late final TextEditingController _costeHabilidadCtrl;
   late final TextEditingController _movimientoCtrl;
   late final TextEditingController _evolucionCosteCtrl;
 
@@ -55,6 +56,8 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
     _defensaCtrl = TextEditingController(text: '${c?.defensa ?? 0}');
     _costeCtrl = TextEditingController(text: '${c?.coste ?? 1}');
     _idHabilidadCtrl = TextEditingController(text: '${c?.idHabilidad ?? 0}');
+    _costeHabilidadCtrl =
+        TextEditingController(text: '${c?.costeHabilidad ?? 0}');
     _movimientoCtrl = TextEditingController(text: '${c?.movimiento ?? 1}');
     _evolucionCosteCtrl = TextEditingController(text: '${c?.evolucion ?? 0}');
     _ejercito = c?.ejercito ?? 1;
@@ -77,6 +80,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
     _defensaCtrl.dispose();
     _costeCtrl.dispose();
     _idHabilidadCtrl.dispose();
+    _costeHabilidadCtrl.dispose();
     _movimientoCtrl.dispose();
     _evolucionCosteCtrl.dispose();
     super.dispose();
@@ -120,6 +124,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         'Defensa': int.tryParse(_defensaCtrl.text) ?? 0,
         'Coste': int.tryParse(_costeCtrl.text) ?? 1,
         'IdHabilidad': int.tryParse(_idHabilidadCtrl.text) ?? 0,
+        'CosteHabilidad': int.tryParse(_costeHabilidadCtrl.text) ?? 0,
         'Imagen': _imagenCtrl.text.trim(),
         'Movimiento': _condicion == CondicionCarta.estatica
             ? 0
@@ -487,8 +492,35 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
                       label: 'ID Habilidad',
                       icon: Icons.auto_awesome,
                       color: const Color(0xFF8060C0))),
-              const Expanded(child: SizedBox()),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: AbsorbPointer(
+                absorbing: _condicion == CondicionCarta.accion,
+                child: Opacity(
+                  opacity: _condicion == CondicionCarta.accion ? 0.4 : 1.0,
+                  child: _buildNumberField(
+                      controller: _costeHabilidadCtrl,
+                      label: 'Coste habilidad',
+                      icon: Icons.bolt,
+                      color: const Color(0xFF40C0FF)),
+                ),
+              )),
             ]),
+            if (_condicion == CondicionCarta.accion)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Carta de acción: se paga con el campo "Coste" de arriba. '
+                  'Este campo (CosteHabilidad) no se usa en este caso: solo '
+                  'aplica a la habilidad de una carta normal ya desplegada '
+                  '(botón "Lanzar habilidad" en el tablero).',
+                  style: TextStyle(
+                      fontSize: 8,
+                      color: Color(0xFF40C0FF),
+                      fontFamily: 'Cinzel',
+                      height: 1.5),
+                ),
+              ),
 
             const SizedBox(height: 28),
 

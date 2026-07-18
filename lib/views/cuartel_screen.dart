@@ -217,13 +217,33 @@ class _CuartelScreenState extends State<CuartelScreen> {
             Container(
               width: 50,
               height: 50,
+              clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
                 color: const Color(0xFF1A2838),
                 borderRadius: BorderRadius.circular(6),
                 border: Border.all(color: _border),
               ),
               alignment: Alignment.center,
-              child: const Icon(Icons.star, color: _gold, size: 22),
+              child: carta.imagen.trim().isEmpty
+                  ? const Icon(Icons.star, color: _gold, size: 22)
+                  : Image.network(
+                      carta.imagen,
+                      fit: BoxFit.cover,
+                      width: 50,
+                      height: 50,
+                      loadingBuilder: (c, child, p) => p == null
+                          ? child
+                          : const Center(
+                              child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: _gold),
+                              ),
+                            ),
+                      errorBuilder: (c, e, s) =>
+                          const Icon(Icons.star, color: _gold, size: 22),
+                    ),
             ),
             const SizedBox(width: 12),
             Expanded(

@@ -134,7 +134,11 @@ class AccionController {
     _reset();
     _habilidad = h;
     _origen = obeliscoLocal;
-    _costeHabilidad = carta.costeHabilidad;
+    // Carta de ACCIÓN (jugada desde la mano): el coste es el campo normal
+    // `Coste` de la carta -es el que se ve en la mano y en el detalle-, NO
+    // `CosteHabilidad`. Ese otro campo solo aplica a habilidades lanzadas
+    // desde una carta que NO es de acción (ver iniciarDesdeCartaDeTablero).
+    _costeHabilidad = carta.coste;
     _cartaAccionDeMano = carta;
     _indiceMano = indiceMano;
     _objetivosValidos = HabilidadService.calcularObjetivosValidos(
@@ -165,6 +169,9 @@ class AccionController {
     _reset();
     _habilidad = h;
     _origen = coord;
+    // Habilidad lanzada desde una carta que NO es de acción (carta normal
+    // ya desplegada en el tablero, con idHabilidad>0): aquí sí se usa el
+    // coste específico de la habilidad, `CosteHabilidad`.
     _costeHabilidad = carta.costeHabilidad;
     _cartaTableroCoord = coord;
     _cartaTableroIndice = indiceCelda;
