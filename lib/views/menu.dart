@@ -30,7 +30,12 @@ class MenuScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
     // Solo estos correos pueden ver/usar la edición de cartas.
-    const editores = {'qa85@daga.com', 'dagahh89@gmail.com', 'qa104@daga.com'};
+    const editores = {
+      'qa85@daga.com',
+      'dagahh89@gmail.com',
+      'qa104@daga.com',
+      'qa106@daga.com'
+    };
     final puedeEditar =
         editores.contains((user?.email ?? '').trim().toLowerCase());
     final alias =

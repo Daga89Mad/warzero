@@ -183,6 +183,14 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                           color: const Color(0xFFC8A860).withOpacity(0.20)),
                     ),
                     child: SingleChildScrollView(
+                      // Sin esta key, al cambiar de página (_next/_prev) el
+                      // scroll de la descripción conservaba el desplazamiento
+                      // de la página anterior en vez de empezar arriba: si
+                      // habías bajado leyendo una página larga, la siguiente
+                      // entraba ya desplazada y había que subir a mano. La
+                      // key fuerza a Flutter a tratarlo como un scroll nuevo
+                      // (offset 0) cada vez que cambia `_index`.
+                      key: ValueKey(_index),
                       child: Text(
                         pagina.descripcion,
                         style: const TextStyle(

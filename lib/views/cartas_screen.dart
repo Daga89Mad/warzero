@@ -183,9 +183,16 @@ class _CartasScreenState extends State<CartasScreen>
       } catch (_) {}
     }
     if (!mounted) return;
+    // BUG: aquí se pasaba `carta` tal cual (imagen por defecto). La miniatura
+    // (_MiniCarta) sí usa _imagenEfectiva y por eso se veía bien en pequeño;
+    // al ampliarla el overlay pintaba carta.imagen (el diseño original) en
+    // vez del skin. Se soluciona pasando una copia con la imagen ya resuelta.
+    final cartaConSkin = imgUrl.isNotEmpty && imgUrl != carta.imagen
+        ? carta.copyWith(imagen: imgUrl)
+        : carta;
     showCardDetail(
       context,
-      carta,
+      cartaConSkin,
       resolveEvolucion: carta.puedeEvolucionar ? _resolveEvolucion : null,
       energiasDisponibles: null,
       onEvolucionar: null,
