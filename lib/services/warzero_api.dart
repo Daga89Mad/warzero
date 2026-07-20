@@ -211,6 +211,39 @@ class WarZeroApi {
     throw Exception('cerrarTurno HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// Deshace los gastos NO consolidados del turno en curso: devuelve la energía
+  /// revertible ([energiesDelta] positivo) y desmarca las especiales compradas
+  /// este turno ([especialesQuitar]). Fire-and-forget: nunca lanza. BUG QAS #2.
+  Future<void> deshacerTurno({
+    required String lobbyId,
+    required String uid,
+    required int turno,
+    required int energiesDelta,
+    List<String> especialesQuitar = const [],
+  }) async {
+    if (energiesDelta == 0 && especialesQuitar.isEmpty) return;
+    try {
+      final body = jsonEncode({
+        'lobbyId': lobbyId,
+        'uid': uid,
+        'turno': turno,
+        'energiesDelta': energiesDelta,
+        'especialesQuitar': especialesQuitar,
+      });
+      await http
+          .post(
+            Uri.parse('$baseUrl/warzero/turno/deshacer'),
+            headers: _headers,
+            body: body,
+          )
+          .timeout(const Duration(seconds: 15));
+      debugPrint('[WZ][api] turno deshecho lobby=$lobbyId turno=$turno '
+          'devuelto=$energiesDelta especiales=${especialesQuitar.length}');
+    } catch (e) {
+      debugPrint('[WZ][api] deshacerTurno falló (ignorado): $e');
+    }
+  }
+
   /// Entrada a la partida: inicializa energías/obelisco/mano si hace falta
   /// (atómico en el servidor) y devuelve el estado completo. Devuelve null si no
   /// existe. Reintenta para absorber el arranque en frío de Render.

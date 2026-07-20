@@ -97,6 +97,11 @@ class FarmeoService {
                   'rayo': 0,
                 });
 
+        // BUG QAS #1: una carta sobre CUALQUIER celda de cuartel/obelisco no
+        // farmea nada (ni continente, ni isla central, ni rayo). El cuartel es
+        // una base, no una zona de extracción. (Paridad con WarZeroLogic.cs.)
+        if (propietarioDeObelisco.containsKey(coord)) continue;
+
         // ¿Carta en continente ENEMIGO?
         for (final entry in continentes.entries) {
           final obeliscoCoord = entry.key;

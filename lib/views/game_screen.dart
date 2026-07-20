@@ -134,6 +134,11 @@ class _GameScreenState extends State<GameScreen> {
   /// (deshabilitadas para futuras compras suyas).
   final Set<String> _especialesCompradas = {};
 
+  /// IDs de especiales compradas EN ESTE TURNO (subconjunto de las anteriores).
+  /// Se usan para desmarcarlas en el servidor si el jugador deshace o sale a
+  /// mitad de turno (bug QAS #2). Se limpia al empezar cada turno.
+  final Set<String> _especialesCompradasEsteTurno = {};
+
   // ── Sidebar ───────────────────────────────────────────────
   String? _sidebarCoord;
   int? _sidebarRi;
@@ -177,12 +182,12 @@ class _GameScreenState extends State<GameScreen> {
   /// bug de "dos Tiburón de combate": mover una copia bloqueaba a la otra.
   final Set<String> _cartasMovidasEsteTurno = {};
 
-  /// Exclusión mutua por turno: si mueves una carta no puedes evolucionar, y si
-  /// evolucionas no puedes mover. (El despliegue desde la mano no cuenta como
-  /// movimiento a estos efectos.)
-  bool _haMovidoEsteTurno = false;
-  final Set<String> _cartasEvolucionadasEsteTurno = {};
-  bool get _haEvolucionadoEsteTurno => _cartasEvolucionadasEsteTurno.isNotEmpty;
+  /// Exclusión mutua POR CARTA (no por turno): una carta que se movió este turno
+  /// no puede evolucionar, y una que evolucionó no puede moverse. Se rastrea por
+  /// instanceId (identidad por-instancia), IGUAL que la exclusión mover/habilidad.
+  /// Así mover una carta NO bloquea evolucionar OTRA distinta (bug QAS #3).
+  /// (El despliegue desde la mano no cuenta como movimiento a estos efectos.)
+  final Set<String> _cartasQueEvolucionaron = {};
 
   /// Exclusión mutua por CARTA: una carta que se mueve no puede usar habilidad
   /// ese turno, y una que usa habilidad no puede moverse. Indexado por
@@ -276,10 +281,6 @@ class _GameScreenState extends State<GameScreen> {
       _toast('Ya has cerrado el turno. Espera al siguiente.', error: true);
       return;
     }
-    if (_haMovidoEsteTurno) {
-      _toast('Este turno ya has movido: no puedes evolucionar.', error: true);
-      return;
-    }
 
     final celda = _boardState.getCelda(coord);
     if (indice < 0 || indice >= celda.cartas.length) return;
@@ -287,6 +288,13 @@ class _GameScreenState extends State<GameScreen> {
     final original = celda.cartas[indice];
     if (original.ownerUid != _localPlayer.datos.uid) {
       _toast('No puedes evolucionar cartas ajenas', error: true);
+      return;
+    }
+    // Exclusión POR CARTA: solo esta carta queda bloqueada si YA se movió este
+    // turno. Mover otras cartas NO impide evolucionar esta (bug QAS #3).
+    if (_cartasQueSeMovieron.contains(original.instanceId)) {
+      _toast('Esta carta ya se movió este turno: no puede evolucionar.',
+          error: true);
       return;
     }
 
@@ -319,10 +327,12 @@ class _GameScreenState extends State<GameScreen> {
     setState(() {
       _boardState = _boardState.setCelda(coord, nuevaCelda);
       _localPlayer.puntos -= coste;
+      // Energía revertible de este turno (para deshacer / salir).
+      _energiaGastadaDespliegue += coste;
       // La carta evolucionada (esta instancia concreta) no puede moverse este
       // turno. Se rastrea por instanceId, no por plantilla.
       _cartasMovidasEsteTurno.add(nuevaCarta.instanceId);
-      _cartasEvolucionadasEsteTurno.add(evolucion.id);
+      _cartasQueEvolucionaron.add(nuevaCarta.instanceId);
     });
 
     if (widget.lobbyId != null) {
@@ -337,8 +347,9 @@ class _GameScreenState extends State<GameScreen> {
         setState(() {
           _boardState = _boardState.setCelda(coord, celda);
           _localPlayer.puntos += coste;
+          _energiaGastadaDespliegue -= coste;
           _cartasMovidasEsteTurno.remove(nuevaCarta.instanceId);
-          _cartasEvolucionadasEsteTurno.remove(evolucion.id);
+          _cartasQueEvolucionaron.remove(nuevaCarta.instanceId);
         });
         _toast('Error al evolucionar. Inténtalo de nuevo.', error: true);
         return;
@@ -415,6 +426,75 @@ class _GameScreenState extends State<GameScreen> {
           mazoRestante: _mazoRestante.map((c) => c.id).toList(),
         )
         .catchError((_) => null); // fire-and-forget
+  }
+
+  // ── Reparto de fin de turno (autoritativo del servidor, bug QAS #2) ───────
+  /// cartaId que el servidor repartió a [uid] en el último turno resuelto
+  /// (data['ultimoRepartoLog']), o null si no le tocó carta.
+  String? _cartaIdRepartidaPara(Map<String, dynamic> data, String uid) {
+    final raw = data['ultimoRepartoLog'];
+    if (raw is! List) return null;
+    for (final e in raw) {
+      if (e is Map && e['uid'] == uid) {
+        final id = e['cartaId']?.toString();
+        return (id == null || id.isEmpty) ? null : id;
+      }
+    }
+    return null;
+  }
+
+  /// True si al jugador local le repartieron carta en el último turno resuelto.
+  bool _meRepartieronCarta(Map<String, dynamic> data) =>
+      _cartaIdRepartidaPara(data, widget.localPlayerUid) != null;
+
+  /// Sincroniza mano y mazo restante desde el estado autoritativo del servidor
+  /// (statsPartida.{uid}.mano/.mazoRestante), que YA incluye la carta de fin de
+  /// turno repartida en el servidor. Sustituye al antiguo robo local: así la
+  /// carta no se pierde aunque el jugador no esté presente al resolver el turno.
+  Future<void> _sincronizarManoDesdeEstado(Map<String, dynamic> data) async {
+    final rawStats = data['statsPartida'] as Map<String, dynamic>? ?? {};
+    if (!rawStats.containsKey(widget.localPlayerUid)) return;
+    final myS =
+        Map<String, dynamic>.from(rawStats[widget.localPlayerUid] as Map);
+    final manoIds =
+        (myS['mano'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    final mazoIds =
+        (myS['mazoRestante'] as List?)?.map((e) => e.toString()).toList() ??
+            const [];
+    final mano = manoIds.isEmpty
+        ? <CartaModel>[]
+        : await _resolverCartasPorIds(manoIds, _mazoCompleto);
+    final mazo = mazoIds.isEmpty
+        ? <CartaModel>[]
+        : await _resolverCartasPorIds(mazoIds, _mazoCompleto);
+    if (!mounted) return;
+    final manoFiltrada =
+        mano.where((c) => !c.esEvolucion && !c.esEspecial).toList();
+    setState(() {
+      _hand = manoFiltrada;
+      _mazoRestante = mazo;
+      _handInicial = List.from(manoFiltrada);
+    });
+  }
+
+  /// Revierte en el SERVIDOR los gastos NO consolidados del turno en curso:
+  /// devuelve la energía revertible gastada este turno (despliegues + compras +
+  /// evoluciones) y desmarca las especiales compradas este turno. Se usa al SALIR
+  /// a mitad de turno y al pulsar DESHACER, para que no se pierdan los Zeros ni
+  /// quede el general comprado sin poder recomprarse. El tablero revierte solo
+  /// (no se persiste a mitad de turno). Fire-and-forget.
+  void _revertirGastosServidor() {
+    if (widget.lobbyId == null) return;
+    final energia = _energiaGastadaDespliegue;
+    final especiales = _especialesCompradasEsteTurno.toList();
+    if (energia <= 0 && especiales.isEmpty) return;
+    _api.deshacerTurno(
+      lobbyId: widget.lobbyId!,
+      uid: widget.localPlayerUid,
+      turno: _boardState.turnoActual,
+      energiesDelta: energia,
+      especialesQuitar: especiales,
+    );
   }
 
   // ── Cargar terreno del mapa vía API (sin Firestore) ──────
@@ -705,11 +785,11 @@ class _GameScreenState extends State<GameScreen> {
           _boardStateInicial = _boardState;
           _handInicial = List.from(manoFinal);
           _cartasMovidasEsteTurno.clear();
-          _haMovidoEsteTurno = false;
-          _cartasEvolucionadasEsteTurno.clear();
+          _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
           _cartasQueUsaronHabilidad.clear();
           _energiaGastadaDespliegue = 0;
+          _especialesCompradasEsteTurno.clear();
         });
         _turnoConfirmadoStream = lobby.turnoActual;
         // No repetir informes de turnos ya resueltos al (re)entrar: solo se
@@ -754,12 +834,12 @@ class _GameScreenState extends State<GameScreen> {
         _boardStateInicial = _boardState;
         _handInicial = List.from(manoInicial);
         _cartasMovidasEsteTurno.clear();
-        _haMovidoEsteTurno = false;
-        _cartasEvolucionadasEsteTurno.clear();
+        _cartasQueEvolucionaron.clear();
         _cartasQueSeMovieron.clear();
         _cartasQueUsaronHabilidad.clear();
         _puntosInicial = 0;
         _energiaGastadaDespliegue = 0;
+        _especialesCompradasEsteTurno.clear();
       });
     } on TimeoutException catch (_) {
       if (mounted) {
@@ -785,7 +865,8 @@ class _GameScreenState extends State<GameScreen> {
   /// Es idempotente: usa `_informeMostradoTurno` como guarda, así puede llamarse
   /// en cada snapshot sin abrir el informe dos veces. Independiente del avance
   /// del tablero, para que no se lo "coma" otra ruta que suba el turno antes.
-  void _maybeMostrarInforme(int turnoActual, Map<String, dynamic> data) {
+  Future<void> _maybeMostrarInforme(
+      int turnoActual, Map<String, dynamic> data) async {
     if (!mounted) return;
     if (turnoActual <= 1) return;
     final turnoInforme = turnoActual - 1;
@@ -828,6 +909,23 @@ class _GameScreenState extends State<GameScreen> {
     _historialCombates = historialData;
     _informeMostradoTurno = turnoInforme;
     _informeAbierto = true;
+
+    // BUG QAS #2: la carta de fin de turno la reparte el SERVIDOR y viaja en
+    // data['ultimoRepartoLog']. La resolvemos aquí para mostrarla SIEMPRE en el
+    // informe, aunque el jugador no estuviera presente cuando el turno resolvió.
+    _ultimaCartaRepartida = null;
+    final miRepartoId = _cartaIdRepartidaPara(data, widget.localPlayerUid);
+    if (miRepartoId != null) {
+      try {
+        final resueltas =
+            await _resolverCartasPorIds([miRepartoId], _mazoCompleto);
+        if (resueltas.isNotEmpty) _ultimaCartaRepartida = resueltas.first;
+      } catch (_) {}
+    }
+    if (!mounted) {
+      _informeAbierto = false;
+      return;
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
@@ -948,13 +1046,6 @@ class _GameScreenState extends State<GameScreen> {
         });
         _turnoConfirmadoStream = lobby.turnoActual;
 
-        // Robar 1 carta al azar del mazo restante (si no está eliminado)
-        final robo = _calcularRoboNuevoTurno();
-        final cartaRobada = robo.carta;
-        final nuevoMazo = robo.mazo;
-        final nuevaMano = robo.mano;
-        _ultimaCartaRepartida = cartaRobada;
-
         setState(() {
           _boardState = restoredState
               .copyWith(turnoActual: lobby.turnoActual)
@@ -966,19 +1057,18 @@ class _GameScreenState extends State<GameScreen> {
           _boardStateInicial = restoredState
               .copyWith(turnoActual: lobby.turnoActual)
               .withRayo(_rayoCoordFromData(data));
-          _hand = nuevaMano;
-          _mazoRestante = nuevoMazo;
-          _handInicial = List.from(nuevaMano);
           _cartasMovidasEsteTurno.clear();
-          _haMovidoEsteTurno = false;
-          _cartasEvolucionadasEsteTurno.clear();
+          _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
           _cartasQueUsaronHabilidad.clear();
           _energiaGastadaDespliegue = 0;
+          _especialesCompradasEsteTurno.clear();
         });
 
-        // Persistir mano + mazo tras robar la carta
-        _saveHandAndDeck();
+        // BUG QAS #2: la mano y el mazo restante ya vienen del servidor con la
+        // carta de fin de turno YA repartida (statsPartida.{uid}). El cliente ya
+        // NO roba ni persiste aquí: solo sincroniza desde el estado autoritativo.
+        _sincronizarManoDesdeEstado(data);
 
         // Actualizar puntos locales
         final rawSt = data['statsPartida'] as Map<String, dynamic>? ?? {};
@@ -995,7 +1085,7 @@ class _GameScreenState extends State<GameScreen> {
         }
         if (_modoTurno == ModoTurno.rapida) _startTimer();
 
-        if (cartaRobada != null) {
+        if (_meRepartieronCarta(data)) {
           _toast('🃏 +1 carta para el nuevo turno');
         }
 
@@ -1312,6 +1402,9 @@ class _GameScreenState extends State<GameScreen> {
         farmeoLog: _lastFarmeoLog,
         accionesLog: _lastAccionesLog,
         rayoCoord: _lastRayoCoord,
+        // BUG QAS #2: al reabrir el informe del último turno también hay que
+        // mostrar la carta repartida (antes solo la pasaba el informe en vivo).
+        ultimaCartaRepartida: _ultimaCartaRepartida,
       ),
     ))
         .whenComplete(() {
@@ -1397,6 +1490,9 @@ class _GameScreenState extends State<GameScreen> {
       _boardState = _boardState.placeCarta(cuartel, nueva);
       _localPlayer.puntos -= coste;
       _especialesCompradas.add(carta.id);
+      // Energía y especial revertibles de este turno (para deshacer / salir).
+      _energiaGastadaDespliegue += coste;
+      _especialesCompradasEsteTurno.add(carta.id);
       // Recién comprada: esta instancia no puede moverse este turno.
       _cartasMovidasEsteTurno.add(nueva.instanceId);
     });
@@ -1417,6 +1513,8 @@ class _GameScreenState extends State<GameScreen> {
           setState(() {
             _localPlayer.puntos += coste;
             _especialesCompradas.remove(carta.id);
+            _energiaGastadaDespliegue -= coste;
+            _especialesCompradasEsteTurno.remove(carta.id);
             _cartasMovidasEsteTurno.remove(nueva.instanceId);
             final celda = _boardState.getCelda(cuartel);
             final idx = celda.cartas
@@ -1445,16 +1543,15 @@ class _GameScreenState extends State<GameScreen> {
       _toast('Ya has cerrado el turno. Espera al siguiente.', error: true);
       return;
     }
-    if (_haEvolucionadoEsteTurno) {
-      _toast('Este turno ya has evolucionado: no puedes mover.', error: true);
-      return;
-    }
     final celda = _boardState.getCelda(_sidebarCoord!);
+    // Exclusión POR CARTA: se descartan solo las cartas que evolucionaron este
+    // turno; el resto puede moverse aunque otra haya evolucionado (bug QAS #3).
     final validIndices = indices
         .where((i) =>
             i < celda.cartas.length &&
             celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
             !_cartasMovidasEsteTurno.contains(celda.cartas[i].instanceId) &&
+            !_cartasQueEvolucionaron.contains(celda.cartas[i].instanceId) &&
             !_cartasQueUsaronHabilidad.contains(celda.cartas[i].instanceId) &&
             !celda.cartas[i].carta.esEstatica &&
             !celda.cartas[i].paralizado)
@@ -1467,6 +1564,18 @@ class _GameScreenState extends State<GameScreen> {
           _cartasQueUsaronHabilidad.contains(celda.cartas[i].instanceId));
       if (algunaUsoHabilidad) {
         _toast('Esa carta usó habilidad este turno: no puede moverse.',
+            error: true);
+        return;
+      }
+    }
+
+    if (validIndices.isEmpty) {
+      final algunaEvoluciono = indices.any((i) =>
+          i < celda.cartas.length &&
+          celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
+          _cartasQueEvolucionaron.contains(celda.cartas[i].instanceId));
+      if (algunaEvoluciono) {
+        _toast('Esa carta evolucionó este turno: no puede moverse.',
             error: true);
         return;
       }
@@ -1546,7 +1655,6 @@ class _GameScreenState extends State<GameScreen> {
         _cartasMovidasEsteTurno.add(c.instanceId);
         _cartasQueSeMovieron.add(c.instanceId);
       }
-      _haMovidoEsteTurno = true;
       _boardState = st;
       _moveFromCoord = null;
       _moveCardIndices = [];
@@ -1858,17 +1966,19 @@ class _GameScreenState extends State<GameScreen> {
   }
 
   void _undoCambios() {
-    // Energía persistida en el servidor este turno (despliegues). El stream
-    // trae el valor ya reducido, así que hay que devolverla explícitamente o
-    // las energías se quedarían gastadas tras deshacer.
+    // Gastos revertibles persistidos en el servidor este turno (despliegues +
+    // compras + evoluciones) y especiales compradas este turno. El estado del
+    // servidor trae la energía ya reducida y las especiales marcadas, así que
+    // hay que devolver la energía y desmarcarlas explícitamente o se quedarían
+    // gastadas / bloqueadas tras deshacer (bug QAS #2).
     final energiaADevolver = _energiaGastadaDespliegue;
+    final especialesADesmarcar = _especialesCompradasEsteTurno.toList();
 
     setState(() {
       _boardState = _boardStateInicial;
       _hand = List.from(_handInicial);
       _cartasMovidasEsteTurno.clear();
-      _haMovidoEsteTurno = false;
-      _cartasEvolucionadasEsteTurno.clear();
+      _cartasQueEvolucionaron.clear();
       _cartasQueSeMovieron.clear();
       _cartasQueUsaronHabilidad.clear();
       _moveFromCoord = null;
@@ -1884,17 +1994,23 @@ class _GameScreenState extends State<GameScreen> {
       // coste de acciones, que no se persiste hasta cerrar el turno).
       _localPlayer.puntos = _puntosInicial;
       _energiaGastadaDespliegue = 0;
+      // Desmarcar localmente las especiales compradas este turno (para poder
+      // recomprarlas) y limpiar el rastreo del turno.
+      _especialesCompradas.removeAll(especialesADesmarcar);
+      _especialesCompradasEsteTurno.clear();
     });
 
-    // Revertir en el servidor el gasto de despliegues persistido este turno.
-    if (widget.lobbyId != null && energiaADevolver > 0) {
-      _api
-          .actualizarStats(
-            lobbyId: widget.lobbyId!,
-            uid: widget.localPlayerUid,
-            energiesDelta: energiaADevolver,
-          )
-          .catchError((_) => null);
+    // Revertir en el servidor: devolver la energía revertible y desmarcar las
+    // especiales compradas este turno.
+    if (widget.lobbyId != null &&
+        (energiaADevolver > 0 || especialesADesmarcar.isNotEmpty)) {
+      _api.deshacerTurno(
+        lobbyId: widget.lobbyId!,
+        uid: widget.localPlayerUid,
+        turno: _boardState.turnoActual,
+        energiesDelta: energiaADevolver,
+        especialesQuitar: especialesADesmarcar,
+      );
     }
 
     _toast('Cambios revertidos al estado inicial del turno.');
@@ -2024,6 +2140,20 @@ class _GameScreenState extends State<GameScreen> {
 
     if (widget.lobbyId != null) {
       final turnService = TurnService();
+      // BUG QAS #2: persistir la mano y el mazo ANTES de cerrar (bloqueante),
+      // para que el servidor reparta la carta de fin de turno sobre la mano
+      // correcta (ya sin las cartas desplegadas este turno). Ya NO se persiste
+      // DESPUÉS de cerrar, porque machacaría la carta que el servidor repartió.
+      try {
+        await _api
+            .actualizarStats(
+              lobbyId: widget.lobbyId!,
+              uid: widget.localPlayerUid,
+              mano: _hand.map((c) => c.id).toList(),
+              mazoRestante: _mazoRestante.map((c) => c.id).toList(),
+            )
+            .timeout(const Duration(seconds: 15));
+      } catch (_) {/* el cierre puede continuar; el servidor usa lo último */}
       try {
         await turnService
             .cerrarTurno(
@@ -2061,8 +2191,10 @@ class _GameScreenState extends State<GameScreen> {
         }
       }
       if (!mounted) return;
-      // Persistir mano + mazo al cerrar turno
-      _saveHandAndDeck();
+      // BUG QAS #2: NO se vuelve a persistir la mano aquí. El servidor ya
+      // repartió la carta de fin de turno sobre la mano que subimos ANTES de
+      // cerrar; reescribirla ahora la machacaría. La mano se resincroniza desde
+      // el estado autoritativo en _sincronizarManoDesdeEstado.
 
       // Si el servidor resolvió el turno con ESTA llamada (yo era el último en
       // cerrar), no dependemos del stream: forzamos un refresco autoritativo
@@ -2190,6 +2322,11 @@ class _GameScreenState extends State<GameScreen> {
       ),
     );
     if (confirm == true && mounted) {
+      // BUG QAS #2: al salir a mitad de turno se DESHACEN los gastos no
+      // consolidados (se devuelven los Zeros de despliegues/compras/evoluciones
+      // y se desmarcan las especiales compradas este turno). El tablero revierte
+      // solo al reentrar porque no se persiste a mitad de turno.
+      _revertirGastosServidor();
       _pollTimer?.cancel();
       Navigator.of(context).pop();
     }
@@ -2249,10 +2386,6 @@ class _GameScreenState extends State<GameScreen> {
         restored = restored.copyWith(efectosCelda: efectos);
         _turnoConfirmadoStream = turnoActual;
 
-        // Robar 1 carta al azar para el nuevo turno.
-        final robo = _calcularRoboNuevoTurno();
-        _ultimaCartaRepartida = robo.carta;
-
         setState(() {
           _boardState = restored
               .copyWith(turnoActual: turnoActual)
@@ -2263,12 +2396,8 @@ class _GameScreenState extends State<GameScreen> {
           _boardStateInicial = restored
               .copyWith(turnoActual: turnoActual)
               .withRayo(_rayoCoordFromData(estado));
-          _hand = robo.mano;
-          _mazoRestante = robo.mazo;
-          _handInicial = List.from(robo.mano);
           _cartasMovidasEsteTurno.clear();
-          _haMovidoEsteTurno = false;
-          _cartasEvolucionadasEsteTurno.clear();
+          _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
           _cartasQueUsaronHabilidad.clear();
           // Las acciones (veneno, disparo, teletransporte…) pertenecían al
@@ -2279,10 +2408,11 @@ class _GameScreenState extends State<GameScreen> {
           _accionController.cancelar();
           _fantasmasAccion.clear();
           _energiaGastadaDespliegue = 0;
+          _especialesCompradasEsteTurno.clear();
         });
 
-        // Persistir mano + mazo tras robar.
-        if (robo.carta != null) _saveHandAndDeck();
+        // BUG QAS #2: mano/mazo llegan del servidor con la carta ya repartida.
+        _sincronizarManoDesdeEstado(estado);
 
         // Refrescar energías del nuevo turno desde el estado.
         final rawSt = estado['statsPartida'] as Map<String, dynamic>? ?? {};
@@ -2299,12 +2429,12 @@ class _GameScreenState extends State<GameScreen> {
         }
 
         if (_modoTurno == ModoTurno.rapida) _startTimer();
-        if (robo.carta != null) {
+        if (_meRepartieronCarta(estado)) {
           _toast('🃏 +1 carta para el nuevo turno');
         }
 
         debugPrint('[WZ][estado] tablero aplicado, turno=$turnoActual '
-            'robo=${robo.carta?.nombre ?? 'sin carta'}');
+            'reparto=${_meRepartieronCarta(estado) ? 'sí' : 'no'}');
         return true;
       }
     } catch (e, st) {
