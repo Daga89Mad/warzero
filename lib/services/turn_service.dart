@@ -216,7 +216,7 @@ class TurnService {
   // ── Cierre diario ─────────────────────────────────────────
   static DateTime proximoCierreUTC() {
     final now = DateTime.now().toUtc();
-    var target = DateTime.utc(now.year, now.month, now.day, 12);
+    var target = DateTime.utc(now.year, now.month, now.day, 0); // 00:00 UTC
     if (now.isAfter(target)) target = target.add(const Duration(days: 1));
     return target;
   }

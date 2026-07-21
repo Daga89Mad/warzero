@@ -730,6 +730,11 @@ class _EditorMapaState extends State<_EditorMapa> {
       'continentes': {
         for (final c in _continentes) c.obelisco: (c.celdas.toList()..sort()),
       },
+      // Lista explícita de obeliscos/cuarteles del mapa (coinciden con las claves
+      // de `continentes`). El servidor la usa para asignar los cuarteles; si no
+      // existe, cae a las claves de continentes y, en último caso, a las esquinas
+      // por defecto.
+      'obeliscos': obeliscos..sort(),
     };
 
     try {

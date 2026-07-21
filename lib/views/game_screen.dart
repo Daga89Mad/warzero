@@ -54,12 +54,30 @@ class _GameScreenState extends State<GameScreen> {
   String? _obeliscoLocal;
   String? _obeliscoOponente;
 
-  /// Lee la coord del rayo de farmeo del doc/estado de la partida.
-  String? _rayoCoordFromData(Map<String, dynamic> data) {
+  /// Lee las coords de los rayos de farmeo del doc/estado. Soporta el formato
+  /// nuevo (`rayos`: lista de {coord,...} o `rayoCoords`: lista de coords) y el
+  /// antiguo (`rayo`: {coord} único / `rayoCoord`: coord única).
+  Set<String> _rayoCoordsFromData(Map<String, dynamic> data) {
+    final out = <String>{};
+    final rayos = data['rayos'];
+    if (rayos is List) {
+      for (final r in rayos) {
+        if (r is Map && r['coord'] is String) out.add(r['coord'] as String);
+        if (r is String) out.add(r);
+      }
+    }
+    final rcs = data['rayoCoords'];
+    if (rcs is List) {
+      for (final c in rcs) {
+        if (c is String) out.add(c);
+      }
+    }
+    // Retrocompatibilidad con el formato antiguo de rayo único.
     final r = data['rayo'];
-    if (r is Map && r['coord'] is String) return r['coord'] as String;
+    if (r is Map && r['coord'] is String) out.add(r['coord'] as String);
     final rc = data['rayoCoord'];
-    return rc is String ? rc : null;
+    if (rc is String) out.add(rc);
+    return out;
   }
 
   /// uid → color del obelisco asignado (se carga desde Firestore)
@@ -94,7 +112,10 @@ class _GameScreenState extends State<GameScreen> {
   List<Map<String, dynamic>> _lastMovimientosLog = [];
   List<Map<String, dynamic>> _lastFarmeoLog = []; // ← nuevo
   List<Map<String, dynamic>> _lastAccionesLog = []; // ← nuevo (disparos, etc.)
-  String? _lastRayoCoord; // ← nuevo
+  Set<String> _lastRayoCoords = {}; // coords de rayos del último informe
+  /// Fecha límite de resolución obligatoria (epoch millis UTC, 00:00) que envía
+  /// el servidor en `fechaResolucion`. Null si aún no se conoce.
+  int? _fechaResolucionMs;
   LobbyModel? _currentLobby;
   List<Map<String, dynamic>> _historialCombates = [];
 
@@ -685,7 +706,7 @@ class _GameScreenState extends State<GameScreen> {
           _lastMovimientosLog = loadedMovLog;
           _lastFarmeoLog = loadedFarmeoLog; // ← nuevo
           _lastAccionesLog = loadedAccionesLog; // ← nuevo
-          _lastRayoCoord = _rayoCoordFromData(data); // ← nuevo
+          _lastRayoCoords = _rayoCoordsFromData(data); // ← nuevo
           _historialCombates = loadedHistorial;
           _localPlayer.puntos = puntosRestaurados;
           _playerColors = colors;
@@ -719,7 +740,7 @@ class _GameScreenState extends State<GameScreen> {
           setState(() {
             _boardState = restoredBoard
                 .copyWith(turnoActual: lobby!.turnoActual)
-                .withRayo(_rayoCoordFromData(data));
+                .withRayos(_rayoCoordsFromData(data));
           });
         }
 
@@ -792,9 +813,11 @@ class _GameScreenState extends State<GameScreen> {
           _especialesCompradasEsteTurno.clear();
         });
         _turnoConfirmadoStream = lobby.turnoActual;
-        // No repetir informes de turnos ya resueltos al (re)entrar: solo se
-        // mostrará el informe de la PRÓXIMA resolución en adelante.
-        _informeMostradoTurno = lobby.turnoActual - 1;
+        _fechaResolucionMs = (data['fechaResolucion'] as num?)?.toInt();
+        // Al (re)entrar se muestra el informe del ÚLTIMO turno resuelto
+        // (turnoActual - 1) una vez; los anteriores ya no se repiten. Por eso la
+        // guarda se deja en turnoActual - 2 y se llama a _maybeMostrarInforme.
+        _informeMostradoTurno = lobby.turnoActual - 2;
         _cargaCompletada = true;
 
         if (lobby.modoTurno == ModoTurno.rapida && lobby.cerradoPor.isEmpty) {
@@ -803,6 +826,11 @@ class _GameScreenState extends State<GameScreen> {
         _iniciarPolling();
         // El obelisco lo asigna el servidor en POST /warzero/entrar; los datos
         // ya vienen en `data['obeliscos']` y se aplicaron arriba.
+
+        // Abrir por defecto el informe del último turno resuelto al reentrar
+        // (resuelve además _ultimaCartaRepartida desde ultimoRepartoLog, para que
+        // la carta de fin de turno aparezca aunque no estuviéramos presentes).
+        _maybeMostrarInforme(lobby.turnoActual, data);
 
         // La resolución del turno la hace el servidor; el stream avanza solo.
         // (Antes aquí se disparaba la resolución en cliente.)
@@ -898,14 +926,14 @@ class _GameScreenState extends State<GameScreen> {
     final movLog = parseLista(data['ultimosMovimientos']);
     final farmeoLog = parseLista(data['ultimoFarmeoLog']); // ← nuevo
     final accionesLog = parseLista(data['ultimoAccionesLog']); // ← nuevo
-    final rayoCoord = _rayoCoordFromData(data); // ← nuevo
+    final rayoCoords = _rayoCoordsFromData(data); // ← nuevo
     final historialData = parseLista(data['historialCombates']);
 
     _lastCombateLog = combateLog;
     _lastMovimientosLog = movLog;
     _lastFarmeoLog = farmeoLog; // ← nuevo
     _lastAccionesLog = accionesLog; // ← nuevo
-    _lastRayoCoord = rayoCoord; // ← nuevo
+    _lastRayoCoords = rayoCoords; // ← nuevo
     _historialCombates = historialData;
     _informeMostradoTurno = turnoInforme;
     _informeAbierto = true;
@@ -943,7 +971,7 @@ class _GameScreenState extends State<GameScreen> {
           turno: turnoInforme,
           farmeoLog: farmeoLog, // ← nuevo
           accionesLog: accionesLog, // ← nuevo
-          rayoCoord: rayoCoord, // ← nuevo
+          rayoCoords: rayoCoords.toList(),
           ultimaCartaRepartida: _ultimaCartaRepartida,
         ),
       ))
@@ -960,6 +988,8 @@ class _GameScreenState extends State<GameScreen> {
   /// del realtime de Firestore que causaba cuelgues en Android.
   void _procesarEstado(Map<String, dynamic> data, LobbyModel lobby) {
     if (!mounted) return;
+
+    _fechaResolucionMs = (data['fechaResolucion'] as num?)?.toInt();
 
     debugPrint('[WZ][poll] turnoActual=${lobby.turnoActual} '
         'turnoConfirmado=$_turnoConfirmadoStream '
@@ -1049,14 +1079,14 @@ class _GameScreenState extends State<GameScreen> {
         setState(() {
           _boardState = restoredState
               .copyWith(turnoActual: lobby.turnoActual)
-              .withRayo(_rayoCoordFromData(data));
+              .withRayos(_rayoCoordsFromData(data));
           _cerradoPor = [];
           _resolviendo = false;
           _isSendingTurn = false;
           _cargaCompletada = true;
           _boardStateInicial = restoredState
               .copyWith(turnoActual: lobby.turnoActual)
-              .withRayo(_rayoCoordFromData(data));
+              .withRayos(_rayoCoordsFromData(data));
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
@@ -1401,7 +1431,7 @@ class _GameScreenState extends State<GameScreen> {
         turno: _boardState.turnoActual - 1,
         farmeoLog: _lastFarmeoLog,
         accionesLog: _lastAccionesLog,
-        rayoCoord: _lastRayoCoord,
+        rayoCoords: _lastRayoCoords.toList(),
         // BUG QAS #2: al reabrir el informe del último turno también hay que
         // mostrar la carta repartida (antes solo la pasaba el informe en vivo).
         ultimaCartaRepartida: _ultimaCartaRepartida,
@@ -2102,16 +2132,24 @@ class _GameScreenState extends State<GameScreen> {
         return <String, dynamic>{
           'id': carta.id,
           'Nombre': carta.nombre,
+          'Descripcion': carta.descripcion,
           'Ejercito': carta.ejercito,
           'Fuerza': carta.fuerza,
           'Defensa': carta.defensa,
           'Coste': carta.coste,
           'IdHabilidad': carta.idHabilidad,
+          'CosteHabilidad': carta.costeHabilidad,
+          'EnfriamientoHabilidad': carta.enfriamientoHabilidad,
+          // Imagen (skin resuelto): sin ella la carta en el tablero se queda sin
+          // imagen al recomponer el tablero desde el servidor (bug del menú
+          // lateral). El combate del servidor conserva los campos tal cual.
+          'Imagen': carta.imagen,
           'Movimiento': carta.movimiento,
           'Tipo': carta.tipo,
           'IdEvolucion': carta.idEvolucion,
           'Evolucion': carta.evolucion,
           'Condicion': carta.condicion.value,
+          'PorDefecto': carta.porDefecto,
           'ownerUid': c.ownerUid,
           'ownerZone': c.ownerZone,
           // Conservar los efectos persistentes (veneno, parálisis…) y el
@@ -2353,6 +2391,7 @@ class _GameScreenState extends State<GameScreen> {
   /// doc de Firestore. Devuelve true si avanzó el turno.
   bool _aplicarEstado(Map<String, dynamic> estado) {
     if (!mounted) return false;
+    _fechaResolucionMs = (estado['fechaResolucion'] as num?)?.toInt();
     final turnoActual = (estado['turnoActual'] as num?)?.toInt() ?? 0;
     final cerradoPor = ((estado['cerradoPor'] as List?) ?? [])
         .map((e) => e.toString())
@@ -2389,13 +2428,13 @@ class _GameScreenState extends State<GameScreen> {
         setState(() {
           _boardState = restored
               .copyWith(turnoActual: turnoActual)
-              .withRayo(_rayoCoordFromData(estado));
+              .withRayos(_rayoCoordsFromData(estado));
           _cerradoPor = [];
           _isSendingTurn = false;
           _cargaCompletada = true;
           _boardStateInicial = restored
               .copyWith(turnoActual: turnoActual)
-              .withRayo(_rayoCoordFromData(estado));
+              .withRayos(_rayoCoordsFromData(estado));
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
@@ -2774,6 +2813,7 @@ class _GameScreenState extends State<GameScreen> {
                     modoTurno: _modoTurno,
                     cerradoPor: _cerradoPor.length,
                     totalJugadores: _jugadoresActivos,
+                    fechaResolucionMs: _fechaResolucionMs,
                     onRefresh: () => _checkRefresh(),
                   ),
                 // Banner eliminado (modo observador)
@@ -2913,12 +2953,14 @@ class _TurnWaitBanner extends StatefulWidget {
   final ModoTurno modoTurno;
   final int cerradoPor;
   final int totalJugadores;
+  final int? fechaResolucionMs;
   final Future<void> Function()? onRefresh;
 
   const _TurnWaitBanner({
     required this.modoTurno,
     required this.cerradoPor,
     required this.totalJugadores,
+    this.fechaResolucionMs,
     this.onRefresh,
   });
 
@@ -2941,11 +2983,20 @@ class _TurnWaitBannerState extends State<_TurnWaitBanner> {
     final pending = widget.totalJugadores - widget.cerradoPor;
     final String msg;
     if (widget.modoTurno == ModoTurno.diario) {
-      final cierre = TurnService.proximoCierreUTC();
+      // Cierre real = fechaResolucion del servidor (00:00 UTC). Fallback al
+      // cálculo local sólo si aún no llegó del servidor.
+      final cierre = widget.fechaResolucionMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(widget.fechaResolucionMs!,
+              isUtc: true)
+          : TurnService.proximoCierreUTC();
       final diff = cierre.difference(DateTime.now().toUtc());
-      final h = diff.inHours;
-      final m = diff.inMinutes % 60;
-      msg = 'Esperando. Cierre: ${h}h ${m}m (12:00 UTC)';
+      if (diff.isNegative) {
+        msg = 'Cierre vencido (00:00 UTC). Resolviendo…';
+      } else {
+        final h = diff.inHours;
+        final m = diff.inMinutes % 60;
+        msg = 'Esperando. Cierre en ${h}h ${m}m (00:00 UTC)';
+      }
     } else {
       final suf = pending == 1 ? '' : 'es';
       msg = '$pending jugador$suf sin cerrar.';

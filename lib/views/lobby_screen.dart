@@ -1521,7 +1521,7 @@ class _ModoTurnoSelector extends StatelessWidget {
           isSelected: selected == ModoTurno.diario,
           onTap: () => onChanged(ModoTurno.diario),
           info: selected == ModoTurno.diario
-              ? 'Los turnos se resolverán a las 12:00 UTC. '
+              ? 'Los turnos se resolverán a las 00:00 UTC. '
                   'Si todos los miembros han finalizado el turno en el mismo '
                   'día se podrá jugar otro turno. '
                   'Hora UTC actual: ${_horaUTC()}'

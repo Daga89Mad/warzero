@@ -221,16 +221,16 @@ class BoardState {
   final String? ownerTurno;
   final Map<String, List<EfectoActivo>> efectosCelda;
 
-  /// Coordenada de la celda del RAYO de farmeo (la que aparece de forma
-  /// aleatoria y otorga +10 Zero). Null si no hay rayo activo.
-  final String? rayoCoord;
+  /// Coordenadas de las celdas de RAYO de farmeo (aparecen aleatoriamente y
+  /// otorgan +10 Zero). Puede haber VARIAS simultáneas según el nº de jugadores.
+  final Set<String> rayoCoords;
 
   const BoardState({
     this.celdas = const {},
     this.turnoActual = 1,
     this.ownerTurno,
     this.efectosCelda = const {},
-    this.rayoCoord,
+    this.rayoCoords = const {},
   });
 
   CeldaState getCelda(String coord) =>
@@ -319,8 +319,8 @@ class BoardState {
         e.origenUid != localUid);
   }
 
-  /// True si [coord] es la celda del rayo activo.
-  bool esRayo(String coord) => rayoCoord != null && coord == rayoCoord;
+  /// True si [coord] es una de las celdas de rayo activas.
+  bool esRayo(String coord) => rayoCoords.contains(coord);
 
   BoardState setEfectosCelda(String coord, List<EfectoActivo> efectos) {
     final nuevos = Map<String, List<EfectoActivo>>.from(efectosCelda);
@@ -339,7 +339,7 @@ class BoardState {
       turnoActual: turnoActual,
       ownerTurno: ownerTurno,
       efectosCelda: efectosCelda,
-      rayoCoord: rayoCoord,
+      rayoCoords: rayoCoords,
     );
   }
 
@@ -348,7 +348,7 @@ class BoardState {
         turnoActual: turnoActual,
         ownerTurno: ownerTurno,
         efectosCelda: efectosCelda,
-        rayoCoord: rayoCoord,
+        rayoCoords: rayoCoords,
       );
 
   int puntosJugador(String ownerZone) => celdas.values
@@ -361,24 +361,24 @@ class BoardState {
     int? turnoActual,
     String? ownerTurno,
     Map<String, List<EfectoActivo>>? efectosCelda,
-    String? rayoCoord,
+    Set<String>? rayoCoords,
   }) =>
       BoardState(
         celdas: celdas ?? this.celdas,
         turnoActual: turnoActual ?? this.turnoActual,
         ownerTurno: ownerTurno ?? this.ownerTurno,
         efectosCelda: efectosCelda ?? this.efectosCelda,
-        rayoCoord: rayoCoord ?? this.rayoCoord,
+        rayoCoords: rayoCoords ?? this.rayoCoords,
       );
 
-  /// Fija (o limpia, pasando null) la celda del rayo de forma explícita.
-  /// `copyWith` no puede poner rayoCoord a null, por eso existe este método.
-  BoardState withRayo(String? coord) => BoardState(
+  /// Fija (o limpia, pasando {}) las celdas de rayo de forma explícita.
+  /// `copyWith` no puede distinguir "no tocar" de "vaciar", por eso existe este.
+  BoardState withRayos(Set<String> coords) => BoardState(
         celdas: celdas,
         turnoActual: turnoActual,
         ownerTurno: ownerTurno,
         efectosCelda: efectosCelda,
-        rayoCoord: coord,
+        rayoCoords: coords,
       );
 
   BoardState nextTurn(String nextOwner) => BoardState(
@@ -386,7 +386,7 @@ class BoardState {
         turnoActual: turnoActual + 1,
         ownerTurno: nextOwner,
         efectosCelda: efectosCelda,
-        rayoCoord: rayoCoord,
+        rayoCoords: rayoCoords,
       );
 
   static Map<String, dynamic> efectosCeldaToFirestore(

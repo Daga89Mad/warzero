@@ -196,7 +196,7 @@ class ResolucionCombates {
 
 class CombateService {
   /// Defensa base del cuartel general (obelisco).
-  static const int defensaObelisco = 80;
+  static const int defensaObelisco = 40;
 
   /// Bonificación de Zero por conquistar un cuartel.
   static const int energiesConquista = 100;

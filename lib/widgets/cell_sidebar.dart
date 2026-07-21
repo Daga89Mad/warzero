@@ -49,7 +49,7 @@ class CellSidebar extends StatefulWidget {
       onLanzarHabilidad;
 
   /// Defensa base de cualquier cuartel general.
-  static const int defensaBase = 80;
+  static const int defensaBase = 40;
 
   const CellSidebar({
     super.key,
@@ -621,7 +621,7 @@ class _Body extends StatelessWidget {
                       letterSpacing: 1.5)),
               const SizedBox(height: 4),
               const Text(
-                'El cuartel resiste con\ndefensa propia (80).',
+                'El cuartel resiste con\ndefensa propia (40).',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 7,
