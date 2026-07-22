@@ -55,6 +55,9 @@ class BoardWidget extends StatefulWidget {
   final Set<String> movableCoords;
   final String? obeliscoLocal;
 
+  /// Coordenadas de TODOS los obeliscos (de cualquier jugador), del servidor.
+  final Set<String> obeliscoCoords;
+
   /// uid → color del obelisco para colorear cartas
   final Map<String, Color> playerColors;
 
@@ -88,6 +91,7 @@ class BoardWidget extends StatefulWidget {
     required this.highlightEmpty,
     this.movableCoords = const {},
     this.obeliscoLocal,
+    this.obeliscoCoords = const {},
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
@@ -245,6 +249,7 @@ class _BoardWidgetState extends State<BoardWidget>
                     highlightEmpty: widget.highlightEmpty,
                     movableCoords: widget.movableCoords,
                     obeliscoLocal: widget.obeliscoLocal,
+                    obeliscoCoords: widget.obeliscoCoords,
                     playerColors: widget.playerColors,
                     localPlayerUid: widget.localPlayerUid,
                     imagenMapa: widget.imagenMapa,
@@ -379,6 +384,7 @@ class _PerspectiveBoard extends StatelessWidget {
   final bool highlightEmpty;
   final Set<String> movableCoords;
   final String? obeliscoLocal;
+  final Set<String> obeliscoCoords;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
   final String? imagenMapa;
@@ -392,6 +398,7 @@ class _PerspectiveBoard extends StatelessWidget {
     required this.highlightEmpty,
     this.movableCoords = const {},
     this.obeliscoLocal,
+    this.obeliscoCoords = const {},
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
@@ -774,6 +781,7 @@ class _GridContent extends StatelessWidget {
   final bool highlightEmpty;
   final Set<String> movableCoords;
   final String? obeliscoLocal;
+  final Set<String> obeliscoCoords;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
   final String? imagenMapa;
@@ -787,6 +795,7 @@ class _GridContent extends StatelessWidget {
     required this.highlightEmpty,
     this.movableCoords = const {},
     this.obeliscoLocal,
+    this.obeliscoCoords = const {},
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
@@ -818,6 +827,8 @@ class _GridContent extends StatelessWidget {
                     isHighlighted: highlightEmpty && coord == obeliscoLocal,
                     isMovable: movableCoords.contains(coord),
                     isObelisco: coord == obeliscoLocal,
+                    obeliscoCoords: obeliscoCoords,
+                    isConquistado: boardState.esCuartelDestruido(coord),
                     isRayo: boardState.esRayo(coord), // ← nuevo
                     isEnvenenada: boardState.celdaTieneVeneno(coord),
                     isParalizada: boardState.celdaTieneParalisis(coord),

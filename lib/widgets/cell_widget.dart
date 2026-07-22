@@ -61,6 +61,10 @@ class CellWidget extends StatelessWidget {
   final bool isHighlighted;
   final bool isMovable;
   final bool isObelisco;
+
+  /// True si esta celda es un cuartel destruido (conquistado): se pinta como
+  /// ruina y deja de comportarse como obelisco.
+  final bool isConquistado;
   final bool isRayo;
 
   /// True si la celda tiene un veneno activo (se marca con calavera ☠).
@@ -92,6 +96,12 @@ class CellWidget extends StatelessWidget {
   /// visual (solo lo ve quien las lanzó): no participa en el combate ni
   /// existe en `celda`, así que no afecta a `_CardStack`.
   final List<CartaModel> fantasmas;
+
+  /// Coordenadas de TODOS los obeliscos/cuarteles (de cualquier jugador), tal
+  /// cual las asigna el servidor. Marca despliegues y obeliscos enemigos en sus
+  /// posiciones REALES para cualquier nº de jugadores. Vacío → fallback a
+  /// [kObeliscoCoords] (p. ej. durante la carga inicial).
+  final Set<String> obeliscoCoords;
   final VoidCallback onTap;
 
   const CellWidget({
@@ -104,6 +114,7 @@ class CellWidget extends StatelessWidget {
     required this.isHighlighted,
     this.isMovable = false,
     this.isObelisco = false,
+    this.isConquistado = false,
     this.isRayo = false,
     this.isEnvenenada = false,
     this.isParalizada = false,
@@ -111,6 +122,7 @@ class CellWidget extends StatelessWidget {
     this.venenosCelda = const [],
     this.escudosCelda = const [],
     this.playerColors = const {},
+    this.obeliscoCoords = const {},
     this.localPlayerUid,
     this.fantasmas = const [],
     required this.onTap,
@@ -124,7 +136,9 @@ class CellWidget extends StatelessWidget {
     final coord = config.coordLabel(ri, ci);
     final overlay = terrainAt(coord);
     final painter = terrainPainter(overlay);
-    final isSpawn = kSpawnCoords.contains(coord);
+    final obeliscosEfectivos =
+        obeliscoCoords.isNotEmpty ? obeliscoCoords : kObeliscoCoords;
+    final isSpawn = obeliscosEfectivos.contains(coord);
 
     // Todas las celdas usan la misma decoración — el terreno se indica solo con el badge.
     final cellDeco = _cellDecoration(isDark);
@@ -234,13 +248,22 @@ class CellWidget extends StatelessWidget {
             if (isEscudada)
               const Positioned(right: 3, bottom: 3, child: _EscudoBadge()),
 
-            if (isSpawn && celda.isEmpty) SpawnMarker(coord: coord),
+            if (isSpawn && celda.isEmpty && !isConquistado)
+              SpawnMarker(coord: coord),
+            if (isConquistado)
+              const Positioned(
+                left: 0,
+                right: 0,
+                top: 2,
+                child: IgnorePointer(child: _RuinaBadge()),
+              ),
             if (!celda.isEmpty)
               Center(
                 child: _CardStack(
                   celda: celda,
-                  isEnemyObelisco:
-                      kObeliscoCoords.contains(coord) && !isObelisco,
+                  isEnemyObelisco: obeliscosEfectivos.contains(coord) &&
+                      !isObelisco &&
+                      !isConquistado,
                   playerColors: playerColors,
                   venenosCelda: venenosCelda,
                   escudosCelda: escudosCelda,
@@ -1306,4 +1329,26 @@ class _PortalCrystalPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_PortalCrystalPainter old) => old.color != color;
+}
+
+/// Marcador de cuartel destruido (conquistado): ruina sobre la esquina.
+class _RuinaBadge extends StatelessWidget {
+  const _RuinaBadge();
+  @override
+  Widget build(BuildContext context) => Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(
+            color: const Color(0xCC1A0808),
+            borderRadius: BorderRadius.circular(3),
+            border: Border.all(color: const Color(0x88C04040), width: 0.5),
+          ),
+          child: const Text('🏚 RUINA',
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 7,
+                  letterSpacing: 0.5,
+                  color: Color(0xFFC87070))),
+        ),
+      );
 }

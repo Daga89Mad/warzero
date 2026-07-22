@@ -225,12 +225,17 @@ class BoardState {
   /// otorgan +10 Zero). Puede haber VARIAS simultáneas según el nº de jugadores.
   final Set<String> rayoCoords;
 
+  /// Coordenadas de cuarteles DESTRUIDOS (conquistados). Se pintan como ruina
+  /// y dejan de comportarse como obelisco (permiten mover dentro/fuera).
+  final Set<String> cuartelesDestruidos;
+
   const BoardState({
     this.celdas = const {},
     this.turnoActual = 1,
     this.ownerTurno,
     this.efectosCelda = const {},
     this.rayoCoords = const {},
+    this.cuartelesDestruidos = const {},
   });
 
   CeldaState getCelda(String coord) =>
@@ -322,6 +327,19 @@ class BoardState {
   /// True si [coord] es una de las celdas de rayo activas.
   bool esRayo(String coord) => rayoCoords.contains(coord);
 
+  /// True si [coord] es un cuartel destruido (conquistado).
+  bool esCuartelDestruido(String coord) => cuartelesDestruidos.contains(coord);
+
+  /// Fija (o limpia, pasando {}) las ruinas de cuartel de forma explícita.
+  BoardState withCuarteles(Set<String> coords) => BoardState(
+        celdas: celdas,
+        turnoActual: turnoActual,
+        ownerTurno: ownerTurno,
+        efectosCelda: efectosCelda,
+        rayoCoords: rayoCoords,
+        cuartelesDestruidos: coords,
+      );
+
   BoardState setEfectosCelda(String coord, List<EfectoActivo> efectos) {
     final nuevos = Map<String, List<EfectoActivo>>.from(efectosCelda);
     if (efectos.isEmpty) {
@@ -340,6 +358,7 @@ class BoardState {
       ownerTurno: ownerTurno,
       efectosCelda: efectosCelda,
       rayoCoords: rayoCoords,
+      cuartelesDestruidos: cuartelesDestruidos,
     );
   }
 
@@ -349,6 +368,7 @@ class BoardState {
         ownerTurno: ownerTurno,
         efectosCelda: efectosCelda,
         rayoCoords: rayoCoords,
+        cuartelesDestruidos: cuartelesDestruidos,
       );
 
   int puntosJugador(String ownerZone) => celdas.values
@@ -362,6 +382,7 @@ class BoardState {
     String? ownerTurno,
     Map<String, List<EfectoActivo>>? efectosCelda,
     Set<String>? rayoCoords,
+    Set<String>? cuartelesDestruidos,
   }) =>
       BoardState(
         celdas: celdas ?? this.celdas,
@@ -369,6 +390,7 @@ class BoardState {
         ownerTurno: ownerTurno ?? this.ownerTurno,
         efectosCelda: efectosCelda ?? this.efectosCelda,
         rayoCoords: rayoCoords ?? this.rayoCoords,
+        cuartelesDestruidos: cuartelesDestruidos ?? this.cuartelesDestruidos,
       );
 
   /// Fija (o limpia, pasando {}) las celdas de rayo de forma explícita.
@@ -379,6 +401,7 @@ class BoardState {
         ownerTurno: ownerTurno,
         efectosCelda: efectosCelda,
         rayoCoords: coords,
+        cuartelesDestruidos: cuartelesDestruidos,
       );
 
   BoardState nextTurn(String nextOwner) => BoardState(
@@ -387,6 +410,7 @@ class BoardState {
         ownerTurno: nextOwner,
         efectosCelda: efectosCelda,
         rayoCoords: rayoCoords,
+        cuartelesDestruidos: cuartelesDestruidos,
       );
 
   static Map<String, dynamic> efectosCeldaToFirestore(

@@ -339,49 +339,44 @@ class _AvatarPlaceholder extends StatelessWidget {
       );
 }
 
-// ─────────────────────────────────────────────────────────────
-// BARRA XP
-// ─────────────────────────────────────────────────────────────
 class _XpBar extends StatelessWidget {
   final int nivel;
   final int experiencia;
   const _XpBar({required this.nivel, required this.experiencia});
 
+  // XP total acumulada para ALCANZAR un nivel: 1000 * (2^(n-1) - 1).
+  static int _xpParaAlcanzar(int n) => 1000 * ((1 << (n - 1)) - 1);
+
   @override
   Widget build(BuildContext context) {
-    final xpSiguiente = nivel * 1000;
-    final xpEnNivelActual = experiencia % xpSiguiente;
-    final progreso = (xpEnNivelActual / xpSiguiente).clamp(0.0, 1.0);
+    final xpBase = _xpParaAlcanzar(nivel); // inicio del nivel actual
+    final xpTecho = _xpParaAlcanzar(nivel + 1); // inicio del siguiente
+    final costeNivel = (xpTecho - xpBase).clamp(1, 1 << 30);
+    final xpEnNivelActual = (experiencia - xpBase).clamp(0, costeNivel);
+    final progreso = (xpEnNivelActual / costeNivel).clamp(0.0, 1.0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('PROGRESO NIVEL $nivel → ${nivel + 1}',
-                style: const TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 7,
-                    letterSpacing: 1.5,
-                    color: Color(0xFF506070))),
-            Text('$xpEnNivelActual / $xpSiguiente XP',
-                style: const TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 7,
-                    color: Color(0xFF506070))),
-          ],
-        ),
+        Text('PROGRESO NIVEL $nivel → ${nivel + 1}',
+            style: const TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 12,
+                letterSpacing: 1.2,
+                color: Color(0xFFB89050))),
         const SizedBox(height: 6),
         ClipRRect(
-          borderRadius: BorderRadius.circular(3),
+          borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
             value: progreso,
-            minHeight: 6,
-            backgroundColor: const Color(0xFF1A2A3A),
-            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFC8A860)),
+            minHeight: 12,
+            backgroundColor: const Color(0xFF2A1810),
+            valueColor: const AlwaysStoppedAnimation(Color(0xFFDCBE30)),
           ),
         ),
+        const SizedBox(height: 4),
+        Text('$xpEnNivelActual / $costeNivel XP',
+            style: const TextStyle(fontSize: 11, color: Color(0xFF8A7050))),
       ],
     );
   }

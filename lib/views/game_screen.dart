@@ -80,6 +80,21 @@ class _GameScreenState extends State<GameScreen> {
     return out;
   }
 
+  /// Coords de cuarteles destruidos (conquistados) leídos del doc.
+  Set<String> _cuartelesDestruidosFromData(Map<String, dynamic> data) {
+    final raw = data['cuartelesDestruidos'] as List? ?? const [];
+    final res = <String>{};
+    for (final e in raw) {
+      if (e is Map) {
+        final c = e['coord'];
+        if (c is String && c.isNotEmpty) res.add(c);
+      } else if (e is String && e.isNotEmpty) {
+        res.add(e);
+      }
+    }
+    return res;
+  }
+
   /// uid → color del obelisco asignado (se carga desde Firestore)
   Map<String, Color> _playerColors = {};
 
@@ -740,7 +755,8 @@ class _GameScreenState extends State<GameScreen> {
           setState(() {
             _boardState = restoredBoard
                 .copyWith(turnoActual: lobby!.turnoActual)
-                .withRayos(_rayoCoordsFromData(data));
+                .withRayos(_rayoCoordsFromData(data))
+                .withCuarteles(_cuartelesDestruidosFromData(data));
           });
         }
 
@@ -1079,14 +1095,16 @@ class _GameScreenState extends State<GameScreen> {
         setState(() {
           _boardState = restoredState
               .copyWith(turnoActual: lobby.turnoActual)
-              .withRayos(_rayoCoordsFromData(data));
+              .withRayos(_rayoCoordsFromData(data))
+              .withCuarteles(_cuartelesDestruidosFromData(data));
           _cerradoPor = [];
           _resolviendo = false;
           _isSendingTurn = false;
           _cargaCompletada = true;
           _boardStateInicial = restoredState
               .copyWith(turnoActual: lobby.turnoActual)
-              .withRayos(_rayoCoordsFromData(data));
+              .withRayos(_rayoCoordsFromData(data))
+              .withCuarteles(_cuartelesDestruidosFromData(data));
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
@@ -2428,13 +2446,15 @@ class _GameScreenState extends State<GameScreen> {
         setState(() {
           _boardState = restored
               .copyWith(turnoActual: turnoActual)
-              .withRayos(_rayoCoordsFromData(estado));
+              .withRayos(_rayoCoordsFromData(estado))
+              .withCuarteles(_cuartelesDestruidosFromData(estado));
           _cerradoPor = [];
           _isSendingTurn = false;
           _cargaCompletada = true;
           _boardStateInicial = restored
               .copyWith(turnoActual: turnoActual)
-              .withRayos(_rayoCoordsFromData(estado));
+              .withRayos(_rayoCoordsFromData(estado))
+              .withCuarteles(_cuartelesDestruidosFromData(estado));
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
@@ -2733,11 +2753,15 @@ class _GameScreenState extends State<GameScreen> {
     final sidebarTerrain = (_sidebarRi != null && _sidebarCi != null)
         ? _config.terrain(_sidebarRi!, _sidebarCi!)
         : null;
+    final destruidoAqui =
+        _sidebarCoord != null && _boardState.esCuartelDestruido(_sidebarCoord!);
     final isEnemySidebar = _sidebarCoord != null &&
         kObeliscoCoords.contains(_sidebarCoord) &&
-        _sidebarCoord != _obeliscoLocal;
-    final isObeliscoSidebar =
-        _sidebarCoord != null && kObeliscoCoords.contains(_sidebarCoord);
+        _sidebarCoord != _obeliscoLocal &&
+        !destruidoAqui;
+    final isObeliscoSidebar = _sidebarCoord != null &&
+        kObeliscoCoords.contains(_sidebarCoord) &&
+        !destruidoAqui;
     final String? selectedCoord =
         _inMoveMode ? _moveFromCoord : (_sidebarOpen ? _sidebarCoord : null);
 
@@ -2802,6 +2826,7 @@ class _GameScreenState extends State<GameScreen> {
                     highlightEmpty: _selectedHandIndex != null,
                     movableCoords: _highlightCoords,
                     obeliscoLocal: _obeliscoLocal,
+                    obeliscoCoords: _obeliscosPorJugador.values.toSet(),
                     playerColors: _playerColors,
                     localPlayerUid: widget.localPlayerUid,
                     fantasmasAccion: _fantasmasAccion,

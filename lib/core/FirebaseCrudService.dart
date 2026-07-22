@@ -103,6 +103,7 @@ class FirebaseCrudService {
     'zj2P2KoF31Hw24KQWiBu': ['default'],
     'zqIDNsAb8dHtKf7EMISq': ['default'],
     'YbgK01QuTY3nGT6ZTwui': ['default'],
+    'TxspFJw73lhbYZfABCga': ['default'],
     // Carta con 1 skin extra desbloqueada
     'xPcw2Adpdfdb8TMp4Uiy': ['default', 'XIm1pgv67us9IPZq39sV'],
     // Carta con 2 skins extra desbloqueadas
