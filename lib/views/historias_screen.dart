@@ -5,12 +5,11 @@ import 'package:flutter/material.dart';
 import '../models/historia_model.dart';
 import '../models/lobby_model.dart'; // kEjercitos
 import '../services/warzero_api.dart';
+import '../services/settings_controller.dart';
 import 'historia_detalle_screen.dart';
 
-/// Pantalla de Historias: arriba un selector por ejército (como en Edición) y
-/// debajo la lista de 10 historias de ese ejército. Cada una está bloqueada
-/// hasta conseguirla; mientras lo está se muestra "N. Historia bloqueada", y al
-/// desbloquearla aparece su título y se puede abrir para leerla.
+/// Pantalla de Historias: arriba un selector por ejército y debajo la lista de
+/// 10 historias de ese ejército. Cada una está bloqueada hasta conseguirla.
 class HistoriasScreen extends StatefulWidget {
   const HistoriasScreen({super.key});
 
@@ -69,26 +68,26 @@ class _HistoriasScreenState extends State<HistoriasScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final delEjercito = _porEjercito[_ejercitoSel] ?? const {};
 
     return Scaffold(
-      backgroundColor: const Color(0xFF060E1A),
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF02050D),
-        iconTheme: const IconThemeData(color: Color(0xFFC8A860)),
-        title: const Text(
+        backgroundColor: war.superficie,
+        iconTheme: IconThemeData(color: war.primario),
+        title: Text(
           'HISTORIAS',
           style: TextStyle(
             fontSize: 14,
             fontFamily: 'Cinzel',
             letterSpacing: 3,
-            color: Color(0xFFC8A860),
+            color: war.primario,
           ),
         ),
       ),
       body: Column(
         children: [
-          // ── Selector de ejército ───────────────────────────
           SizedBox(
             height: 42,
             child: ListView(
@@ -104,14 +103,11 @@ class _HistoriasScreenState extends State<HistoriasScreen> {
               ],
             ),
           ),
-
           const SizedBox(height: 6),
-
-          // ── Lista de 10 historias ──────────────────────────
           if (_loading)
-            const Expanded(
+            Expanded(
               child: Center(
-                child: CircularProgressIndicator(color: Color(0xFFC8A860)),
+                child: CircularProgressIndicator(color: war.primario),
               ),
             )
           else if (_error != null)
@@ -122,9 +118,9 @@ class _HistoriasScreenState extends State<HistoriasScreen> {
                   child: Text(
                     'No se pudieron cargar las historias.\n$_error',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
-                      color: Color(0xFF506070),
+                      color: war.textoTenue,
                       fontFamily: 'Cinzel',
                       height: 1.4,
                     ),
@@ -179,16 +175,16 @@ class _HistoriaTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final bloqueada = titulo == null;
-    final accent =
-        bloqueada ? const Color(0xFF506070) : const Color(0xFFC8A860);
+    final accent = bloqueada ? war.textoTenue : war.primario;
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
         decoration: BoxDecoration(
-          color: const Color(0xFF0A1220),
+          color: war.superficie,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: accent.withOpacity(bloqueada ? 0.12 : 0.35),
@@ -218,9 +214,7 @@ class _HistoriaTile extends StatelessWidget {
                   fontSize: 13,
                   fontFamily: 'Cinzel',
                   letterSpacing: 0.5,
-                  color: bloqueada
-                      ? const Color(0xFF506070)
-                      : const Color(0xFFE0D8C0),
+                  color: bloqueada ? war.textoTenue : war.texto,
                   fontStyle: bloqueada ? FontStyle.italic : FontStyle.normal,
                 ),
               ),
@@ -230,18 +224,17 @@ class _HistoriaTile extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 margin: const EdgeInsets.only(right: 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF4ABB58).withOpacity(0.12),
+                  color: war.secundario.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                      color: const Color(0xFF4ABB58).withOpacity(0.5)),
+                  border: Border.all(color: war.secundario.withOpacity(0.5)),
                 ),
-                child: const Text(
+                child: Text(
                   'INICIAL',
                   style: TextStyle(
                     fontSize: 7,
                     fontFamily: 'Cinzel',
                     letterSpacing: 1,
-                    color: Color(0xFF4ABB58),
+                    color: war.secundario,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -260,7 +253,7 @@ class _HistoriaTile extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// CHIP DE EJÉRCITO (mismo estilo que la pantalla de Edición)
+// CHIP DE EJÉRCITO
 // ─────────────────────────────────────────────────────────────
 class _FilterChip extends StatelessWidget {
   final String label;
@@ -275,6 +268,7 @@ class _FilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: GestureDetector(
@@ -284,14 +278,10 @@ class _FilterChip extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: selected
-                ? const Color(0xFFC8A860).withOpacity(0.18)
-                : const Color(0xFF0A1220),
+            color: selected ? war.primario.withOpacity(0.18) : war.superficie,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: selected
-                  ? const Color(0xFFC8A860)
-                  : const Color(0xFF506070).withOpacity(0.4),
+              color: selected ? war.primario : war.borde.withOpacity(0.4),
               width: selected ? 1.2 : 0.8,
             ),
           ),
@@ -301,8 +291,7 @@ class _FilterChip extends StatelessWidget {
               fontSize: 9,
               fontFamily: 'Cinzel',
               letterSpacing: 1,
-              color:
-                  selected ? const Color(0xFFC8A860) : const Color(0xFF506070),
+              color: selected ? war.primario : war.textoTenue,
               fontWeight: selected ? FontWeight.bold : FontWeight.normal,
             ),
           ),

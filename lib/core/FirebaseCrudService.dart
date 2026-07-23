@@ -137,6 +137,9 @@ class FirebaseCrudService {
           'imagenPerfil': '',
           'nivel': 1,
           'experiencia': 0,
+          'victorias':
+              0, // espejo para el ranking (canónico en Estadisticas/Resultados)
+          'derrotas': 0,
           'fechaRegistro': FieldValue.serverTimestamp(),
         });
         try {

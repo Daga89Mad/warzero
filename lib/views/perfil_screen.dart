@@ -4,12 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:warzero/core/firebaseCrudService.dart';
+import '../services/settings_controller.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PerfilScreen — Pantalla de perfil del jugador.
-//
-// EDITABLE:   alias, imagenPerfil (URL)
-// SOLO LECTURA: email, nivel, experiencia, dinero, fecha de registro
 // ─────────────────────────────────────────────────────────────────────────────
 
 class PerfilScreen extends StatefulWidget {
@@ -32,7 +30,6 @@ class _PerfilScreenState extends State<PerfilScreen> {
   String? _error;
   String? _successMsg;
 
-  // Datos del jugador
   String _email = '';
   int _nivel = 1;
   int _experiencia = 0;
@@ -128,29 +125,25 @@ class _PerfilScreenState extends State<PerfilScreen> {
     }
   }
 
-  // ─────────────────────────────────────────────────────────
-  // BUILD
-  // ─────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Scaffold(
-      backgroundColor: const Color(0xFF030810),
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF02050D),
+        backgroundColor: war.superficie,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios,
-              size: 16, color: Color(0xFFC8A860)),
+          icon: Icon(Icons.arrow_back_ios, size: 16, color: war.primario),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: const Text('PERFIL',
+        title: Text('PERFIL',
             style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 13,
                 letterSpacing: 3,
-                color: Color(0xFFC8A860))),
+                color: war.primario)),
         actions: [
-          // Botón GUARDAR en el AppBar
           if (!_loading)
             Padding(
               padding: const EdgeInsets.only(right: 12),
@@ -161,26 +154,23 @@ class _PerfilScreenState extends State<PerfilScreen> {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                   decoration: BoxDecoration(
-                    color: _saving
-                        ? const Color(0xFF0A1A0A)
-                        : const Color(0xFF1A3A0A),
+                    color: war.secundario.withOpacity(_saving ? 0.06 : 0.14),
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
-                        color: const Color(0xFF4ABB58).withOpacity(0.6),
-                        width: 1),
+                        color: war.secundario.withOpacity(0.6), width: 1),
                   ),
                   child: _saving
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 14,
                           height: 14,
                           child: CircularProgressIndicator(
-                              strokeWidth: 1.5, color: Color(0xFF4ABB58)))
-                      : const Text('GUARDAR',
+                              strokeWidth: 1.5, color: war.secundario))
+                      : Text('GUARDAR',
                           style: TextStyle(
                               fontFamily: 'Cinzel',
                               fontSize: 9,
                               letterSpacing: 1.5,
-                              color: Color(0xFF4ABB58),
+                              color: war.secundario,
                               fontWeight: FontWeight.bold)),
                 ),
               ),
@@ -188,22 +178,16 @@ class _PerfilScreenState extends State<PerfilScreen> {
         ],
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFC8A860)))
+          ? Center(child: CircularProgressIndicator(color: war.primario))
           : SingleChildScrollView(
               padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Avatar preview ──────────────────────────
                   _AvatarPreview(imageUrl: _imagenCtrl.text),
-
                   const SizedBox(height: 28),
-
-                  // ── EDITABLE ────────────────────────────────
                   _SectionLabel('DATOS EDITABLES'),
                   const SizedBox(height: 14),
-
                   _EditableField(
                     label: 'NOMBRE DE COMANDANTE',
                     controller: _aliasCtrl,
@@ -212,9 +196,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
                     maxLength: 20,
                     onChanged: (_) => setState(() {}),
                   ),
-
                   const SizedBox(height: 14),
-
                   _EditableField(
                     label: 'URL DE IMAGEN DE PERFIL',
                     controller: _imagenCtrl,
@@ -223,13 +205,9 @@ class _PerfilScreenState extends State<PerfilScreen> {
                     keyboardType: TextInputType.url,
                     onChanged: (_) => setState(() {}),
                   ),
-
                   const SizedBox(height: 28),
-
-                  // ── SOLO LECTURA ─────────────────────────────
                   _SectionLabel('INFORMACIÓN DE CUENTA'),
                   const SizedBox(height: 14),
-
                   _ReadOnlyField(
                       label: 'CORREO ELECTRÓNICO',
                       value: _email,
@@ -239,13 +217,9 @@ class _PerfilScreenState extends State<PerfilScreen> {
                       label: 'FECHA DE REGISTRO',
                       value: _fechaRegistro.isEmpty ? '—' : _fechaRegistro,
                       icon: Icons.calendar_today_outlined),
-
                   const SizedBox(height: 28),
-
-                  // ── ESTADÍSTICAS ─────────────────────────────
                   _SectionLabel('ESTADÍSTICAS'),
                   const SizedBox(height: 14),
-
                   Row(
                     children: [
                       Expanded(
@@ -253,7 +227,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
                           icon: '⭐',
                           label: 'NIVEL',
                           value: '$_nivel',
-                          color: const Color(0xFFC8A860),
+                          color: war.primario,
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -262,7 +236,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
                           icon: '✨',
                           label: 'EXPERIENCIA',
                           value: '$_experiencia',
-                          color: const Color(0xFF4ABB58),
+                          color: war.secundario,
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -271,20 +245,14 @@ class _PerfilScreenState extends State<PerfilScreen> {
                           icon: '💰',
                           label: 'DINERO',
                           value: '$_dinero',
-                          color: const Color(0xFFD4A800),
+                          color: const Color(0xFFD4A800), // oro (semántico)
                         ),
                       ),
                     ],
                   ),
-
                   const SizedBox(height: 14),
-
-                  // Barra de progreso XP
                   _XpBar(nivel: _nivel, experiencia: _experiencia),
-
                   const SizedBox(height: 28),
-
-                  // ── Mensajes ─────────────────────────────────
                   if (_successMsg != null)
                     _MessageBanner(msg: _successMsg!, isError: false),
                   if (_error != null)
@@ -305,15 +273,15 @@ class _AvatarPreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Center(
       child: Container(
         width: 100,
         height: 100,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: const Color(0xFF080D18),
-          border: Border.all(
-              color: const Color(0xFFC8A860).withOpacity(0.5), width: 2),
+          color: war.superficie,
+          border: Border.all(color: war.primario.withOpacity(0.5), width: 2),
         ),
         child: ClipOval(
           child: imageUrl.isNotEmpty
@@ -332,10 +300,10 @@ class _AvatarPreview extends StatelessWidget {
 class _AvatarPlaceholder extends StatelessWidget {
   const _AvatarPlaceholder();
   @override
-  Widget build(BuildContext context) => const Icon(
+  Widget build(BuildContext context) => Icon(
         Icons.person_outline,
         size: 50,
-        color: Color(0xFF506070),
+        color: context.war.textoTenue,
       );
 }
 
@@ -349,8 +317,9 @@ class _XpBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final xpBase = _xpParaAlcanzar(nivel); // inicio del nivel actual
-    final xpTecho = _xpParaAlcanzar(nivel + 1); // inicio del siguiente
+    final war = context.war;
+    final xpBase = _xpParaAlcanzar(nivel);
+    final xpTecho = _xpParaAlcanzar(nivel + 1);
     final costeNivel = (xpTecho - xpBase).clamp(1, 1 << 30);
     final xpEnNivelActual = (experiencia - xpBase).clamp(0, costeNivel);
     final progreso = (xpEnNivelActual / costeNivel).clamp(0.0, 1.0);
@@ -359,24 +328,24 @@ class _XpBar extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('PROGRESO NIVEL $nivel → ${nivel + 1}',
-            style: const TextStyle(
+            style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 12,
                 letterSpacing: 1.2,
-                color: Color(0xFFB89050))),
+                color: war.primario)),
         const SizedBox(height: 6),
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
             value: progreso,
             minHeight: 12,
-            backgroundColor: const Color(0xFF2A1810),
-            valueColor: const AlwaysStoppedAnimation(Color(0xFFDCBE30)),
+            backgroundColor: war.borde.withOpacity(0.3),
+            valueColor: AlwaysStoppedAnimation(war.primario),
           ),
         ),
         const SizedBox(height: 4),
         Text('$xpEnNivelActual / $costeNivel XP',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF8A7050))),
+            style: TextStyle(fontSize: 11, color: war.textoTenue)),
       ],
     );
   }
@@ -406,35 +375,37 @@ class _EditableField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: const TextStyle(
+            style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 7,
                 letterSpacing: 2,
-                color: Color(0xFF506070))),
+                color: war.textoTenue)),
         const SizedBox(height: 6),
         Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF080D18),
+            color: war.superficie,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-                color: const Color(0xFFC8A860).withOpacity(0.25), width: 1),
+            border: Border.all(color: war.primario.withOpacity(0.25), width: 1),
           ),
           child: TextField(
             controller: controller,
             keyboardType: keyboardType,
             maxLength: maxLength,
             onChanged: onChanged,
-            style: const TextStyle(
-                fontFamily: 'Cinzel', fontSize: 12, color: Color(0xFFD0C090)),
+            style:
+                TextStyle(fontFamily: 'Cinzel', fontSize: 12, color: war.texto),
             decoration: InputDecoration(
               hintText: hint,
-              hintStyle: const TextStyle(
-                  fontFamily: 'Cinzel', fontSize: 10, color: Color(0xFF3A4A5A)),
-              prefixIcon: Icon(icon, size: 18, color: const Color(0xFF506070)),
+              hintStyle: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  color: war.textoTenue.withOpacity(0.6)),
+              prefixIcon: Icon(icon, size: 18, color: war.textoTenue),
               counterText: '',
               border: InputBorder.none,
               contentPadding:
@@ -463,36 +434,36 @@ class _ReadOnlyField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(label,
-            style: const TextStyle(
+            style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 7,
                 letterSpacing: 2,
-                color: Color(0xFF506070))),
+                color: war.textoTenue)),
         const SizedBox(height: 6),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
           decoration: BoxDecoration(
-            color: const Color(0xFF060B14),
+            color: war.fondo,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: const Color(0xFF1A2A3A), width: 1),
+            border: Border.all(color: war.borde.withOpacity(0.5), width: 1),
           ),
           child: Row(
             children: [
-              Icon(icon, size: 16, color: const Color(0xFF3A4A5A)),
+              Icon(icon, size: 16, color: war.textoTenue),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(value,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 11,
-                        color: Color(0xFF506070))),
+                        color: war.textoTenue)),
               ),
-              const Icon(Icons.lock_outline,
-                  size: 12, color: Color(0xFF2A3A4A)),
+              Icon(Icons.lock_outline, size: 12, color: war.borde),
             ],
           ),
         ),
@@ -519,10 +490,11 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
-        color: const Color(0xFF080D18),
+        color: war.superficie,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withOpacity(0.25), width: 1),
       ),
@@ -538,10 +510,10 @@ class _StatCard extends StatelessWidget {
                   color: color)),
           const SizedBox(height: 2),
           Text(label,
-              style: const TextStyle(
+              style: TextStyle(
                   fontFamily: 'Cinzel',
                   fontSize: 6,
-                  color: Color(0xFF506070),
+                  color: war.textoTenue,
                   letterSpacing: 1)),
         ],
       ),
@@ -558,26 +530,22 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Row(
       children: [
         Expanded(
-          child: Container(
-            height: 1,
-            color: const Color(0xFF1A2A3A),
-          ),
-        ),
+            child: Container(height: 1, color: war.borde.withOpacity(0.5))),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Text(text,
-              style: const TextStyle(
+              style: TextStyle(
                   fontFamily: 'Cinzel',
                   fontSize: 8,
                   letterSpacing: 2,
-                  color: Color(0xFF506070))),
+                  color: war.textoTenue)),
         ),
         Expanded(
-          child: Container(height: 1, color: const Color(0xFF1A2A3A)),
-        ),
+            child: Container(height: 1, color: war.borde.withOpacity(0.5))),
       ],
     );
   }
@@ -594,17 +562,16 @@ class _MessageBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = isError ? const Color(0xFFFF8080) : const Color(0xFF4ABB58);
-    final bg = isError ? const Color(0xFF2A0808) : const Color(0xFF0A2A0A);
-    final border = isError ? const Color(0xFFC04040) : const Color(0xFF2A6A2A);
+    final war = context.war;
+    final color = isError ? war.error : war.secundario;
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: bg,
+        color: color.withOpacity(0.10),
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: border.withOpacity(0.5), width: 1),
+        border: Border.all(color: color.withOpacity(0.5), width: 1),
       ),
       child: Row(
         children: [

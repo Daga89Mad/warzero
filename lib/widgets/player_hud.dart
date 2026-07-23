@@ -22,20 +22,25 @@ class HudJugadorInfo {
 /// (alias de cada jugador con su color y total de Zeros, y "Salir de la
 /// partida"), y en el centro el nombre de la partida con un punto del color
 /// asignado al jugador local.
+/// Barra superior de la partida: a la izquierda un botón con menú desplegable
+/// (alias de cada jugador con su color y total de Zeros, y "Salir de la
+/// partida"), y en el centro el nombre de la partida con un punto del color
+/// asignado al jugador local.
 class PartidaTopBar extends StatelessWidget {
   final String nombrePartida;
   final Color colorAsignado;
   final List<HudJugadorInfo> jugadores;
   final VoidCallback onSalir;
 
-  /// Acciones que antes vivían en el menú flotante inferior. Se muestran
-  /// en este mismo desplegable, en este orden, ANTES de "Salir de la
-  /// partida" (que se mantiene siempre al final). `enabled: false` deja el
-  /// ítem atenuado y sin poder pulsarse, igual que hacía el menú anterior.
+  /// Acciones del desplegable, en este orden, ANTES de "Salir de la partida"
+  /// (que se mantiene siempre al final). `enabled: false` deja el ítem atenuado
+  /// y sin poder pulsarse.
   final bool puedeCuartel;
   final VoidCallback onCuartel;
   final bool puedeInforme;
   final VoidCallback onInforme;
+  final bool puedePuntuaciones;
+  final VoidCallback onPuntuaciones;
   final bool puedeDeshacer;
   final VoidCallback onDeshacer;
 
@@ -49,6 +54,8 @@ class PartidaTopBar extends StatelessWidget {
     required this.onCuartel,
     required this.puedeInforme,
     required this.onInforme,
+    required this.puedePuntuaciones,
+    required this.onPuntuaciones,
     required this.puedeDeshacer,
     required this.onDeshacer,
   });
@@ -77,6 +84,8 @@ class PartidaTopBar extends StatelessWidget {
               if (v == '__salir__') onSalir();
               if (v == '__cuartel__' && puedeCuartel) onCuartel();
               if (v == '__informe__' && puedeInforme) onInforme();
+              if (v == '__puntuaciones__' && puedePuntuaciones)
+                onPuntuaciones();
               if (v == '__deshacer__' && puedeDeshacer) onDeshacer();
             },
             itemBuilder: (context) => [
@@ -108,6 +117,17 @@ class PartidaTopBar extends StatelessWidget {
                   label: 'INFORME',
                   color: const Color(0xFF6AAAD0),
                   enabled: puedeInforme,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: '__puntuaciones__',
+                enabled: puedePuntuaciones,
+                height: 40,
+                child: _FilaAccion(
+                  icon: Icons.leaderboard,
+                  label: 'PUNTUACIONES',
+                  color: const Color(0xFF9AD06A),
+                  enabled: puedePuntuaciones,
                 ),
               ),
               PopupMenuItem<String>(

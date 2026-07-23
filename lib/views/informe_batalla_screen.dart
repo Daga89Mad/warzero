@@ -3,12 +3,21 @@
 import 'package:flutter/material.dart';
 import '../models/lobby_model.dart';
 import '../models/carta_model.dart';
+import '../services/settings_controller.dart';
 import '../widgets/carta_rota_animation.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PANTALLA INFORME DE BATALLA
 // Pestañas: COMBATES · ZERO · MOVIMIENTOS · CARTA
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Colores semánticos fijos (lenguaje del juego, iguales en todos los temas).
+const _cEnergy = Color(0xFFD4A800); // Zero / energía
+const _cVictoria = Color(0xFF4ABB58);
+const _cDerrota = Color(0xFFC04040);
+const _cEmpate = Color(0xFF888888);
+const _cFuerza = Color(0xFFE08040);
+const _cDefensa = Color(0xFF4090D0);
 
 class InformeBatallaScreen extends StatefulWidget {
   final List<Map<String, dynamic>> combateLog;
@@ -102,23 +111,8 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
     }
   }
 
-  List<
-      ({
-        int turno,
-        List<Map<String, dynamic>> combate,
-        List<Map<String, dynamic>> mov,
-        List<Map<String, dynamic>> farmeo,
-        List<Map<String, dynamic>> acciones,
-        List<String> rayoCoords,
-      })> get _opciones {
-    final result = <({
-      int turno,
-      List<Map<String, dynamic>> combate,
-      List<Map<String, dynamic>> mov,
-      List<Map<String, dynamic>> farmeo,
-      List<Map<String, dynamic>> acciones,
-      List<String> rayoCoords,
-    })>[];
+  List<_TurnoInforme> get _opciones {
+    final result = <_TurnoInforme>[];
 
     for (final entry in widget.historial) {
       final t = (entry['turno'] as num?)?.toInt() ?? 0;
@@ -140,19 +134,19 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
         if (entry['rayoCoord'] is String) entry['rayoCoord'] as String,
       ];
       if (!result.any((o) => o.turno == t)) {
-        result.add((
+        result.add(_TurnoInforme(
           turno: t,
           combate: c,
           mov: m,
           farmeo: f,
           acciones: ac,
-          rayoCoords: r
+          rayoCoords: r,
         ));
       }
     }
 
     if (!result.any((o) => o.turno == widget.turno)) {
-      result.add((
+      result.add(_TurnoInforme(
         turno: widget.turno,
         combate: widget.combateLog,
         mov: widget.movimientosLog,
@@ -168,34 +162,35 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final opciones = _opciones;
 
     return DefaultTabController(
       length: 4,
       child: Scaffold(
-        backgroundColor: const Color(0xFF060E1A),
+        backgroundColor: war.fondo,
         appBar: AppBar(
-          backgroundColor: const Color(0xFF060E1A),
+          backgroundColor: war.fondo,
           elevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.close, color: Color(0xFFC8A860), size: 20),
+            icon: Icon(Icons.close, color: war.primario, size: 20),
             onPressed: () => Navigator.of(context).pop(),
           ),
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('INFORME DE BATALLA',
+              Text('INFORME DE BATALLA',
                   style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 11,
                       letterSpacing: 2,
-                      color: Color(0xFFC8A860))),
+                      color: war.primario)),
               Text('TURNO $_selectedTurno',
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 8,
                       letterSpacing: 1.5,
-                      color: Color(0xFF506070))),
+                      color: war.textoTenue)),
             ],
           ),
           actions: [
@@ -204,18 +199,17 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                 padding: const EdgeInsets.only(right: 8),
                 child: DropdownButton<int>(
                   value: _selectedTurno,
-                  dropdownColor: const Color(0xFF0A1525),
+                  dropdownColor: war.superficie,
                   underline: const SizedBox(),
-                  icon: const Icon(Icons.history,
-                      color: Color(0xFFC8A860), size: 16),
+                  icon: Icon(Icons.history, color: war.primario, size: 16),
                   items: opciones
                       .map((o) => DropdownMenuItem(
                             value: o.turno,
                             child: Text('T${o.turno}',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontFamily: 'Cinzel',
                                     fontSize: 10,
-                                    color: Color(0xFFC8A860))),
+                                    color: war.primario)),
                           ))
                       .toList(),
                   onChanged: (t) {
@@ -227,14 +221,14 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                 ),
               ),
           ],
-          bottom: const TabBar(
-            indicatorColor: Color(0xFFC8A860),
+          bottom: TabBar(
+            indicatorColor: war.primario,
             indicatorWeight: 1.5,
-            labelColor: Color(0xFFC8A860),
-            unselectedLabelColor: Color(0xFF506070),
-            labelStyle: TextStyle(
+            labelColor: war.primario,
+            unselectedLabelColor: war.textoTenue,
+            labelStyle: const TextStyle(
                 fontFamily: 'Cinzel', fontSize: 9, letterSpacing: 1.5),
-            tabs: [
+            tabs: const [
               Tab(text: 'COMBATES'),
               Tab(text: 'ZERO'),
               Tab(text: 'CARTA'),
@@ -282,21 +276,22 @@ class _CartaTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     if (carta == null) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.style_outlined, size: 40, color: Color(0xFF2A3A4A)),
-              SizedBox(height: 16),
+              Icon(Icons.style_outlined, size: 40, color: war.borde),
+              const SizedBox(height: 16),
               Text('Sin carta nueva este turno.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 11,
-                      color: Color(0xFF506070))),
+                      color: war.textoTenue)),
             ],
           ),
         ),
@@ -313,25 +308,25 @@ class _CartaTab extends StatelessWidget {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 10),
             decoration: BoxDecoration(
-              color: const Color(0xFF0A1525),
+              color: war.superficie,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: const Color(0xFFC8A860).withOpacity(0.3), width: 1),
+              border:
+                  Border.all(color: war.primario.withOpacity(0.3), width: 1),
             ),
-            child: const Column(
+            child: Column(
               children: [
                 Text('✨ NUEVA CARTA RECIBIDA',
                     style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 10,
                         letterSpacing: 2,
-                        color: Color(0xFFC8A860))),
-                SizedBox(height: 2),
+                        color: war.primario)),
+                const SizedBox(height: 2),
                 Text('Añadida a tu mano al inicio del turno',
                     style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 8,
-                        color: Color(0xFF506070))),
+                        color: war.textoTenue)),
               ],
             ),
           ),
@@ -343,13 +338,13 @@ class _CartaTab extends StatelessWidget {
             width: 140,
             height: 180,
             decoration: BoxDecoration(
-              color: const Color(0xFF0C1A2A),
+              color: war.superficie,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                  color: const Color(0xFFE0C060).withOpacity(0.6), width: 2),
+              border:
+                  Border.all(color: war.primario.withOpacity(0.6), width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFFE0C060).withOpacity(0.2),
+                  color: war.primario.withOpacity(0.2),
                   blurRadius: 20,
                   spreadRadius: 2,
                 ),
@@ -373,11 +368,11 @@ class _CartaTab extends StatelessWidget {
           Text(
             carta!.nombre.toUpperCase(),
             textAlign: TextAlign.center,
-            style: const TextStyle(
+            style: TextStyle(
               fontFamily: 'Cinzel',
               fontSize: 14,
               letterSpacing: 2,
-              color: Color(0xFFC8A860),
+              color: war.primario,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -391,19 +386,19 @@ class _CartaTab extends StatelessWidget {
               Text(carta!.tipoIcon, style: const TextStyle(fontSize: 14)),
               const SizedBox(width: 6),
               Text(carta!.tipoLabel.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 9,
-                      color: Color(0xFF8A9AAA),
+                      color: war.textoTenue,
                       letterSpacing: 1.5)),
               const SizedBox(width: 12),
-              const Text('·', style: TextStyle(color: Color(0xFF506070))),
+              Text('·', style: TextStyle(color: war.textoTenue)),
               const SizedBox(width: 12),
               Text('EJÉRCITO ${carta!.ejercito}',
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 9,
-                      color: Color(0xFF8A9AAA),
+                      color: war.textoTenue,
                       letterSpacing: 1.5)),
             ],
           ),
@@ -418,25 +413,25 @@ class _CartaTab extends StatelessWidget {
                   icon: '⚔',
                   label: 'FUERZA',
                   value: carta!.fuerza,
-                  color: const Color(0xFFE08040)),
+                  color: _cFuerza),
               const SizedBox(width: 10),
               _StatCard(
                   icon: '🛡',
                   label: 'DEFENSA',
                   value: carta!.defensa,
-                  color: const Color(0xFF4090D0)),
+                  color: _cDefensa),
               const SizedBox(width: 10),
               _StatCard(
                   icon: 'Ø',
                   label: 'COSTE',
                   value: carta!.coste,
-                  color: const Color(0xFFD4A800)),
+                  color: _cEnergy),
               const SizedBox(width: 10),
               _StatCard(
                   icon: '↗',
                   label: 'MOV',
                   value: carta!.movimiento,
-                  color: const Color(0xFF4ABB58)),
+                  color: _cVictoria),
             ],
           ),
 
@@ -448,17 +443,17 @@ class _CartaTab extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: const Color(0xFF080F1A),
+                color: war.fondo,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFF1A2A3A), width: 1),
+                border: Border.all(color: war.borde.withOpacity(0.5), width: 1),
               ),
               child: Text(
                 carta!.descripcion,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 9,
-                    color: Color(0xFF6A7A8A),
+                    color: war.textoTenue,
                     height: 1.6),
               ),
             ),
@@ -482,11 +477,12 @@ class _StatCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Container(
       width: 64,
       padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF0A1525),
+        color: war.superficie,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withOpacity(0.3), width: 1),
       ),
@@ -502,10 +498,10 @@ class _StatCard extends StatelessWidget {
                   color: color)),
           const SizedBox(height: 2),
           Text(label,
-              style: const TextStyle(
+              style: TextStyle(
                   fontFamily: 'Cinzel',
                   fontSize: 6,
-                  color: Color(0xFF506070),
+                  color: war.textoTenue,
                   letterSpacing: 1)),
         ],
       ),
@@ -516,8 +512,9 @@ class _StatCard extends StatelessWidget {
 class _CartaPlaceholder extends StatelessWidget {
   const _CartaPlaceholder();
   @override
-  Widget build(BuildContext context) => const Center(
-        child: Icon(Icons.shield_outlined, size: 60, color: Color(0xFFB08040)),
+  Widget build(BuildContext context) => Center(
+        child: Icon(Icons.shield_outlined,
+            size: 60, color: context.war.primario.withOpacity(0.7)),
       );
 }
 
@@ -560,31 +557,32 @@ class _CombatesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final disparos = _disparosConImpacto;
 
     if (combateLog.isEmpty && disparos.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.shield_outlined, size: 40, color: Color(0xFF2A3A4A)),
-              SizedBox(height: 16),
+              Icon(Icons.shield_outlined, size: 40, color: war.borde),
+              const SizedBox(height: 16),
               Text('Sin combates este turno.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 11,
-                      color: Color(0xFF506070))),
-              SizedBox(height: 8),
+                      color: war.textoTenue)),
+              const SizedBox(height: 8),
               Text(
                   'Las cartas de distintos jugadores\nno coincidieron en ninguna celda.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 9,
-                      color: Color(0xFF3A4A5A),
+                      color: war.borde,
                       height: 1.6)),
             ],
           ),
@@ -625,12 +623,6 @@ class _CombatesTab extends StatelessWidget {
 
 /// Ficha para un disparo que impactó: quién disparó, celda objetivo y cartas
 /// enemigas destruidas por el impacto.
-/// Ficha para un disparo que impactó: quién disparó, celda objetivo y cartas
-/// enemigas destruidas por el impacto.
-/// Ficha para un disparo que impactó: quién disparó, celda objetivo y cartas
-/// enemigas destruidas por el impacto.
-/// Ficha para un disparo que impactó: quién disparó, celda objetivo y cartas
-/// enemigas destruidas por el impacto.
 class _DisparoTile extends StatelessWidget {
   final Map<String, dynamic> data;
   final String localUid;
@@ -645,7 +637,8 @@ class _DisparoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const accent = Color(0xFF40C0FF);
+    final war = context.war;
+    const accent = Color(0xFF40C0FF); // azul disparo (semántico)
     final uid = data['uid'] as String? ?? '';
     final zona = data['zona'] as String?;
     final objetivo = data['objetivo'] as String? ?? '?';
@@ -671,7 +664,7 @@ class _DisparoTile extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0A1525),
+        color: war.superficie,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: accent.withOpacity(0.35), width: 1),
       ),
@@ -742,11 +735,11 @@ class _DisparoTile extends StatelessWidget {
                       animar.isNotEmpty
                           ? 'TAMBIÉN DESTRUIDAS'
                           : 'CARTAS DESTRUIDAS',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 8,
                           letterSpacing: 1,
-                          color: Color(0xFF506070))),
+                          color: war.textoTenue)),
                   const SizedBox(height: 4),
                   ...resto.map((c) {
                     final nombre =
@@ -762,15 +755,14 @@ class _DisparoTile extends StatelessWidget {
                       child: Row(
                         children: [
                           const Text('✖',
-                              style: TextStyle(
-                                  fontSize: 9, color: Color(0xFFC04040))),
+                              style: TextStyle(fontSize: 9, color: _cDerrota)),
                           const SizedBox(width: 6),
                           Expanded(
                             child: Text('$nombre $owner',
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontFamily: 'Cinzel',
                                     fontSize: 9,
-                                    color: Color(0xFF8A9AAA)),
+                                    color: war.texto),
                                 overflow: TextOverflow.ellipsis),
                           ),
                         ],
@@ -803,6 +795,7 @@ class _CombateTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final coord = data['coord'] as String? ?? '?';
     final ganadorUid = data['ganadorUid'] as String?;
     final ganadorZone = data['ganadorZone'] as String?;
@@ -815,24 +808,20 @@ class _CombateTile extends StatelessWidget {
         .toList();
     final esEmpate = ganadorUid == null;
     final accentColor = esEmpate
-        ? const Color(0xFF888888)
+        ? _cEmpate
         : (esLocal && ganadorUid == localUid)
-            ? const Color(0xFF4ABB58)
+            ? _cVictoria
             : esLocal
-                ? const Color(0xFFC04040)
-                : const Color(0xFFC8A860);
+                ? _cDerrota
+                : war.primario;
 
     // ── Bajas a animar: SOLO en mis combates. ──
-    //   • Si gano  → solo las cartas enemigas derrotadas.
-    //   • Si pierdo → solo las mías.
     final bajas = <Map<String, dynamic>>[];
     if (esLocal) {
       final gane = ganadorUid == localUid;
       for (final g in detalle) {
         final gUid = (g['ownerUid'] ?? '').toString();
         if (!derrotados.contains(gUid)) continue;
-        // Al ganar: excluir las mías (rompen las enemigas).
-        // Al perder: incluir solo las mías.
         if (gane ? gUid == localUid : gUid != localUid) continue;
         final gZone = g['ownerZone'] as String?;
         for (final c in (g['cartas'] as List? ?? [])) {
@@ -850,7 +839,7 @@ class _CombateTile extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0A1525),
+        color: war.superficie,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: accentColor.withOpacity(0.35), width: 1),
       ),
@@ -866,11 +855,11 @@ class _CombateTile extends StatelessWidget {
             ),
             child: Row(children: [
               Text('⚔  CELDA $coord',
-                  style: const TextStyle(
+                  style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 10,
                       letterSpacing: 1.5,
-                      color: Color(0xFFC8A860))),
+                      color: war.primario)),
               const Spacer(),
               if (esLocal) _Badge(label: 'TU COMBATE', color: accentColor),
             ]),
@@ -884,9 +873,7 @@ class _CombateTile extends StatelessWidget {
                   const Text(
                       '🤝  EMPATE — las cartas se mantienen hasta el desempate',
                       style: TextStyle(
-                          fontFamily: 'Cinzel',
-                          fontSize: 9,
-                          color: Color(0xFF888888)))
+                          fontFamily: 'Cinzel', fontSize: 9, color: _cEmpate))
                 else ...[
                   Row(children: [
                     Icon(Icons.emoji_events,
@@ -906,17 +893,16 @@ class _CombateTile extends StatelessWidget {
                       padding: const EdgeInsets.only(top: 4, left: 19),
                       child: Text(
                           '+${energies[ganadorUid]} pts  ·  +${pc[ganadorUid] ?? 0} PC',
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontFamily: 'Cinzel',
                               fontSize: 8,
-                              color: Color(0xFF506070))),
+                              color: war.textoTenue)),
                     ),
                   if (derrotados.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Row(children: [
-                        const Icon(Icons.close,
-                            size: 12, color: Color(0xFFC04040)),
+                        const Icon(Icons.close, size: 12, color: _cDerrota),
                         const SizedBox(width: 6),
                         Expanded(
                             child: Text(
@@ -924,7 +910,7 @@ class _CombateTile extends StatelessWidget {
                                 style: const TextStyle(
                                     fontFamily: 'Cinzel',
                                     fontSize: 9,
-                                    color: Color(0xFFC04040)))),
+                                    color: _cDerrota))),
                       ]),
                     ),
                   // ── Animación (solo mis combates, filtrada por gano/pierdo) ──
@@ -941,7 +927,7 @@ class _CombateTile extends StatelessWidget {
                 ],
                 if (detalle.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  const Divider(color: Color(0xFF1A2A3A), height: 1),
+                  Divider(color: war.borde.withOpacity(0.5), height: 1),
                   const SizedBox(height: 8),
                   ...detalle.map((d) => _GrupoDesglose(
                       data: d, alias: alias, colorZona: colorZona)),
@@ -965,6 +951,7 @@ class _GrupoDesglose extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final uid = data['ownerUid'] as String? ?? '';
     final zone = data['ownerZone'] as String?;
     final fuerza = (data['totalFuerza'] as num?)?.toInt() ?? 0;
@@ -1020,10 +1007,10 @@ class _GrupoDesglose extends StatelessWidget {
                     child: Row(children: [
                       Expanded(
                           child: Text(nombre,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontFamily: 'Cinzel',
                                   fontSize: 8,
-                                  color: Color(0xFF506070)),
+                                  color: war.textoTenue),
                               overflow: TextOverflow.ellipsis)),
                       _CardStatRow(
                           fuerza: f,
@@ -1037,8 +1024,8 @@ class _GrupoDesglose extends StatelessWidget {
               ),
             ),
           Text('$numCartas ${numCartas == 1 ? 'carta' : 'cartas'}',
-              style: const TextStyle(
-                  fontFamily: 'Cinzel', fontSize: 7, color: Color(0xFF3A4A5A))),
+              style: TextStyle(
+                  fontFamily: 'Cinzel', fontSize: 7, color: war.borde)),
         ],
       ),
     );
@@ -1065,6 +1052,7 @@ class _EnergiesTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final tieneData = farmeoLog.isNotEmpty || rayoCoords.isNotEmpty;
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -1077,21 +1065,21 @@ class _EnergiesTab extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: const Color(0xFF0A1525),
+              color: war.superficie,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFF1A2A3A), width: 1),
+              border: Border.all(color: war.borde.withOpacity(0.5), width: 1),
             ),
-            child: const Column(
+            child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.bolt_outlined, size: 36, color: Color(0xFF2A3A4A)),
-                SizedBox(height: 12),
+                Icon(Icons.bolt_outlined, size: 36, color: war.borde),
+                const SizedBox(height: 12),
                 Text('Sin farmeo este turno.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 11,
-                        color: Color(0xFF506070))),
+                        color: war.textoTenue)),
               ],
             ),
           )
@@ -1115,6 +1103,7 @@ class _RayoBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final n = coords.length;
     final titulo = n > 1 ? 'RAYOS ACTIVOS ($n)' : 'RAYO ACTIVO';
     final detalle = n > 1
@@ -1123,48 +1112,42 @@ class _RayoBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF1A1A0A),
+        color: _cEnergy.withOpacity(0.10),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-            color: const Color(0xFFD4A800).withOpacity(0.5), width: 1),
+        border: Border.all(color: _cEnergy.withOpacity(0.5), width: 1),
       ),
       child: Row(children: [
         const Text('Ø',
             style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFFD4A800))),
+                fontSize: 16, fontWeight: FontWeight.bold, color: _cEnergy)),
         const SizedBox(width: 10),
         Expanded(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(titulo,
-                style: const TextStyle(
+            const Text('RAYO',
+                style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 9,
                     letterSpacing: 2,
-                    color: Color(0xFFD4A800))),
-            Text(detalle,
-                style: const TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 8,
-                    color: Color(0xFF8A8A50))),
+                    color: _cEnergy)),
+            Text(titulo == 'RAYO ACTIVO' ? detalle : '$titulo — $detalle',
+                style: TextStyle(
+                    fontFamily: 'Cinzel', fontSize: 8, color: war.textoTenue)),
           ]),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: const Color(0xFFD4A800).withOpacity(0.15),
+            color: _cEnergy.withOpacity(0.15),
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-                color: const Color(0xFFD4A800).withOpacity(0.4), width: 0.5),
+            border: Border.all(color: _cEnergy.withOpacity(0.4), width: 0.5),
           ),
           child: Text(n > 1 ? '×$n' : (coords.isNotEmpty ? coords.first : '?'),
               style: const TextStyle(
                   fontFamily: 'Cinzel',
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFFD4A800))),
+                  color: _cEnergy)),
         ),
       ]),
     );
@@ -1174,22 +1157,23 @@ class _RayoBanner extends StatelessWidget {
 class _ReglasFarmeoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF080F1A),
+        color: war.fondo,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0xFF1A2A3A), width: 1),
+        border: Border.all(color: war.borde.withOpacity(0.5), width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('REGLAS DE FARMEO',
+          Text('REGLAS DE FARMEO',
               style: TextStyle(
                   fontFamily: 'Cinzel',
                   fontSize: 8,
                   letterSpacing: 2,
-                  color: Color(0xFF506070))),
+                  color: war.textoTenue)),
           const SizedBox(height: 8),
           _ReglaRow(
               icon: '🏴',
@@ -1220,20 +1204,19 @@ class _ReglaRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Row(children: [
       Text(icon, style: const TextStyle(fontSize: 11)),
       const SizedBox(width: 8),
       Expanded(
           child: Text(label,
-              style: const TextStyle(
-                  fontFamily: 'Cinzel',
-                  fontSize: 8,
-                  color: Color(0xFF6A7A8A)))),
+              style: TextStyle(
+                  fontFamily: 'Cinzel', fontSize: 8, color: war.textoTenue))),
       Text(bonus,
           style: const TextStyle(
               fontFamily: 'Cinzel',
               fontSize: 8,
-              color: Color(0xFFD4A800),
+              color: _cEnergy,
               fontWeight: FontWeight.bold)),
     ]);
   }
@@ -1253,6 +1236,7 @@ class _FarmeoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final uid = data['uid'] as String? ?? '';
     final zona = data['zona'] as String?;
     final total = (data['totalEnergies'] as num?)?.toInt() ?? 0;
@@ -1266,12 +1250,11 @@ class _FarmeoTile extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0A1525),
+        color: war.superficie,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-            color: esLocal
-                ? const Color(0xFFD4A800).withOpacity(0.5)
-                : color.withOpacity(0.25),
+            color:
+                esLocal ? _cEnergy.withOpacity(0.5) : color.withOpacity(0.25),
             width: 1),
       ),
       child: Column(
@@ -1301,29 +1284,28 @@ class _FarmeoTile extends StatelessWidget {
                           color: color)),
                   if (esLocal) ...[
                     const SizedBox(width: 6),
-                    const Text('(TÚ)',
+                    Text('(TÚ)',
                         style: TextStyle(
                             fontFamily: 'Cinzel',
                             fontSize: 8,
-                            color: Color(0xFF506070))),
+                            color: war.textoTenue)),
                   ],
                 ]),
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFD4A800).withOpacity(0.15),
+                  color: _cEnergy.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                      color: const Color(0xFFD4A800).withOpacity(0.5),
-                      width: 0.5),
+                  border:
+                      Border.all(color: _cEnergy.withOpacity(0.5), width: 0.5),
                 ),
                 child: Text('+$total Ø',
                     style: const TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFFD4A800))),
+                        color: _cEnergy)),
               ),
             ]),
           ),
@@ -1348,11 +1330,11 @@ class _FarmeoTile extends StatelessWidget {
                       value: suerte,
                       highlight: true),
                 if (contEnemigo == 0 && isla == 0 && rayo == 0 && suerte == 0)
-                  const Text('Sin fuentes de farmeo.',
+                  Text('Sin fuentes de farmeo.',
                       style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 9,
-                          color: Color(0xFF506070))),
+                          color: war.textoTenue)),
               ],
             ),
           ),
@@ -1375,6 +1357,7 @@ class _FarmeoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(children: [
@@ -1382,18 +1365,14 @@ class _FarmeoRow extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
             child: Text(label,
-                style: const TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 9,
-                    color: Color(0xFF8A9AAA)))),
+                style: TextStyle(
+                    fontFamily: 'Cinzel', fontSize: 9, color: war.texto))),
         Text('+$value',
             style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 10,
                 fontWeight: FontWeight.bold,
-                color: highlight
-                    ? const Color(0xFFD4A800)
-                    : const Color(0xFF4ABB58))),
+                color: highlight ? _cEnergy : _cVictoria)),
       ]),
     );
   }
@@ -1417,21 +1396,22 @@ class _MovimientosTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     if (movimientosLog.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: const EdgeInsets.all(32),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.map_outlined, size: 40, color: Color(0xFF2A3A4A)),
-              SizedBox(height: 16),
+              Icon(Icons.map_outlined, size: 40, color: war.borde),
+              const SizedBox(height: 16),
               Text('Sin movimientos registrados.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 11,
-                      color: Color(0xFF506070))),
+                      color: war.textoTenue)),
             ],
           ),
         ),
@@ -1467,6 +1447,7 @@ class _MovimientoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final uid = data['uid'] as String? ?? '';
     final zone = data['zona'] as String?;
     final celdas = Map<String, dynamic>.from(data['celdas'] as Map? ?? {});
@@ -1475,7 +1456,7 @@ class _MovimientoTile extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0A1525),
+        color: war.superficie,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: color.withOpacity(0.3), width: 1),
       ),
@@ -1504,22 +1485,22 @@ class _MovimientoTile extends StatelessWidget {
                       color: color)),
               if (esLocal) ...[
                 const SizedBox(width: 6),
-                const Text('(TÚ)',
+                Text('(TÚ)',
                     style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 8,
-                        color: Color(0xFF506070))),
+                        color: war.textoTenue)),
               ],
             ]),
           ),
           if (celdas.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(12),
+            Padding(
+              padding: const EdgeInsets.all(12),
               child: Text('Sin cartas en el tablero.',
                   style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 9,
-                      color: Color(0xFF506070))),
+                      color: war.textoTenue)),
             )
           else
             Padding(
@@ -1542,16 +1523,16 @@ class _MovimientoTile extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 4, vertical: 3),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF0D1E2E),
+                            color: war.fondo,
                             borderRadius: BorderRadius.circular(3),
                             border: Border.all(
-                                color: const Color(0xFF1A2A3A), width: 0.5),
+                                color: war.borde.withOpacity(0.5), width: 0.5),
                           ),
                           child: Text(coord,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontFamily: 'Cinzel',
                                   fontSize: 8,
-                                  color: Color(0xFFC8A860))),
+                                  color: war.primario)),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
@@ -1572,10 +1553,10 @@ class _MovimientoTile extends StatelessWidget {
                                 child: Row(children: [
                                   Expanded(
                                       child: Text(nombre,
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                               fontFamily: 'Cinzel',
                                               fontSize: 9,
-                                              color: Color(0xFF8A9AAA)),
+                                              color: war.texto),
                                           overflow: TextOverflow.ellipsis)),
                                   const SizedBox(width: 8),
                                   _CardStatRow(
@@ -1607,24 +1588,26 @@ class _StatBadge extends StatelessWidget {
   const _StatBadge(this.label, this.value, {this.highlight = false});
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-        decoration: BoxDecoration(
-          color: highlight ? const Color(0xFF1A3A1A) : const Color(0xFF0D1E2E),
-          borderRadius: BorderRadius.circular(3),
-          border: Border.all(
-              color:
-                  highlight ? const Color(0xFF2A6A2A) : const Color(0xFF1A2A3A),
-              width: 0.5),
-        ),
-        child: Text('$label$value',
-            style: TextStyle(
-                fontFamily: 'Cinzel',
-                fontSize: 8,
-                color: highlight
-                    ? const Color(0xFF4ABB58)
-                    : const Color(0xFF506070))),
-      );
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+      decoration: BoxDecoration(
+        color: highlight ? _cVictoria.withOpacity(0.15) : war.fondo,
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(
+            color: highlight
+                ? _cVictoria.withOpacity(0.5)
+                : war.borde.withOpacity(0.5),
+            width: 0.5),
+      ),
+      child: Text('$label$value',
+          style: TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 8,
+              color: highlight ? _cVictoria : war.textoTenue)),
+    );
+  }
 }
 
 class _CardStatRow extends StatelessWidget {
@@ -1654,9 +1637,7 @@ class _CardStatRow extends StatelessWidget {
             style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 9,
-                color: fuerzaBonus > 0
-                    ? const Color(0xFFFFB84D)
-                    : const Color(0xFFE08040))),
+                color: fuerzaBonus > 0 ? const Color(0xFFFFB84D) : _cFuerza)),
         if (fuerzaBonus > 0)
           Text(' 💪+$fuerzaBonus',
               style: const TextStyle(
@@ -1688,7 +1669,7 @@ class _CardStatRow extends StatelessWidget {
         ] else
           Text('$defensa',
               style: const TextStyle(
-                  fontFamily: 'Cinzel', fontSize: 9, color: Color(0xFF4090D0))),
+                  fontFamily: 'Cinzel', fontSize: 9, color: _cDefensa)),
       ],
     );
   }
@@ -1700,18 +1681,40 @@ class _Badge extends StatelessWidget {
   const _Badge({required this.label, required this.color});
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(3),
-          border: Border.all(color: color.withOpacity(0.4), width: 0.5),
-        ),
-        child: Text(label,
-            style: const TextStyle(
-                fontFamily: 'Cinzel',
-                fontSize: 7,
-                color: Color(0xFFC8A860),
-                letterSpacing: 1)),
-      );
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: color.withOpacity(0.4), width: 0.5),
+      ),
+      child: Text(label,
+          style: TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 7,
+              color: war.primario,
+              letterSpacing: 1)),
+    );
+  }
+}
+
+/// Datos de un turno para el desplegable de historial del informe.
+class _TurnoInforme {
+  final int turno;
+  final List<Map<String, dynamic>> combate;
+  final List<Map<String, dynamic>> mov;
+  final List<Map<String, dynamic>> farmeo;
+  final List<Map<String, dynamic>> acciones;
+  final List<String> rayoCoords;
+
+  const _TurnoInforme({
+    required this.turno,
+    required this.combate,
+    required this.mov,
+    required this.farmeo,
+    required this.acciones,
+    required this.rayoCoords,
+  });
 }

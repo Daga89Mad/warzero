@@ -2,10 +2,10 @@
 
 import 'package:flutter/material.dart';
 import '../models/historia_model.dart';
+import '../services/settings_controller.dart';
 
-/// Visor de una historia: imagen grande arriba con flechas a los lados para
-/// avanzar/retroceder, y la descripción de esa página debajo. Las páginas se
-/// recorren en orden cronológico (ya vienen ordenadas en el modelo).
+/// Visor de una historia: imagen grande arriba con flechas a los lados y la
+/// descripción de esa página debajo.
 class HistoriaDetalleScreen extends StatefulWidget {
   final HistoriaModel historia;
   const HistoriaDetalleScreen({super.key, required this.historia});
@@ -41,35 +41,36 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final total = _paginas.length;
     final pagina = total > 0 ? _paginas[_index] : null;
     final puedeAtras = _index > 0;
     final puedeAdelante = _index < total - 1;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF060E1A),
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF02050D),
-        iconTheme: const IconThemeData(color: Color(0xFFC8A860)),
+        backgroundColor: war.superficie,
+        iconTheme: IconThemeData(color: war.primario),
         title: Text(
           widget.historia.titulo.toUpperCase(),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 14,
             fontFamily: 'Cinzel',
             letterSpacing: 2,
-            color: Color(0xFFC8A860),
+            color: war.primario,
           ),
         ),
       ),
       body: pagina == null
-          ? const Center(
+          ? Center(
               child: Text(
                 'SIN CONTENIDO',
                 style: TextStyle(
                   fontSize: 11,
-                  color: Color(0xFF506070),
+                  color: war.textoTenue,
                   fontFamily: 'Cinzel',
                   letterSpacing: 2,
                 ),
@@ -81,7 +82,6 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                 Expanded(
                   flex: 3,
                   child: GestureDetector(
-                    // Permitir también deslizar para pasar de página.
                     onHorizontalDragEnd: (d) {
                       final v = d.primaryVelocity ?? 0;
                       if (v < -120) {
@@ -99,12 +99,12 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(10),
                               child: Container(
-                                color: const Color(0xFF050C14),
+                                color: war.superficie,
                                 width: double.infinity,
                                 child: pagina.imagen.isEmpty
-                                    ? const Center(
+                                    ? Center(
                                         child: Icon(Icons.image_outlined,
-                                            size: 48, color: Color(0xFF334050)),
+                                            size: 48, color: war.borde),
                                       )
                                     : GestureDetector(
                                         onTap: () => _abrirImagenCompleta(
@@ -112,21 +112,20 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                                         child: Image.network(
                                           pagina.imagen,
                                           fit: BoxFit.contain,
-                                          loadingBuilder: (c, child, p) => p ==
-                                                  null
-                                              ? child
-                                              : const Center(
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    color: Color(0xFFC8A860),
-                                                  ),
-                                                ),
-                                          errorBuilder: (c, e, s) =>
-                                              const Center(
+                                          loadingBuilder: (c, child, p) =>
+                                              p == null
+                                                  ? child
+                                                  : Center(
+                                                      child:
+                                                          CircularProgressIndicator(
+                                                        color: war.primario,
+                                                      ),
+                                                    ),
+                                          errorBuilder: (c, e, s) => Center(
                                             child: Icon(
                                                 Icons.broken_image_outlined,
                                                 size: 48,
-                                                color: Color(0xFF334050)),
+                                                color: war.borde),
                                           ),
                                         ),
                                       ),
@@ -160,9 +159,9 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 6),
                   child: Text(
                     '${_index + 1} / $total',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 11,
-                      color: Color(0xFFC8A860),
+                      color: war.primario,
                       fontFamily: 'Cinzel',
                       letterSpacing: 2,
                     ),
@@ -177,26 +176,18 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                     margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0A1220),
+                      color: war.superficie,
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                          color: const Color(0xFFC8A860).withOpacity(0.20)),
+                      border: Border.all(color: war.primario.withOpacity(0.20)),
                     ),
                     child: SingleChildScrollView(
-                      // Sin esta key, al cambiar de página (_next/_prev) el
-                      // scroll de la descripción conservaba el desplazamiento
-                      // de la página anterior en vez de empezar arriba: si
-                      // habías bajado leyendo una página larga, la siguiente
-                      // entraba ya desplazada y había que subir a mano. La
-                      // key fuerza a Flutter a tratarlo como un scroll nuevo
-                      // (offset 0) cada vez que cambia `_index`.
                       key: ValueKey(_index),
                       child: Text(
                         pagina.descripcion,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
                           height: 1.5,
-                          color: Color(0xFFD8D0BC),
+                          color: war.texto,
                           fontFamily: 'Cinzel',
                         ),
                       ),
@@ -209,14 +200,14 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
   }
 }
 
-/// Visor de la imagen ocupando toda la pantalla. Permite hacer zoom/pan
-/// (InteractiveViewer) y se cierra tocando la imagen o el botón de cerrar.
+/// Visor de la imagen a pantalla completa (siempre sobre negro).
 class _ImagenCompletaScreen extends StatelessWidget {
   final String url;
   const _ImagenCompletaScreen({required this.url});
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -233,9 +224,9 @@ class _ImagenCompletaScreen extends StatelessWidget {
                     fit: BoxFit.contain,
                     loadingBuilder: (c, child, p) => p == null
                         ? child
-                        : const Center(
+                        : Center(
                             child: CircularProgressIndicator(
-                              color: Color(0xFFC8A860),
+                              color: war.primario,
                             ),
                           ),
                     errorBuilder: (c, e, s) => const Center(
@@ -258,13 +249,11 @@ class _ImagenCompletaScreen extends StatelessWidget {
                   height: 38,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xCC02050D),
+                    color: Colors.black.withOpacity(0.8),
                     border: Border.all(
-                        color: const Color(0xFFC8A860).withOpacity(0.5),
-                        width: 1),
+                        color: war.primario.withOpacity(0.5), width: 1),
                   ),
-                  child: const Icon(Icons.close,
-                      size: 20, color: Color(0xFFC8A860)),
+                  child: Icon(Icons.close, size: 20, color: war.primario),
                 ),
               ),
             ),
@@ -289,6 +278,7 @@ class _NavArrow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Opacity(
       opacity: enabled ? 1 : 0.25,
       child: GestureDetector(
@@ -297,12 +287,11 @@ class _NavArrow extends StatelessWidget {
           width: 40,
           height: 56,
           decoration: BoxDecoration(
-            color: const Color(0xCC02050D),
+            color: war.superficie.withOpacity(0.85),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-                color: const Color(0xFFC8A860).withOpacity(0.5), width: 1),
+            border: Border.all(color: war.primario.withOpacity(0.5), width: 1),
           ),
-          child: Icon(icon, color: const Color(0xFFC8A860), size: 30),
+          child: Icon(icon, color: war.primario, size: 30),
         ),
       ),
     );

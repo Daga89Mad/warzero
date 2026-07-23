@@ -1,9 +1,15 @@
-// lib/views/revision_turno_screen.dart
-
 import 'package:flutter/material.dart';
 import '../models/board_state.dart';
 import '../models/game_config.dart';
+import '../services/settings_controller.dart';
 import '../widgets/cell_widget.dart' show kObeliscoCoords, ownerColor;
+
+// Colores de EVENTO / bando (lenguaje del juego, fijos en cualquier tema).
+const _cCombate = Color(0xFFC04040);
+const _cAccion = Color(0xFF40C0FF);
+const _cConquista = Color(0xFFE8C870);
+const _cMovRival = Color(0xFFE0C040);
+const _cRayo = Color(0xFFD4A800);
 
 /// Pantalla intermedia que se muestra tras cerrar el informe de batalla.
 ///
@@ -125,6 +131,7 @@ class RevisionTurnoScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final combate = _combateCoords();
     final conquista = _conquistaCoords();
     final accion = _accionCoords();
@@ -132,7 +139,7 @@ class RevisionTurnoScreen extends StatelessWidget {
     final turno = (historialEntry['turno'] as num?)?.toInt() ?? 0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF050D18),
+      backgroundColor: war.fondo,
       body: SafeArea(
         child: Column(
           children: [
@@ -215,11 +222,12 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 8, 8, 10),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         border: Border(
-          bottom: BorderSide(color: Color(0x40503214), width: 1),
+          bottom: BorderSide(color: war.borde.withOpacity(0.5), width: 1),
         ),
       ),
       child: Row(
@@ -228,23 +236,23 @@ class _TopBar extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
+                Text(
                   'REVISIÓN DEL TURNO',
                   style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     letterSpacing: 2,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   'Turno $turno • Eventos del campo de batalla',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 8,
-                    color: Color(0xFF506070),
+                    color: war.textoTenue,
                     letterSpacing: 1.5,
                   ),
                 ),
@@ -256,27 +264,26 @@ class _TopBar extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: const Color(0xFFC8A860).withOpacity(0.14),
+                color: war.primario.withOpacity(0.14),
                 borderRadius: BorderRadius.circular(5),
-                border: Border.all(
-                    color: const Color(0xFFC8A860).withOpacity(0.55), width: 1),
+                border:
+                    Border.all(color: war.primario.withOpacity(0.55), width: 1),
                 boxShadow: [
                   BoxShadow(
-                      color: const Color(0xFFC8A860).withOpacity(0.25),
-                      blurRadius: 10),
+                      color: war.primario.withOpacity(0.25), blurRadius: 10),
                 ],
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.play_arrow, size: 13, color: Color(0xFFC8A860)),
-                  SizedBox(width: 5),
+                  Icon(Icons.play_arrow, size: 13, color: war.primario),
+                  const SizedBox(width: 5),
                   Text(
                     'EMPEZAR TURNO',
                     style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 9,
-                      color: Color(0xFFC8A860),
+                      color: war.primario,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1.5,
                     ),
@@ -309,15 +316,16 @@ class _Legend extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     if (!combate && !accion && !movRival && !conquista) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 6),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(
           'Sin eventos relevantes este turno',
           style: TextStyle(
             fontFamily: 'Cinzel',
             fontSize: 8,
-            color: Color(0xFF506070),
+            color: war.textoTenue,
             letterSpacing: 1,
           ),
         ),
@@ -333,24 +341,24 @@ class _Legend extends StatelessWidget {
         children: [
           if (movRival)
             const _LegendChip(
-              color: Color(0xFFE0C040),
+              color: _cMovRival,
               label: 'MOV. RIVAL',
               filled: true,
             ),
           if (combate)
             const _LegendChip(
-              color: Color(0xFFC04040),
+              color: _cCombate,
               label: 'COMBATE',
             ),
           if (accion)
             const _LegendChip(
-              color: Color(0xFF40C0FF),
+              color: _cAccion,
               label: 'ACCIÓN / HABILIDAD',
               icon: Icons.flash_on,
             ),
           if (conquista)
             const _LegendChip(
-              color: Color(0xFFE8C870),
+              color: _cConquista,
               label: 'CONQUISTA',
               icon: Icons.castle,
             ),
@@ -451,6 +459,7 @@ class _MiniBoard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Column(
       children: [
         // ── Header: etiquetas de columna ──
@@ -465,10 +474,10 @@ class _MiniBoard extends StatelessWidget {
                   child: Center(
                     child: Text(
                       '${config.colLabels[c]}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 8,
-                        color: Color(0xFF506070),
+                        color: war.textoTenue,
                         letterSpacing: 1,
                       ),
                     ),
@@ -488,10 +497,10 @@ class _MiniBoard extends StatelessWidget {
                   child: Center(
                     child: Text(
                       config.rowLabels[r],
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 8,
-                        color: Color(0xFF506070),
+                        color: war.textoTenue,
                         letterSpacing: 1,
                       ),
                     ),
@@ -584,62 +593,59 @@ class _MiniCell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final cartas = boardState.getCelda(coord).cartas;
     final tieneCartas = cartas.isNotEmpty;
     final isRayo = boardState.esRayo(coord); // ← rayo de farmeo
 
     // ── Color de fondo base ──────────────────────────────────
-    Color bgColor = const Color(0xFF0A1525);
+    Color bgColor = war.superficie;
     if (isObelisco) {
       bgColor = isLocalObelisco
-          ? const Color(0xFF1A1A0A) // dorado oscuro
-          : const Color(0xFF1A0A0A); // rojo oscuro
+          ? war.primario.withOpacity(0.12) // dorado tenue (cuartel propio)
+          : _cCombate.withOpacity(0.12); // rojo tenue (cuartel rival)
     }
     if (isRayo && !isObelisco && !isMovRival) {
-      bgColor = const Color(0xFFD4A800).withOpacity(0.14); // tinte dorado rayo
+      bgColor = _cRayo.withOpacity(0.14); // tinte dorado rayo
     }
     if (isMovRival) {
       // Amarillo translúcido (prioritario sobre el fondo de obelisco).
-      bgColor = const Color(0xFFE0C040).withOpacity(0.22);
+      bgColor = _cMovRival.withOpacity(0.22);
     }
 
     // ── Borde principal por prioridad ────────────────────────
-    Color borderColor = const Color(0x20503214);
+    Color borderColor = war.borde.withOpacity(0.4);
     double borderWidth = 0.5;
     List<BoxShadow> shadows = const [];
 
     if (isConquista) {
-      borderColor = const Color(0xFFE8C870);
+      borderColor = _cConquista;
       borderWidth = 2.0;
       shadows = [
-        BoxShadow(
-            color: const Color(0xFFE8C870).withOpacity(0.55), blurRadius: 10),
+        BoxShadow(color: _cConquista.withOpacity(0.55), blurRadius: 10),
       ];
     } else if (isCombate) {
-      borderColor = const Color(0xFFC04040);
+      borderColor = _cCombate;
       borderWidth = 1.8;
       shadows = [
-        BoxShadow(
-            color: const Color(0xFFC04040).withOpacity(0.50), blurRadius: 8),
+        BoxShadow(color: _cCombate.withOpacity(0.50), blurRadius: 8),
       ];
     } else if (isAccion) {
-      borderColor = const Color(0xFF40C0FF);
+      borderColor = _cAccion;
       borderWidth = 1.4;
       shadows = [
-        BoxShadow(
-            color: const Color(0xFF40C0FF).withOpacity(0.35), blurRadius: 6),
+        BoxShadow(color: _cAccion.withOpacity(0.35), blurRadius: 6),
       ];
     } else if (isRayo) {
-      borderColor = const Color(0xFFD4A800);
+      borderColor = _cRayo;
       borderWidth = 1.6;
       shadows = [
-        BoxShadow(
-            color: const Color(0xFFD4A800).withOpacity(0.45), blurRadius: 8),
+        BoxShadow(color: _cRayo.withOpacity(0.45), blurRadius: 8),
       ];
     } else if (isObelisco) {
       borderColor = isLocalObelisco
-          ? const Color(0xFFC8A860).withOpacity(0.45)
-          : const Color(0xFFC04040).withOpacity(0.45);
+          ? war.primario.withOpacity(0.45)
+          : _cCombate.withOpacity(0.45);
       borderWidth = 1.0;
     }
 
@@ -664,7 +670,7 @@ class _MiniCell extends StatelessWidget {
               style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 6,
-                color: Color.lerp(borderColor, const Color(0xFF506070), 0.4)!,
+                color: Color.lerp(borderColor, war.textoTenue, 0.4)!,
                 letterSpacing: 0.3,
               ),
             ),
@@ -674,14 +680,14 @@ class _MiniCell extends StatelessWidget {
             const Positioned(
               top: 2,
               right: 2,
-              child: Icon(Icons.castle, size: 10, color: Color(0xFFE8C870)),
+              child: Icon(Icons.castle, size: 10, color: _cConquista),
             ),
           // Icono de acción (si no hay conquista para no chocar)
           if (isAccion && !isConquista)
             const Positioned(
               top: 2,
               right: 2,
-              child: Icon(Icons.flash_on, size: 9, color: Color(0xFF40C0FF)),
+              child: Icon(Icons.flash_on, size: 9, color: _cAccion),
             ),
           // Icono del rayo de farmeo (abajo-derecha, para no chocar con los de arriba)
           if (isRayo)
@@ -762,10 +768,10 @@ class _CardDots extends StatelessWidget {
             padding: const EdgeInsets.only(left: 2),
             child: Text(
               '+$extras',
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 6,
-                color: Color(0xFFB0A090),
+                color: context.war.textoTenue,
                 fontWeight: FontWeight.bold,
               ),
             ),

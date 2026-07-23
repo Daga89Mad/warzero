@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart';
 import '../services/warzero_api.dart';
+import '../services/settings_controller.dart';
 
 // ─────────────────────────────────────────────────────────────
 // MAZO SCREEN  (gestión de mazos por ejército)
@@ -96,9 +97,6 @@ class _MazoScreenState extends State<MazoScreen> {
       _error = false;
     });
     try {
-      // Vía API (sin Firestore realtime, que se cuelga en Android tras la
-      // partida). El servidor devuelve ejércitos + catálogo + perfiles de mazo
-      // en una sola llamada con timeout, así nunca se queda colgado.
       final data = await _api.obtenerMisMazos(_uid);
 
       final ejercitos = ((data['ejercitos'] as List?) ?? [])
@@ -128,22 +126,16 @@ class _MazoScreenState extends State<MazoScreen> {
     }
   }
 
-  /// Reintento del botón de error.
   Future<void> _retry() => _loadData();
 
-  // ── Mazos del ejército activo ─────────────────────────────
   List<_MazoPerfil> get _mazosDelEjercito =>
       _mazos.where((m) => m.ejercitoId == _selectedEjercitoId).toList();
 
-  // ── Cartas del ejército activo ────────────────────────────
-  // Evolución y Especial (generales) no se pueden añadir a un mazo: la
-  // Especial solo se obtiene comprándola en el cuartel.
   List<CartaModel> get _cartasDelEjercito => _todasLasCartas
       .where((c) =>
           c.ejercito == _selectedEjercitoId && !c.esEvolucion && !c.esEspecial)
       .toList();
 
-  // ── Crear mazo vacío ──────────────────────────────────────
   Future<void> _crearMazo() async {
     if (_mazosDelEjercito.length >= 3) {
       _showToast('Máximo 3 mazos por ejército');
@@ -172,7 +164,6 @@ class _MazoScreenState extends State<MazoScreen> {
     await _loadData();
   }
 
-  // ── Eliminar mazo ─────────────────────────────────────────
   Future<void> _eliminarMazo(_MazoPerfil mazo) async {
     final confirm = await _showConfirmDialog(
         '¿Eliminar "${mazo.nombre}"?', 'Esta acción no se puede deshacer.');
@@ -185,16 +176,10 @@ class _MazoScreenState extends State<MazoScreen> {
         .doc(mazo.id)
         .delete();
 
-    // Quitar el mazo eliminado del estado local ANTES de continuar. Si no lo
-    // hacemos, `_setPrincipal` recorre `_mazosDelEjercito` (que todavía
-    // incluye el mazo recién borrado, porque `_loadData()` aún no se ha
-    // vuelto a llamar) e intenta hacer `update()` sobre un documento que ya
-    // no existe → cloud_firestore/not-found.
     setState(() {
       _mazos = _mazos.where((m) => m.id != mazo.id).toList();
     });
 
-    // Si era principal, promover el siguiente
     if (mazo.esPrincipal) {
       final resto = _mazosDelEjercito;
       if (resto.isNotEmpty) {
@@ -204,17 +189,14 @@ class _MazoScreenState extends State<MazoScreen> {
     await _loadData();
   }
 
-  // ── Marcar como principal ─────────────────────────────────
   Future<void> _setPrincipal(_MazoPerfil mazo) async {
     final batch = _db.batch();
-    // Desmarcar todos del ejército
     for (final m in _mazosDelEjercito) {
       batch.update(
         _db.collection('Jugadores').doc(_uid).collection('Mazos').doc(m.id),
         {'esPrincipal': false},
       );
     }
-    // Marcar el elegido
     batch.update(
       _db.collection('Jugadores').doc(_uid).collection('Mazos').doc(mazo.id),
       {'esPrincipal': true},
@@ -223,7 +205,6 @@ class _MazoScreenState extends State<MazoScreen> {
     await _loadData();
   }
 
-  // ── Editar mazo (nombre) ──────────────────────────────────
   Future<void> _renombrarMazo(_MazoPerfil mazo) async {
     final nombre = await _showNombreDialog('RENOMBRAR MAZO', mazo.nombre);
     if (nombre == null) return;
@@ -236,7 +217,6 @@ class _MazoScreenState extends State<MazoScreen> {
     await _loadData();
   }
 
-  // ── Abrir constructor de mazo ─────────────────────────────
   void _openBuilder(_MazoPerfil mazo) {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => _DeckBuilderScreen(
@@ -249,60 +229,59 @@ class _MazoScreenState extends State<MazoScreen> {
   }
 
   void _showToast(String msg) {
+    final war = context.war;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content:
           Text(msg, style: const TextStyle(fontFamily: 'Cinzel', fontSize: 10)),
-      backgroundColor: const Color(0xFF1A1408),
+      backgroundColor: war.superficie,
       behavior: SnackBarBehavior.floating,
       duration: const Duration(seconds: 2),
     ));
   }
 
   Future<String?> _showNombreDialog(String title, String initialValue) async {
+    final war = context.war;
     final ctrl = TextEditingController(text: initialValue);
     return showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF080D18),
+        backgroundColor: war.superficie,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
-          side: const BorderSide(color: Color(0x405A4820)),
+          side: BorderSide(color: war.borde.withOpacity(0.4)),
         ),
         title: Text(title,
-            style: const TextStyle(
+            style: TextStyle(
               fontSize: 13,
-              color: Color(0xFFC8A860),
+              color: war.primario,
               fontFamily: 'Cinzel',
               letterSpacing: 2,
             )),
         content: TextField(
           controller: ctrl,
           autofocus: true,
-          style:
-              const TextStyle(color: Color(0xFFD0B870), fontFamily: 'Cinzel'),
+          style: TextStyle(color: war.texto, fontFamily: 'Cinzel'),
           decoration: InputDecoration(
-            enabledBorder: const OutlineInputBorder(
-              borderSide: BorderSide(color: Color(0x40503214)),
+            enabledBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: war.borde.withOpacity(0.4)),
             ),
-            focusedBorder: const OutlineInputBorder(
-              borderSide: BorderSide(color: Color(0xFFC8A860)),
+            focusedBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: war.primario),
             ),
-            fillColor: const Color(0xFF050A14),
+            fillColor: war.fondo,
             filled: true,
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: const Text('CANCELAR',
-                style:
-                    TextStyle(color: Color(0xFF506070), fontFamily: 'Cinzel')),
+            child: Text('CANCELAR',
+                style: TextStyle(color: war.textoTenue, fontFamily: 'Cinzel')),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
-            child: const Text('ACEPTAR',
-                style:
-                    TextStyle(color: Color(0xFFC8A860), fontFamily: 'Cinzel')),
+            child: Text('ACEPTAR',
+                style: TextStyle(color: war.primario, fontFamily: 'Cinzel')),
           ),
         ],
       ),
@@ -310,32 +289,31 @@ class _MazoScreenState extends State<MazoScreen> {
   }
 
   Future<bool> _showConfirmDialog(String title, String body) async {
+    final war = context.war;
     final result = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF080D18),
+        backgroundColor: war.superficie,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(8),
-          side: const BorderSide(color: Color(0x405A4820)),
+          side: BorderSide(color: war.borde.withOpacity(0.4)),
         ),
         title: Text(title,
-            style: const TextStyle(
-                fontSize: 13, color: Color(0xFFC8A860), fontFamily: 'Cinzel')),
+            style: TextStyle(
+                fontSize: 13, color: war.primario, fontFamily: 'Cinzel')),
         content: Text(body,
-            style: const TextStyle(
-                fontSize: 10, color: Color(0xFF506070), fontFamily: 'Cinzel')),
+            style: TextStyle(
+                fontSize: 10, color: war.textoTenue, fontFamily: 'Cinzel')),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('CANCELAR',
-                style:
-                    TextStyle(color: Color(0xFF506070), fontFamily: 'Cinzel')),
+            child: Text('CANCELAR',
+                style: TextStyle(color: war.textoTenue, fontFamily: 'Cinzel')),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('ELIMINAR',
-                style:
-                    TextStyle(color: Color(0xFFC04040), fontFamily: 'Cinzel')),
+            child: Text('ELIMINAR',
+                style: TextStyle(color: war.error, fontFamily: 'Cinzel')),
           ),
         ],
       ),
@@ -345,16 +323,17 @@ class _MazoScreenState extends State<MazoScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Scaffold(
-      backgroundColor: const Color(0xFF030810),
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF02050D),
+        backgroundColor: war.superficie,
         elevation: 0,
-        title: const Text(
+        title: Text(
           'MIS MAZOS',
           style: TextStyle(
             fontSize: 15,
-            color: Color(0xFFC8A860),
+            color: war.primario,
             fontFamily: 'Cinzel',
             letterSpacing: 4,
             fontWeight: FontWeight.bold,
@@ -362,23 +341,18 @@ class _MazoScreenState extends State<MazoScreen> {
         ),
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(color: Color(0xFFC8A860)))
+          ? Center(child: CircularProgressIndicator(color: war.primario))
           : _error
               ? _MazosErrorState(onRetry: _retry)
               : Column(
                   children: [
-                    // ── Selector de ejército ──
                     _EjercitoTabs(
                       ejercitos: _ejercitos,
                       selected: _selectedEjercitoId,
                       onSelect: (id) =>
                           setState(() => _selectedEjercitoId = id),
                     ),
-
-                    const Divider(color: Color(0x20C8A860), height: 1),
-
-                    // ── Lista de mazos ──
+                    Divider(color: war.primario.withOpacity(0.12), height: 1),
                     Expanded(
                       child: _MazoList(
                         mazos: _mazosDelEjercito,
@@ -405,30 +379,29 @@ class _MazosErrorState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.cloud_off, size: 40, color: Color(0xFF7A4040)),
+          Icon(Icons.cloud_off, size: 40, color: war.error),
           const SizedBox(height: 12),
-          const Text('No se pudieron cargar los mazos.',
+          Text('No se pudieron cargar los mazos.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  color: Color(0xFF8A9AAA),
-                  fontFamily: 'Cinzel',
-                  fontSize: 11)),
+                  color: war.texto, fontFamily: 'Cinzel', fontSize: 11)),
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: onRetry,
-            icon: const Icon(Icons.refresh, size: 16, color: Color(0xFFC8A860)),
-            label: const Text('REINTENTAR',
+            icon: Icon(Icons.refresh, size: 16, color: war.primario),
+            label: Text('REINTENTAR',
                 style: TextStyle(
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     fontFamily: 'Cinzel',
                     fontSize: 10,
                     letterSpacing: 1.5)),
             style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Color(0x55C8A860)),
+              side: BorderSide(color: war.primario.withOpacity(0.35)),
             ),
           ),
         ],
@@ -453,8 +426,9 @@ class _EjercitoTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Container(
-      color: const Color(0xFF02050D),
+      color: war.superficie,
       height: 56,
       child: ListView(
         scrollDirection: Axis.horizontal,
@@ -468,14 +442,13 @@ class _EjercitoTabs extends StatelessWidget {
               margin: const EdgeInsets.only(right: 8),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
-                color: sel
-                    ? const Color(0xFFC8A860).withOpacity(0.14)
-                    : Colors.transparent,
+                color:
+                    sel ? war.primario.withOpacity(0.14) : Colors.transparent,
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(
                   color: sel
-                      ? const Color(0xFFC8A860).withOpacity(0.5)
-                      : const Color(0x30506070),
+                      ? war.primario.withOpacity(0.5)
+                      : war.borde.withOpacity(0.3),
                   width: 1,
                 ),
               ),
@@ -490,9 +463,7 @@ class _EjercitoTabs extends StatelessWidget {
                       fontSize: 9,
                       fontFamily: 'Cinzel',
                       letterSpacing: 1,
-                      color: sel
-                          ? const Color(0xFFC8A860)
-                          : const Color(0xFF506070),
+                      color: sel ? war.primario : war.textoTenue,
                       fontWeight: sel ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
@@ -533,7 +504,6 @@ class _MazoList extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        // Mazos existentes
         ...mazos.map((m) => _MazoCard(
               mazo: m,
               onEdit: () => onEdit(m),
@@ -541,8 +511,6 @@ class _MazoList extends StatelessWidget {
               onDelete: () => onDelete(m),
               onSetPrincipal: () => onSetPrincipal(m),
             )),
-
-        // Slots vacíos
         for (int i = mazos.length; i < 3; i++)
           _EmptySlot(
             slotNumber: i + 1,
@@ -574,8 +542,9 @@ class _MazoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent =
-        mazo.esPrincipal ? const Color(0xFFC8A860) : const Color(0xFF4060A8);
+    final war = context.war;
+    // Principal → dorado del tema; secundario → azul semántico.
+    final accent = mazo.esPrincipal ? war.primario : const Color(0xFF4060A8);
 
     return GestureDetector(
       onTap: onEdit,
@@ -583,7 +552,7 @@ class _MazoCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF080D18),
+          color: war.superficie,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: accent.withOpacity(mazo.esPrincipal ? 0.45 : 0.25),
@@ -592,7 +561,7 @@ class _MazoCard extends StatelessWidget {
           boxShadow: mazo.esPrincipal
               ? [
                   BoxShadow(
-                    color: const Color(0xFFC8A860).withOpacity(0.06),
+                    color: war.primario.withOpacity(0.06),
                     blurRadius: 12,
                   )
                 ]
@@ -601,13 +570,12 @@ class _MazoCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 if (mazo.esPrincipal)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 6),
-                    child: Icon(Icons.star, size: 14, color: Color(0xFFC8A860)),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: Icon(Icons.star, size: 14, color: war.primario),
                   ),
                 Expanded(
                   child: Text(
@@ -615,9 +583,7 @@ class _MazoCard extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
-                      color: mazo.esPrincipal
-                          ? const Color(0xFFD0B870)
-                          : const Color(0xFF8A7858),
+                      color: mazo.esPrincipal ? war.primario : war.texto,
                       fontFamily: 'Cinzel',
                       letterSpacing: 1,
                     ),
@@ -628,32 +594,29 @@ class _MazoCard extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFC8A860).withOpacity(0.12),
+                      color: war.primario.withOpacity(0.12),
                       borderRadius: BorderRadius.circular(3),
                       border: Border.all(
-                          color: const Color(0xFFC8A860).withOpacity(0.3),
-                          width: 1),
+                          color: war.primario.withOpacity(0.3), width: 1),
                     ),
-                    child: const Text(
+                    child: Text(
                       'PRINCIPAL',
                       style: TextStyle(
                         fontSize: 7,
-                        color: Color(0xFFC8A860),
+                        color: war.primario,
                         fontFamily: 'Cinzel',
                         letterSpacing: 1.5,
                       ),
                     ),
                   ),
                 const SizedBox(width: 8),
-                // Menú contextual
                 PopupMenuButton<String>(
-                  color: const Color(0xFF0A1220),
+                  color: war.superficie,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(6),
-                    side: const BorderSide(color: Color(0x305A4820)),
+                    side: BorderSide(color: war.borde.withOpacity(0.3)),
                   ),
-                  icon: const Icon(Icons.more_vert,
-                      size: 16, color: Color(0xFF506070)),
+                  icon: Icon(Icons.more_vert, size: 16, color: war.textoTenue),
                   onSelected: (v) {
                     switch (v) {
                       case 'editar':
@@ -671,22 +634,20 @@ class _MazoCard extends StatelessWidget {
                     }
                   },
                   itemBuilder: (_) => [
-                    _popupItem('editar', Icons.edit, 'Editar cartas',
-                        const Color(0xFFC8A860)),
-                    _popupItem('renombrar', Icons.title, 'Renombrar',
-                        const Color(0xFF9A8060)),
+                    _popupItem(context, 'editar', Icons.edit, 'Editar cartas',
+                        war.primario),
+                    _popupItem(context, 'renombrar', Icons.title, 'Renombrar',
+                        war.texto),
                     if (!mazo.esPrincipal)
-                      _popupItem('principal', Icons.star_outline,
-                          'Marcar como principal', const Color(0xFF4ABB58)),
-                    _popupItem('eliminar', Icons.delete_outline, 'Eliminar',
-                        const Color(0xFFC04040)),
+                      _popupItem(context, 'principal', Icons.star_outline,
+                          'Marcar como principal', war.secundario),
+                    _popupItem(context, 'eliminar', Icons.delete_outline,
+                        'Eliminar', war.error),
                   ],
                 ),
               ],
             ),
             const SizedBox(height: 8),
-
-            // Stats
             Row(
               children: [
                 _StatChip(
@@ -708,8 +669,8 @@ class _MazoCard extends StatelessWidget {
     );
   }
 
-  PopupMenuItem<String> _popupItem(
-      String value, IconData icon, String label, Color color) {
+  PopupMenuItem<String> _popupItem(BuildContext context, String value,
+      IconData icon, String label, Color color) {
     return PopupMenuItem(
       value: value,
       child: Row(
@@ -746,6 +707,7 @@ class _EmptySlot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return GestureDetector(
       onTap: canAdd ? onAdd : null,
       child: Container(
@@ -754,24 +716,25 @@ class _EmptySlot extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color: canAdd ? const Color(0x40C8A860) : const Color(0x20506070),
+            color: canAdd
+                ? war.primario.withOpacity(0.25)
+                : war.borde.withOpacity(0.2),
             width: 1,
-            // Simular línea punteada con opacidad baja
           ),
         ),
         child: Center(
           child: canAdd
               ? Row(
                   mainAxisSize: MainAxisSize.min,
-                  children: const [
+                  children: [
                     Icon(Icons.add_circle_outline,
-                        size: 16, color: Color(0xFF7A6040)),
-                    SizedBox(width: 8),
+                        size: 16, color: war.textoTenue),
+                    const SizedBox(width: 8),
                     Text(
                       'CREAR NUEVO MAZO',
                       style: TextStyle(
                         fontSize: 10,
-                        color: Color(0xFF7A6040),
+                        color: war.textoTenue,
                         fontFamily: 'Cinzel',
                         letterSpacing: 2,
                       ),
@@ -780,9 +743,9 @@ class _EmptySlot extends StatelessWidget {
                 )
               : Text(
                   'SLOT $slotNumber — BLOQUEADO',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 9,
-                    color: Color(0xFF2A3040),
+                    color: war.borde,
                     fontFamily: 'Cinzel',
                     letterSpacing: 2,
                   ),
@@ -852,11 +815,9 @@ class _DeckBuilderScreen extends StatefulWidget {
 
 class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
   final _db = FirebaseFirestore.instance;
-  late Map<String, int>
-      _cantidades; // cartaId → seleccionada (0 o 1, sin duplicados)
+  late Map<String, int> _cantidades;
   bool _saving = false;
 
-  /// Límite de cartas por mazo.
   static const int _maxCartasMazo = 8;
 
   int get _total => _cantidades.values.fold(0, (s, v) => s + v);
@@ -864,8 +825,6 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
   @override
   void initState() {
     super.initState();
-    // Inicializar con 0 y marcar las guardadas (máximo 1 por carta: sin
-    // duplicados, aunque un mazo antiguo tuviera 2 copias).
     _cantidades = {for (final c in widget.cartasDisponibles) c.id: 0};
     for (final id in widget.mazo.cartaIds) {
       if (_cantidades.containsKey(id)) _cantidades[id] = 1;
@@ -873,8 +832,6 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
   }
 
   Future<void> _save() async {
-    // Defensa: no permitir guardar mazos con más de 8 cartas (p. ej. mazos
-    // antiguos creados antes del límite).
     if (_total > _maxCartasMazo) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -909,13 +866,10 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
 
   void _toggle(String cartaId) {
     final current = _cantidades[cartaId] ?? 0;
-    // Sin duplicados: cada carta solo puede seleccionarse una vez.
-    // Si ya está seleccionada → quitarla.
     if (current >= 1) {
       setState(() => _cantidades[cartaId] = 0);
       return;
     }
-    // Añadir: respetar el límite de cartas del mazo.
     if (_total >= _maxCartasMazo) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
@@ -930,28 +884,29 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Scaffold(
-      backgroundColor: const Color(0xFF030810),
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF02050D),
+        backgroundColor: war.superficie,
         elevation: 0,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
               widget.mazo.nombre.toUpperCase(),
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
-                color: Color(0xFFC8A860),
+                color: war.primario,
                 fontFamily: 'Cinzel',
                 letterSpacing: 2,
               ),
             ),
             Text(
               '$_total / $_maxCartasMazo cartas',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
-                color: Color(0xFF506070),
+                color: war.textoTenue,
                 fontFamily: 'Cinzel',
               ),
             ),
@@ -964,22 +919,22 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
               margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFFC8A860).withOpacity(0.14),
+                color: war.primario.withOpacity(0.14),
                 borderRadius: BorderRadius.circular(4),
-                border: Border.all(
-                    color: const Color(0xFFC8A860).withOpacity(0.4), width: 1),
+                border:
+                    Border.all(color: war.primario.withOpacity(0.4), width: 1),
               ),
               child: _saving
-                  ? const SizedBox(
+                  ? SizedBox(
                       width: 14,
                       height: 14,
                       child: CircularProgressIndicator(
-                          color: Color(0xFFC8A860), strokeWidth: 2))
-                  : const Text(
+                          color: war.primario, strokeWidth: 2))
+                  : Text(
                       'GUARDAR',
                       style: TextStyle(
                         fontSize: 10,
-                        color: Color(0xFFC8A860),
+                        color: war.primario,
                         fontFamily: 'Cinzel',
                         letterSpacing: 2,
                         fontWeight: FontWeight.bold,
@@ -990,11 +945,11 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
         ],
       ),
       body: widget.cartasDisponibles.isEmpty
-          ? const Center(
+          ? Center(
               child: Text(
                 'No hay cartas para este ejército.',
                 style: TextStyle(
-                  color: Color(0xFF506070),
+                  color: war.textoTenue,
                   fontFamily: 'Cinzel',
                   fontSize: 11,
                 ),
@@ -1036,17 +991,16 @@ class _CardPickerTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final selected = qty > 0;
-    final accent = selected ? const Color(0xFFC8A860) : const Color(0xFF2A3040);
+    final accent = selected ? war.primario : war.borde;
 
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFFC8A860).withOpacity(0.07)
-              : const Color(0xFF080D18),
+          color: selected ? war.primario.withOpacity(0.07) : war.superficie,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: accent.withOpacity(selected ? 0.50 : 0.18),
@@ -1057,7 +1011,6 @@ class _CardPickerTile extends StatelessWidget {
           padding: const EdgeInsets.all(8),
           child: Column(
             children: [
-              // Fuerza
               Align(
                 alignment: Alignment.topLeft,
                 child: Text(
@@ -1072,8 +1025,6 @@ class _CardPickerTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-
-              // Arte placeholder
               Expanded(
                 child: Center(
                   child: carta.imagen.isNotEmpty
@@ -1088,10 +1039,7 @@ class _CardPickerTile extends StatelessWidget {
                           size: 32, color: accent.withOpacity(0.5)),
                 ),
               ),
-
               const SizedBox(height: 6),
-
-              // Nombre
               Text(
                 carta.nombre,
                 maxLines: 2,
@@ -1099,16 +1047,12 @@ class _CardPickerTile extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 7,
-                  color: selected
-                      ? const Color(0xFFD0B870)
-                      : const Color(0xFF506070),
+                  color: selected ? war.texto : war.textoTenue,
                   fontFamily: 'Cinzel',
                   letterSpacing: 0.5,
                 ),
               ),
               const SizedBox(height: 6),
-
-              // Seleccionada (sin duplicados: un solo indicador)
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: List.generate(1, (i) {
@@ -1119,13 +1063,13 @@ class _CardPickerTile extends StatelessWidget {
                     height: 8,
                     decoration: BoxDecoration(
                       color: filled
-                          ? const Color(0xFFC8A860).withOpacity(0.70)
-                          : const Color(0xFF1A2030),
+                          ? war.primario.withOpacity(0.70)
+                          : war.borde.withOpacity(0.3),
                       borderRadius: BorderRadius.circular(2),
                       border: Border.all(
                           color: filled
-                              ? const Color(0xFFC8A860).withOpacity(0.4)
-                              : const Color(0x20506070),
+                              ? war.primario.withOpacity(0.4)
+                              : war.borde.withOpacity(0.2),
                           width: 0.5),
                     ),
                   );

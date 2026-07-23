@@ -44,28 +44,46 @@ class LobbyJugador {
       );
 }
 
-// ── Stats de partida por jugador (energies, PC) ───────────────
+/// ── Stats de partida por jugador (energies, PC, victorias/derrotas) ──
 class StatsPartidaJugador {
   final int energies;
   final int pc;
+  final int victorias; // victorias POR COMBATE en esta partida
+  final int derrotas; // derrotas POR COMBATE en esta partida
 
-  const StatsPartidaJugador({this.energies = 0, this.pc = 0});
+  const StatsPartidaJugador({
+    this.energies = 0,
+    this.pc = 0,
+    this.victorias = 0,
+    this.derrotas = 0,
+  });
 
   factory StatsPartidaJugador.fromMap(Map<String, dynamic> d) =>
       StatsPartidaJugador(
         energies: (d['energies'] as num?)?.toInt() ?? 0,
         pc: (d['pc'] as num?)?.toInt() ?? 0,
+        victorias: (d['victorias'] as num?)?.toInt() ?? 0,
+        derrotas: (d['derrotas'] as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toMap() => {
         'energies': energies,
         'pc': pc,
+        'victorias': victorias,
+        'derrotas': derrotas,
       };
 
-  StatsPartidaJugador sumar({required int energies, required int pc}) =>
+  StatsPartidaJugador sumar({
+    int energies = 0,
+    int pc = 0,
+    int victorias = 0,
+    int derrotas = 0,
+  }) =>
       StatsPartidaJugador(
         energies: this.energies + energies,
         pc: this.pc + pc,
+        victorias: this.victorias + victorias,
+        derrotas: this.derrotas + derrotas,
       );
 }
 

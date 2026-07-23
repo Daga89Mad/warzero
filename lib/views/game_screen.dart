@@ -24,6 +24,7 @@ import '../models/habilidad_model.dart';
 import '../services/accion_controller.dart';
 import '../services/habilidad_service.dart';
 import 'cuartel_screen.dart';
+import 'puntuaciones_screen.dart';
 
 class GameScreen extends StatefulWidget {
   final String localPlayerUid;
@@ -1461,6 +1462,32 @@ class _GameScreenState extends State<GameScreen> {
     });
   }
 
+  /// Abre las PUNTUACIONES de esta partida: victorias/derrotas (por combate) y
+  /// PC de cada jugador, leídos de statsPartida del lobby.
+  void _abrirPuntuaciones() {
+    final lobby = _currentLobby;
+    final localUid = _localPlayer.datos.uid;
+    final filas = (lobby?.jugadores ?? const []).map((j) {
+      final s = lobby!.statsDeJugador(j.uid);
+      return PuntuacionJugador(
+        alias: j.alias,
+        color: _colorDeUid(j.uid),
+        victorias: s.victorias,
+        derrotas: s.derrotas,
+        pc: s.pc,
+        eliminado: lobby.jugadoresEliminados.contains(j.uid),
+        esLocal: j.uid == localUid,
+      );
+    }).toList();
+
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PuntuacionesScreen(
+        nombrePartida: lobby?.nombre ?? 'Partida',
+        jugadores: filas,
+      ),
+    ));
+  }
+
   /// Pide confirmación antes de deshacer los cambios del turno. Antes vivía
   /// dentro del extinto _GameActionsMenu; ahora lo llama el menú único de
   /// PartidaTopBar.
@@ -2807,6 +2834,8 @@ class _GameScreenState extends State<GameScreen> {
                   onCuartel: _abrirCuartel,
                   puedeInforme: _boardState.turnoActual > 1,
                   onInforme: _abrirInformeBatalla,
+                  puedePuntuaciones: true,
+                  onPuntuaciones: _abrirPuntuaciones,
                   puedeDeshacer: _hayCambiosPendientes &&
                       !_yoCerreElTurno &&
                       !_estoyEliminado,

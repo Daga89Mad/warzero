@@ -598,4 +598,24 @@ class WarZeroApi {
     }
     return value;
   }
+
+  Future<Map<String, dynamic>?> obtenerRanking(String uid,
+      {String orden = 'experiencia'}) async {
+    final res = await _enviarConReintentos(
+      () => http.get(
+        Uri.parse('$baseUrl/warzero/ranking?uid=$uid&orden=$orden'),
+        headers: _headers,
+      ),
+      etiqueta: 'ranking',
+      intentos: 2,
+      timeout: _getTimeout,
+    );
+    debugPrint('[WZ][api] GET ranking status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['ok'] != true) return null;
+      return j;
+    }
+    throw Exception('obtenerRanking HTTP ${res.statusCode}: ${res.body}');
+  }
 }

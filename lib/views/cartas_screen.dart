@@ -5,20 +5,12 @@ import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart';
 import '../services/warzero_api.dart';
+import '../services/settings_controller.dart';
 import '../widgets/card_detail_overlay.dart';
 import 'card_skin_selector_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CartasScreen — Colección personal del jugador organizada por ejército.
-//
-// Firestore leído:
-//   Cartas/{cartaId}                         → catálogo global (read-only)
-//   Jugadores/{uid}                          → alias, nivel, exp, dinero
-//   Jugadores/{uid}/Coleccion/{cartaId}      → cartas que el jugador posee
-//   Skins/{skinId}                           → URL de skins (carga lazy)
-//
-// Las cartas con condicion==evolucion se ocultan del grid; se consultan
-// pulsando la flecha de evolución de la carta base en el overlay de detalle.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class CartasScreen extends StatefulWidget {
@@ -38,7 +30,6 @@ class _CartasScreenState extends State<CartasScreen>
 
   Map<String, CartaModel> _catalogoGlobal = {};
   Map<String, _ColeccionEntry> _coleccion = {};
-  // Solo cartas NO evolucionadas, agrupadas por ejército
   Map<int, List<CartaModel>> _cartasPorEjercito = {};
   final Map<String, String> _skinImageCache = {};
 
@@ -55,7 +46,6 @@ class _CartasScreenState extends State<CartasScreen>
 
   Future<void> _loadData() async {
     try {
-      // Una sola llamada HTTP trae catálogo + colección + stats + skins.
       final res = await _api.obtenerColeccion(_uid);
 
       if (res == null) {
@@ -76,7 +66,6 @@ class _CartasScreenState extends State<CartasScreen>
       final coleccion = <String, _ColeccionEntry>{};
       final skinCache = <String, String>{};
 
-      // Cartas poseídas: cada una trae los campos de catálogo + datos de colección.
       for (final raw in (res['cartas'] as List? ?? [])) {
         final m = Map<String, dynamic>.from(raw as Map);
         final carta = CartaModel.fromMap(m);
@@ -98,7 +87,6 @@ class _CartasScreenState extends State<CartasScreen>
           skinCache[carta.id] = skinImg;
       }
 
-      // Evoluciones referenciadas → al catálogo (para verlas desde la base).
       for (final raw in (res['evoluciones'] as List? ?? [])) {
         final m = Map<String, dynamic>.from(raw as Map);
         final carta = CartaModel.fromMap(m);
@@ -118,12 +106,11 @@ class _CartasScreenState extends State<CartasScreen>
         );
       }
 
-      // Agrupar por ejército — EXCLUIR cartas evolucionadas del grid
       final agrupadas = <int, List<CartaModel>>{};
       for (final entry in coleccion.entries) {
         final carta = catalogo[entry.key];
         if (carta == null) continue;
-        if (carta.esEvolucion) continue; // ← solo se ven desde la carta base
+        if (carta.esEvolucion) continue;
         agrupadas.putIfAbsent(carta.ejercito, () => []).add(carta);
       }
       agrupadas.forEach((_, list) {
@@ -164,14 +151,9 @@ class _CartasScreenState extends State<CartasScreen>
   String _imagenEfectiva(CartaModel carta) =>
       _skinImageCache[carta.id] ?? carta.imagen;
 
-  // ── Resuelve la carta evolucionada desde el catálogo local (ya incluye las
-  //    evoluciones devueltas por la API). Sin acceso a Firestore.
   Future<CartaModel?> _resolveEvolucion(String idEvolucion) async =>
       _catalogoGlobal[idEvolucion];
 
-  // ── Abre el detalle con la flecha de evolución (solo visualización).
-  // Precachea la imagen antes de abrir el dialog para que se pinte
-  // en el primer frame sin placeholder visible (causa del parpadeo).
   Future<void> _abrirDetalle(CartaModel carta) async {
     final imgUrl = _imagenEfectiva(carta);
     if (imgUrl.isNotEmpty) {
@@ -183,10 +165,6 @@ class _CartasScreenState extends State<CartasScreen>
       } catch (_) {}
     }
     if (!mounted) return;
-    // BUG: aquí se pasaba `carta` tal cual (imagen por defecto). La miniatura
-    // (_MiniCarta) sí usa _imagenEfectiva y por eso se veía bien en pequeño;
-    // al ampliarla el overlay pintaba carta.imagen (el diseño original) en
-    // vez del skin. Se soluciona pasando una copia con la imagen ya resuelta.
     final cartaConSkin = imgUrl.isNotEmpty && imgUrl != carta.imagen
         ? carta.copyWith(imagen: imgUrl)
         : carta;
@@ -238,24 +216,23 @@ class _CartasScreenState extends State<CartasScreen>
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     if (_loading) return const _LoadingView();
 
     if (_error != null) {
       return Scaffold(
-        backgroundColor: const Color(0xFF060E1A),
+        backgroundColor: war.fondo,
         appBar: _appBar(),
         body: Center(
           child: Text(_error!,
-              style: const TextStyle(
-                  color: Color(0xFFC04040), fontFamily: 'Cinzel')),
+              style: TextStyle(color: war.error, fontFamily: 'Cinzel')),
         ),
       );
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF060E1A),
+      backgroundColor: war.fondo,
       appBar: _appBar(),
-      // Sin Stack — el overlay lo maneja showCardDetail (showGeneralDialog)
       body: Column(
         children: [
           if (_jugadorStats != null) _JugadorStatsBar(stats: _jugadorStats!),
@@ -283,90 +260,99 @@ class _CartasScreenState extends State<CartasScreen>
     );
   }
 
-  AppBar _appBar() => AppBar(
-        backgroundColor: const Color(0xFF060E1A),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios,
-              size: 16, color: Color(0xFFC8A860)),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('MI COLECCIÓN',
-                style: TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 12,
-                    letterSpacing: 2,
-                    color: Color(0xFFC8A860))),
-            Text('${_coleccion.length} cartas desbloqueadas',
-                style: const TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 8,
-                    color: Color(0xFF506070))),
-          ],
-        ),
-      );
+  AppBar _appBar() {
+    final war = context.war;
+    return AppBar(
+      backgroundColor: war.superficie,
+      elevation: 0,
+      leading: IconButton(
+        icon: Icon(Icons.arrow_back_ios, size: 16, color: war.primario),
+        onPressed: () => Navigator.of(context).pop(),
+      ),
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('MI COLECCIÓN',
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 12,
+                  letterSpacing: 2,
+                  color: war.primario)),
+          Text('${_coleccion.length} cartas desbloqueadas',
+              style: TextStyle(
+                  fontFamily: 'Cinzel', fontSize: 8, color: war.textoTenue)),
+        ],
+      ),
+    );
+  }
 
-  Widget _buildTabBar() => TabBar(
-        controller: _tabController,
-        isScrollable: true,
-        indicatorColor: const Color(0xFFC8A860),
-        indicatorWeight: 1.5,
-        labelColor: const Color(0xFFC8A860),
-        unselectedLabelColor: const Color(0xFF506070),
-        labelStyle: const TextStyle(
-            fontFamily: 'Cinzel', fontSize: 9, letterSpacing: 1.5),
-        tabs: _ejercitosConCartas
-            .map((e) => Tab(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(e.icono, style: const TextStyle(fontSize: 12)),
-                      const SizedBox(width: 5),
-                      Text(e.nombre.toUpperCase()),
-                      const SizedBox(width: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 5, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1A2A3A),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '${_cartasPorEjercito[e.id]?.length ?? 0}',
-                          style: const TextStyle(
-                              fontFamily: 'Cinzel',
-                              fontSize: 7,
-                              color: Color(0xFF8A9AAA)),
-                        ),
+  Widget _buildTabBar() {
+    final war = context.war;
+    return TabBar(
+      controller: _tabController,
+      isScrollable: true,
+      indicatorColor: war.primario,
+      indicatorWeight: 1.5,
+      labelColor: war.primario,
+      unselectedLabelColor: war.textoTenue,
+      labelStyle: const TextStyle(
+          fontFamily: 'Cinzel', fontSize: 9, letterSpacing: 1.5),
+      tabs: _ejercitosConCartas
+          .map((e) => Tab(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(e.icono, style: const TextStyle(fontSize: 12)),
+                    const SizedBox(width: 5),
+                    Text(e.nombre.toUpperCase()),
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: war.borde.withOpacity(0.4),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                    ],
-                  ),
-                ))
-            .toList(),
-      );
+                      child: Text(
+                        '${_cartasPorEjercito[e.id]?.length ?? 0}',
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 7,
+                            color: war.textoTenue),
+                      ),
+                    ),
+                  ],
+                ),
+              ))
+          .toList(),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
-// BARRA DE STATS DEL JUGADOR
+// BARRA DE STATS DEL JUGADOR  (con la fórmula de nivel corregida)
 // ─────────────────────────────────────────────────────────────
 class _JugadorStatsBar extends StatelessWidget {
   final _JugadorStats stats;
   const _JugadorStatsBar({required this.stats});
 
+  // XP total acumulada para ALCANZAR un nivel: 1000 * (2^(n-1) - 1).
+  static int _xpParaAlcanzar(int n) => 1000 * ((1 << (n - 1)) - 1);
+
   @override
   Widget build(BuildContext context) {
-    final xpSiguienteNivel = stats.nivel * 1000;
-    final progreso = ((stats.experiencia % xpSiguienteNivel) / xpSiguienteNivel)
-        .clamp(0.0, 1.0);
+    final war = context.war;
+    final xpBase = _xpParaAlcanzar(stats.nivel);
+    final xpTecho = _xpParaAlcanzar(stats.nivel + 1);
+    final costeNivel = (xpTecho - xpBase).clamp(1, 1 << 30);
+    final xpEnNivel = (stats.experiencia - xpBase).clamp(0, costeNivel);
+    final progreso = (xpEnNivel / costeNivel).clamp(0.0, 1.0);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Color(0xFF080F1A),
-        border: Border(bottom: BorderSide(color: Color(0xFF1A2A3A))),
+      decoration: BoxDecoration(
+        color: war.superficie,
+        border: Border(bottom: BorderSide(color: war.borde.withOpacity(0.5))),
       ),
       child: Row(
         children: [
@@ -375,25 +361,25 @@ class _JugadorStatsBar extends StatelessWidget {
             height: 46,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF0A1525),
-              border: Border.all(
-                  color: const Color(0xFFC8A860).withOpacity(0.5), width: 1.5),
+              color: war.fondo,
+              border:
+                  Border.all(color: war.primario.withOpacity(0.5), width: 1.5),
             ),
             child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('NV',
+                  Text('NV',
                       style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 6,
-                          color: Color(0xFF506070),
+                          color: war.textoTenue,
                           letterSpacing: 1)),
                   Text('${stats.nivel}',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 14,
-                          color: Color(0xFFC8A860),
+                          color: war.primario,
                           fontWeight: FontWeight.bold,
                           height: 1)),
                 ],
@@ -406,10 +392,10 @@ class _JugadorStatsBar extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(stats.alias.toUpperCase(),
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontFamily: 'Cinzel',
                         fontSize: 12,
-                        color: Color(0xFFC8A860),
+                        color: war.primario,
                         letterSpacing: 1,
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
@@ -418,18 +404,15 @@ class _JugadorStatsBar extends StatelessWidget {
                   child: LinearProgressIndicator(
                     value: progreso,
                     minHeight: 4,
-                    backgroundColor: const Color(0xFF1A2A3A),
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(Color(0xFFC8A860)),
+                    backgroundColor: war.borde.withOpacity(0.5),
+                    valueColor: AlwaysStoppedAnimation<Color>(war.primario),
                   ),
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  '${stats.experiencia % xpSiguienteNivel} / $xpSiguienteNivel XP',
-                  style: const TextStyle(
-                      fontFamily: 'Cinzel',
-                      fontSize: 7,
-                      color: Color(0xFF506070)),
+                  '$xpEnNivel / $costeNivel XP',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel', fontSize: 7, color: war.textoTenue),
                 ),
               ],
             ),
@@ -456,7 +439,7 @@ class _JugadorStatsBar extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// GRID 4 COLUMNAS
+// GRID 3 COLUMNAS
 // ─────────────────────────────────────────────────────────────
 class _CartasGrid extends StatefulWidget {
   final List<CartaModel> cartas;
@@ -522,17 +505,21 @@ class _MiniCarta extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
+    // Morado de skin: semántico (se mantiene fijo).
+    const skinPurple = Color(0xFFA040FF);
+
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color: const Color(0xFF0C1A2A),
+          color: war.superficie,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: tieneSkin
-                ? const Color(0xFFA040FF).withOpacity(0.7)
-                : const Color(0xFF78591E).withOpacity(0.5),
+                ? skinPurple.withOpacity(0.7)
+                : war.borde.withOpacity(0.5),
             width: tieneSkin ? 1.5 : 1,
           ),
         ),
@@ -545,23 +532,23 @@ class _MiniCarta extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('${carta.fuerza}',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 11,
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFFE0C060),
+                          color: war.primario,
                           height: 1)),
                   Container(
                     width: 14,
                     height: 14,
-                    decoration: const BoxDecoration(
-                        color: Color(0xFFB08040), shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                        color: war.primario, shape: BoxShape.circle),
                     child: Center(
                       child: Text('${carta.coste}',
-                          style: const TextStyle(
+                          style: TextStyle(
                               fontSize: 7,
                               fontWeight: FontWeight.bold,
-                              color: Color(0xFF040C14),
+                              color: war.fondo,
                               fontFamily: 'Cinzel')),
                     ),
                   ),
@@ -583,7 +570,6 @@ class _MiniCarta extends StatelessWidget {
                                   const _PlaceholderArt())
                           : const _PlaceholderArt(),
                     ),
-                    // Indicador pequeño de que tiene evolución
                     if (carta.puedeEvolucionar)
                       const Positioned(
                         top: 2,
@@ -595,8 +581,8 @@ class _MiniCarta extends StatelessWidget {
                       const Positioned(
                         bottom: 2,
                         right: 2,
-                        child: Icon(Icons.color_lens,
-                            size: 10, color: Color(0xFFA040FF)),
+                        child:
+                            Icon(Icons.color_lens, size: 10, color: skinPurple),
                       ),
                     if (cantidad > 1)
                       Positioned(
@@ -610,10 +596,10 @@ class _MiniCarta extends StatelessWidget {
                             borderRadius: BorderRadius.circular(3),
                           ),
                           child: Text('x$cantidad',
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontFamily: 'Cinzel',
                                   fontSize: 6,
-                                  color: Color(0xFFC8A860))),
+                                  color: war.primario)),
                         ),
                       ),
                   ],
@@ -627,10 +613,10 @@ class _MiniCarta extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 6,
-                    color: Color(0xFF8A9AAA),
+                    color: war.textoTenue,
                     height: 1.3),
               ),
             ),
@@ -644,11 +630,13 @@ class _MiniCarta extends StatelessWidget {
 class _PlaceholderArt extends StatelessWidget {
   const _PlaceholderArt();
   @override
-  Widget build(BuildContext context) => Container(
-        color: const Color(0xFF0A1525),
-        child: const Icon(Icons.shield_outlined,
-            size: 28, color: Color(0xFF2A3A4A)),
-      );
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Container(
+      color: war.fondo,
+      child: Icon(Icons.shield_outlined, size: 28, color: war.borde),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -657,51 +645,55 @@ class _PlaceholderArt extends StatelessWidget {
 class _LoadingView extends StatelessWidget {
   const _LoadingView();
   @override
-  Widget build(BuildContext context) => const Scaffold(
-        backgroundColor: Color(0xFF060E1A),
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(color: Color(0xFFC8A860)),
-              SizedBox(height: 16),
-              Text('CARGANDO COLECCIÓN…',
-                  style: TextStyle(
-                      fontFamily: 'Cinzel',
-                      fontSize: 10,
-                      letterSpacing: 2,
-                      color: Color(0xFF506070))),
-            ],
-          ),
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Scaffold(
+      backgroundColor: war.fondo,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(color: war.primario),
+            const SizedBox(height: 16),
+            Text('CARGANDO COLECCIÓN…',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    letterSpacing: 2,
+                    color: war.textoTenue)),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
 
 class _ColeccionVaciaView extends StatelessWidget {
   const _ColeccionVaciaView();
   @override
-  Widget build(BuildContext context) => const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.style_outlined, size: 48, color: Color(0xFF2A3A4A)),
-            SizedBox(height: 16),
-            Text('Aún no tienes cartas.',
-                style: TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 12,
-                    color: Color(0xFF506070))),
-            SizedBox(height: 8),
-            Text('Juega partidas para ganar\ncartas y diseños nuevos.',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    fontFamily: 'Cinzel',
-                    fontSize: 9,
-                    color: Color(0xFF3A4A5A),
-                    height: 1.6)),
-          ],
-        ),
-      );
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.style_outlined, size: 48, color: war.borde),
+          const SizedBox(height: 16),
+          Text('Aún no tienes cartas.',
+              style: TextStyle(
+                  fontFamily: 'Cinzel', fontSize: 12, color: war.textoTenue)),
+          const SizedBox(height: 8),
+          Text('Juega partidas para ganar\ncartas y diseños nuevos.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 9,
+                  color: war.textoTenue.withOpacity(0.7),
+                  height: 1.6)),
+        ],
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

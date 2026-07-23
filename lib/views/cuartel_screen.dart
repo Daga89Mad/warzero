@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../models/carta_model.dart';
+import '../services/settings_controller.dart';
 import '../widgets/card_detail_overlay.dart';
 
 /// Resultado de un intento de compra de carta especial.
@@ -56,11 +57,10 @@ class _CuartelScreenState extends State<CuartelScreen> {
   late Set<String> _compradas;
   String? _comprandoId; // id en curso (evita doble compra)
 
-  static const _bg = Color(0xFF0A1018);
-  static const _panel = Color(0xFF0F1A28);
-  static const _gold = Color(0xFFC8A860);
-  static const _energy = Color(0xFFD4A800); // ← rayo dorado de energies
-  static const _border = Color(0x33C8A860);
+  // Colores semánticos que se mantienen fijos en cualquier tema.
+  static const _energy = Color(0xFF2EA6FF); // Zero / energía
+  static const _verde = Color(0xFF4ABB58); // comprado / disponible
+  static const _rojo = Color(0xFF9A5050); // sin energía / error
 
   @override
   void initState() {
@@ -91,15 +91,16 @@ class _CuartelScreenState extends State<CuartelScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Scaffold(
-      backgroundColor: _bg,
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: _bg,
+        backgroundColor: war.superficie,
         elevation: 0,
-        iconTheme: const IconThemeData(color: _gold),
-        title: const Text('CUARTEL',
+        iconTheme: IconThemeData(color: war.primario),
+        title: Text('CUARTEL',
             style: TextStyle(
-                color: _gold,
+                color: war.primario,
                 fontFamily: 'Cinzel',
                 fontSize: 16,
                 letterSpacing: 2)),
@@ -109,13 +110,13 @@ class _CuartelScreenState extends State<CuartelScreen> {
             child: Row(children: [
               const Text('Ø',
                   style: TextStyle(
-                      color: Color(0xFF2EA6FF),
+                      color: _energy,
                       fontSize: 15,
                       fontWeight: FontWeight.bold)),
               const SizedBox(width: 4),
               Text('$_energias',
-                  style: const TextStyle(
-                      color: Colors.white,
+                  style: TextStyle(
+                      color: war.texto,
                       fontWeight: FontWeight.bold,
                       fontSize: 14)),
             ]),
@@ -128,11 +129,11 @@ class _CuartelScreenState extends State<CuartelScreen> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(10),
-              color: const Color(0xFF2A1A0A),
-              child: const Text(
+              color: war.primario.withOpacity(0.12),
+              child: Text(
                 'Solo puedes comprar durante tu turno (antes de cerrarlo).',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFFE0A030), fontSize: 12),
+                style: TextStyle(color: war.primario, fontSize: 12),
               ),
             ),
           Expanded(child: _buildLista()),
@@ -142,10 +143,11 @@ class _CuartelScreenState extends State<CuartelScreen> {
   }
 
   Widget _buildLista() {
+    final war = context.war;
     if (widget.ejercitoId == null) {
-      return const Center(
+      return Center(
         child: Text('Sin ejército asignado.',
-            style: TextStyle(color: Color(0xFF607080))),
+            style: TextStyle(color: war.textoTenue)),
       );
     }
 
@@ -159,13 +161,13 @@ class _CuartelScreenState extends State<CuartelScreen> {
       future: query.get(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: _gold));
+          return Center(child: CircularProgressIndicator(color: war.primario));
         }
         if (snap.hasError) {
           return Center(
             child: Text('Error al cargar especiales:\n${snap.error}',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF9A5050))),
+                style: TextStyle(color: war.error)),
           );
         }
 
@@ -176,10 +178,10 @@ class _CuartelScreenState extends State<CuartelScreen> {
           ..sort((a, b) => a.coste.compareTo(b.coste));
 
         if (especiales.isEmpty) {
-          return const Center(
+          return Center(
             child: Text('No hay cartas especiales para tu ejército.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Color(0xFF607080))),
+                style: TextStyle(color: war.textoTenue)),
           );
         }
 
@@ -194,6 +196,7 @@ class _CuartelScreenState extends State<CuartelScreen> {
   }
 
   Widget _buildTile(CartaModel carta) {
+    final war = context.war;
     final yaComprada = _compradas.contains(carta.id);
     final sinEnergia = _energias < carta.coste;
     final enCurso = _comprandoId == carta.id;
@@ -207,8 +210,8 @@ class _CuartelScreenState extends State<CuartelScreen> {
       onLongPress: () => showCardDetail(context, carta),
       child: Container(
         decoration: BoxDecoration(
-          color: _panel,
-          border: Border.all(color: _border),
+          color: war.superficie,
+          border: Border.all(color: war.primario.withOpacity(0.20)),
           borderRadius: BorderRadius.circular(8),
         ),
         padding: const EdgeInsets.all(10),
@@ -219,13 +222,13 @@ class _CuartelScreenState extends State<CuartelScreen> {
               height: 50,
               clipBehavior: Clip.antiAlias,
               decoration: BoxDecoration(
-                color: const Color(0xFF1A2838),
+                color: war.fondo,
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: _border),
+                border: Border.all(color: war.primario.withOpacity(0.20)),
               ),
               alignment: Alignment.center,
               child: carta.imagen.trim().isEmpty
-                  ? const Icon(Icons.star, color: _gold, size: 22)
+                  ? Icon(Icons.star, color: war.primario, size: 22)
                   : Image.network(
                       carta.imagen,
                       fit: BoxFit.cover,
@@ -233,16 +236,16 @@ class _CuartelScreenState extends State<CuartelScreen> {
                       height: 50,
                       loadingBuilder: (c, child, p) => p == null
                           ? child
-                          : const Center(
+                          : Center(
                               child: SizedBox(
                                 width: 16,
                                 height: 16,
                                 child: CircularProgressIndicator(
-                                    strokeWidth: 2, color: _gold),
+                                    strokeWidth: 2, color: war.primario),
                               ),
                             ),
                       errorBuilder: (c, e, s) =>
-                          const Icon(Icons.star, color: _gold, size: 22),
+                          Icon(Icons.star, color: war.primario, size: 22),
                     ),
             ),
             const SizedBox(width: 12),
@@ -251,15 +254,14 @@ class _CuartelScreenState extends State<CuartelScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(carta.nombre,
-                      style: const TextStyle(
-                          color: Colors.white,
+                      style: TextStyle(
+                          color: war.texto,
                           fontWeight: FontWeight.bold,
                           fontSize: 14)),
                   const SizedBox(height: 2),
                   Text(
                     '⚔ ${carta.fuerza}   🛡 ${carta.defensa}   ➤ ${carta.movimiento}',
-                    style:
-                        const TextStyle(color: Color(0xFF8898A8), fontSize: 11),
+                    style: TextStyle(color: war.textoTenue, fontSize: 11),
                   ),
                   if (carta.descripcion.isNotEmpty)
                     Padding(
@@ -267,8 +269,9 @@ class _CuartelScreenState extends State<CuartelScreen> {
                       child: Text(carta.descripcion,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: Color(0xFF607080), fontSize: 10)),
+                          style: TextStyle(
+                              color: war.textoTenue.withOpacity(0.8),
+                              fontSize: 10)),
                     ),
                 ],
               ),
@@ -283,11 +286,11 @@ class _CuartelScreenState extends State<CuartelScreen> {
 
   Widget _buildBoton(CartaModel carta, bool yaComprada, bool sinEnergia,
       bool enCurso, bool habilitado) {
+    final war = context.war;
     if (yaComprada) {
       return const Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.check_circle, color: Color(0xFF4ABB58), size: 22),
-        Text('Comprada',
-            style: TextStyle(color: Color(0xFF4ABB58), fontSize: 9)),
+        Icon(Icons.check_circle, color: _verde, size: 22),
+        Text('Comprada', style: TextStyle(color: _verde, fontSize: 9)),
       ]);
     }
     return SizedBox(
@@ -296,7 +299,7 @@ class _CuartelScreenState extends State<CuartelScreen> {
         onPressed: habilitado ? () => _comprar(carta) : null,
         style: ElevatedButton.styleFrom(
           backgroundColor: const Color(0xFF1E5631),
-          disabledBackgroundColor: const Color(0xFF1A2230),
+          disabledBackgroundColor: war.fondo,
           padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
         ),
@@ -310,22 +313,18 @@ class _CuartelScreenState extends State<CuartelScreen> {
                 Row(mainAxisSize: MainAxisSize.min, children: [
                   const Text('Ø ',
                       style: TextStyle(
-                          color: Color(0xFF2EA6FF),
+                          color: _energy,
                           fontSize: 12,
                           fontWeight: FontWeight.bold)),
                   Text('${carta.coste}',
                       style: TextStyle(
-                          color: sinEnergia
-                              ? const Color(0xFF9A5050)
-                              : Colors.white,
+                          color: sinEnergia ? _rojo : Colors.white,
                           fontSize: 13,
                           fontWeight: FontWeight.bold)),
                 ]),
                 Text(sinEnergia ? 'Sin energía' : 'Comprar',
                     style: TextStyle(
-                        color: sinEnergia
-                            ? const Color(0xFF9A5050)
-                            : Colors.white70,
+                        color: sinEnergia ? _rojo : Colors.white70,
                         fontSize: 9)),
               ]),
       ),

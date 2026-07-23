@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:warzero/services/settings_controller.dart';
 import 'package:warzero/views/loginBody.dart';
 import 'package:warzero/views/settingsScreen.dart';
 import 'package:warzero/views/lobby_screen.dart';
@@ -10,6 +11,7 @@ import 'package:warzero/views/mazo_screen.dart';
 import 'package:warzero/views/cartas_screen.dart';
 import 'package:warzero/views/historias_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
+import 'package:warzero/views/ranking_screen.dart';
 import 'package:warzero/views/edicion_cartas_screen.dart';
 import 'package:warzero/views/edicion_historias_screen.dart';
 import 'package:warzero/views/edicion_skins_screen.dart';
@@ -28,6 +30,7 @@ class MenuScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final user = FirebaseAuth.instance.currentUser;
     // Solo estos correos pueden ver/usar la edición de cartas.
     const editores = {
@@ -42,7 +45,7 @@ class MenuScreen extends StatelessWidget {
         user?.displayName ?? user?.email?.split('@').first ?? 'Comandante';
 
     return Scaffold(
-      backgroundColor: const Color(0xFF030810),
+      backgroundColor: war.fondo,
       body: SafeArea(
         child: Column(
           children: [
@@ -50,10 +53,11 @@ class MenuScreen extends StatelessWidget {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-              decoration: const BoxDecoration(
-                color: Color(0xFF02050D),
+              decoration: BoxDecoration(
+                color: war.superficie,
                 border: Border(
-                    bottom: BorderSide(color: Color(0x20C8A860), width: 1)),
+                    bottom: BorderSide(
+                        color: war.primario.withOpacity(0.20), width: 1)),
               ),
               child: Row(
                 children: [
@@ -61,12 +65,12 @@ class MenuScreen extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'WARZERO',
                           style: TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.bold,
-                            color: Color(0xFFC8A860),
+                            color: war.primario,
                             fontFamily: 'Cinzel',
                             letterSpacing: 8,
                             height: 1,
@@ -75,12 +79,14 @@ class MenuScreen extends StatelessWidget {
                         const SizedBox(height: 6),
                         Text(
                           'BIENVENIDO, ${alias.toUpperCase()}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 10,
-                            color: Color(0xFF506070),
+                            color: war.textoTenue,
                             fontFamily: 'Cinzel',
                             letterSpacing: 3,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
@@ -93,13 +99,12 @@ class MenuScreen extends StatelessWidget {
                       height: 42,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: const Color(0xFF080D18),
+                        color: war.fondo,
                         border: Border.all(
-                            color: const Color(0xFFC8A860).withOpacity(0.3),
-                            width: 1),
+                            color: war.primario.withOpacity(0.35), width: 1),
                       ),
-                      child: const Icon(Icons.person_outline,
-                          size: 20, color: Color(0xFFC8A860)),
+                      child: Icon(Icons.person_outline,
+                          size: 20, color: war.primario),
                     ),
                   ),
                 ],
@@ -114,7 +119,7 @@ class MenuScreen extends StatelessWidget {
                   crossAxisCount: 2,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  childAspectRatio: 1.15,
+                  childAspectRatio: 1.05,
                   children: [
                     _MenuTile(
                       icon: Icons.public,
@@ -211,15 +216,10 @@ class MenuScreen extends StatelessWidget {
                       label: 'RANKINGS',
                       sublabel: 'Clasificaciones\nglobales',
                       accent: const Color(0xFFD06040),
-                      onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Próximamente',
-                                style: TextStyle(fontFamily: 'Cinzel')),
-                            backgroundColor: Color(0xFF1A1408),
-                          ),
-                        );
-                      },
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const RankingScreen()),
+                      ),
                     ),
                     _MenuTile(
                       icon: Icons.settings_outlined,
@@ -247,19 +247,19 @@ class MenuScreen extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(5),
-                    border:
-                        Border.all(color: const Color(0x30C04040), width: 1),
+                    border: Border.all(
+                        color: war.error.withOpacity(0.35), width: 1),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.logout, size: 14, color: Color(0xFF7A4040)),
-                      SizedBox(width: 8),
+                      Icon(Icons.logout, size: 14, color: war.error),
+                      const SizedBox(width: 8),
                       Text(
                         'CERRAR SESIÓN',
                         style: TextStyle(
                           fontSize: 10,
-                          color: Color(0xFF7A4040),
+                          color: war.error,
                           fontFamily: 'Cinzel',
                           letterSpacing: 2,
                         ),
@@ -295,11 +295,12 @@ class _MenuTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: const Color(0xFF080D18),
+          color: war.superficie,
           borderRadius: BorderRadius.circular(8),
           border: Border.all(color: accent.withOpacity(0.25), width: 1),
           boxShadow: [
@@ -328,6 +329,8 @@ class _MenuTile extends StatelessWidget {
               const Spacer(),
               Text(
                 label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.bold,
@@ -337,14 +340,18 @@ class _MenuTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 3),
-              Text(
-                sublabel,
-                style: const TextStyle(
-                  fontSize: 9,
-                  color: Color(0xFF506070),
-                  fontFamily: 'Cinzel',
-                  height: 1.6,
-                  letterSpacing: 0.5,
+              Flexible(
+                child: Text(
+                  sublabel,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: war.textoTenue,
+                    fontFamily: 'Cinzel',
+                    height: 1.6,
+                    letterSpacing: 0.5,
+                  ),
                 ),
               ),
             ],

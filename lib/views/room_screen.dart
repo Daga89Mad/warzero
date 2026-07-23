@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:warzero/services/settings_controller.dart';
 import '../models/lobby_model.dart';
 import '../services/ejercito_service.dart';
 import '../services/lobby_service.dart';
@@ -31,18 +32,14 @@ class _RoomScreenState extends State<RoomScreen> {
   final _service = LobbyService();
 
   int? _selectedEjercitoId;
-  bool _navigating = false; // evita doble push
+  bool _navigating = false;
 
   @override
   void initState() {
     super.initState();
-    // El backend (Render free) duerme tras inactividad y la primera petición
-    // tarda en despertarlo. Lo despertamos ya, mientras el jugador espera en la
-    // sala, para que al entrar a la partida el servidor esté listo.
     WarZeroApi().despertar();
   }
 
-  // ── Seleccionar ejército ──────────────────────────────────
   Future<void> _selectEjercito(int ejercitoId) async {
     setState(() => _selectedEjercitoId = ejercitoId);
     await _service.seleccionarEjercito(
@@ -52,7 +49,6 @@ class _RoomScreenState extends State<RoomScreen> {
     );
   }
 
-  // ── Navegar al juego (con guard anti-doble-push) ─────────
   void _goToGame(LobbyModel lobby) {
     if (_navigating) return;
     _navigating = true;
@@ -68,13 +64,11 @@ class _RoomScreenState extends State<RoomScreen> {
     });
   }
 
-  // ── Iniciar partida (solo host) ───────────────────────────
   Future<void> _iniciarPartida(LobbyModel lobby) async {
     await _service.iniciarPartida(widget.lobbyId);
     _goToGame(lobby);
   }
 
-  // ── Salir ─────────────────────────────────────────────────
   Future<void> _salir() async {
     await _service.salirDeLobby(lobbyId: widget.lobbyId, uid: widget.localUid);
     if (mounted) Navigator.of(context).pop();
@@ -82,31 +76,28 @@ class _RoomScreenState extends State<RoomScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return WillPopScope(
       onWillPop: () async {
         await _salir();
         return false;
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF030810),
+        backgroundColor: war.fondo,
         body: StreamBuilder<LobbyModel?>(
           stream: _service.lobbyStream(widget.lobbyId),
           builder: (ctx, snap) {
             if (snap.connectionState == ConnectionState.waiting) {
-              return const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFC8A860)));
+              return Center(
+                  child: CircularProgressIndicator(color: war.primario));
             }
             final lobby = snap.data;
             if (lobby == null) {
-              // Sala eliminada
               WidgetsBinding.instance
                   .addPostFrameCallback((_) => Navigator.of(context).pop());
               return const SizedBox();
             }
 
-            // ── Auto-navegar ─────────────────────────────────────
-            // Cuando el host inicia la partida, Firestore propaga
-            // estado='en_curso' a todos los jugadores vía stream.
             if (lobby.estado == LobbyEstado.enCurso) {
               _goToGame(lobby);
             }
@@ -120,20 +111,15 @@ class _RoomScreenState extends State<RoomScreen> {
             return SafeArea(
               child: Column(
                 children: [
-                  // ── AppBar ──
                   _RoomHeader(
                     lobby: lobby,
                     isHost: isHost,
                     onLeave: _salir,
                   ),
-
-                  const Divider(color: Color(0x20C8A860), height: 1),
-
-                  // ── Contenido ──
+                  Divider(color: war.primario.withOpacity(0.12), height: 1),
                   Expanded(
                     child: Row(
                       children: [
-                        // Izquierda: jugadores
                         Expanded(
                           flex: 2,
                           child: _PlayerList(
@@ -141,10 +127,8 @@ class _RoomScreenState extends State<RoomScreen> {
                             localUid: widget.localUid,
                           ),
                         ),
-
-                        Container(width: 1, color: const Color(0x20C8A860)),
-
-                        // Derecha: ejércitos
+                        Container(
+                            width: 1, color: war.primario.withOpacity(0.12)),
                         Expanded(
                           flex: 3,
                           child: _ArmySelector(
@@ -155,8 +139,6 @@ class _RoomScreenState extends State<RoomScreen> {
                       ],
                     ),
                   ),
-
-                  // ── Footer ──
                   _RoomFooter(
                     lobby: lobby,
                     isHost: isHost,
@@ -190,15 +172,15 @@ class _RoomHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Container(
-      color: const Color(0xFF02050D),
+      color: war.superficie,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
           GestureDetector(
             onTap: onLeave,
-            child: const Icon(Icons.arrow_back_ios,
-                size: 16, color: Color(0xFF506070)),
+            child: Icon(Icons.arrow_back_ios, size: 16, color: war.textoTenue),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -207,9 +189,9 @@ class _RoomHeader extends StatelessWidget {
               children: [
                 Text(
                   lobby.nombre.toUpperCase(),
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     fontFamily: 'Cinzel',
                     fontWeight: FontWeight.bold,
                     letterSpacing: 2,
@@ -219,14 +201,14 @@ class _RoomHeader extends StatelessWidget {
                 Row(
                   children: [
                     if (lobby.esPrivada) ...[
-                      const Icon(Icons.lock, size: 9, color: Color(0xFF506070)),
+                      Icon(Icons.lock, size: 9, color: war.textoTenue),
                       const SizedBox(width: 4),
                     ],
                     Text(
                       'SALA · ${lobby.jugadores.length}/${lobby.maxJugadores}',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 9,
-                        color: Color(0xFF506070),
+                        color: war.textoTenue,
                         fontFamily: 'Cinzel',
                         letterSpacing: 1.5,
                       ),
@@ -236,35 +218,34 @@ class _RoomHeader extends StatelessWidget {
               ],
             ),
           ),
-          // Copiar ID
           GestureDetector(
             onTap: () {
               Clipboard.setData(ClipboardData(text: lobby.id));
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('ID copiado al portapapeles',
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: const Text('ID copiado al portapapeles',
                     style: TextStyle(fontFamily: 'Cinzel', fontSize: 10)),
-                backgroundColor: Color(0xFF1A1408),
-                duration: Duration(seconds: 2),
+                backgroundColor: war.superficie,
+                duration: const Duration(seconds: 2),
               ));
             },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
-                color: const Color(0xFF0A1220),
+                color: war.fondo,
                 borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: const Color(0x30506070), width: 1),
+                border: Border.all(color: war.borde.withOpacity(0.3), width: 1),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.copy, size: 11, color: Color(0xFF506070)),
+                  Icon(Icons.copy, size: 11, color: war.textoTenue),
                   const SizedBox(width: 5),
                   Text(
                     lobby.id.length > 8
                         ? '${lobby.id.substring(0, 8)}…'
                         : lobby.id,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 8,
-                      color: Color(0xFF506070),
+                      color: war.textoTenue,
                       fontFamily: 'Cinzel',
                       letterSpacing: 1,
                     ),
@@ -290,7 +271,7 @@ class _PlayerList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Rellenar con slots vacíos
+    final war = context.war;
     final slots = List<LobbyJugador?>.from(lobby.jugadores);
     while (slots.length < lobby.maxJugadores) {
       slots.add(null);
@@ -299,13 +280,13 @@ class _PlayerList extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(14, 14, 14, 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
           child: Text(
             'COMANDANTES',
             style: TextStyle(
               fontSize: 9,
-              color: Color(0xFF506070),
+              color: war.textoTenue,
               fontFamily: 'Cinzel',
               letterSpacing: 2,
             ),
@@ -343,20 +324,21 @@ class _PlayerSlot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final isEmpty = jugador == null;
     final accent = isEmpty
-        ? const Color(0xFF1A2030)
+        ? war.borde
         : jugador!.listo
-            ? const Color(0xFF4ABB58)
+            ? war.secundario
             : isLocal
-                ? const Color(0xFFC8A860)
-                : const Color(0xFF4060D0);
+                ? war.primario
+                : const Color(0xFF4060D0); // azul remoto: semántico
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: isEmpty ? const Color(0x080A1220) : const Color(0xFF080D18),
+        color: isEmpty ? war.fondo : war.superficie,
         borderRadius: BorderRadius.circular(5),
         border: Border.all(color: accent.withOpacity(0.25), width: 1),
       ),
@@ -373,7 +355,7 @@ class _PlayerSlot extends StatelessWidget {
             child: Center(
               child: isEmpty
                   ? Icon(Icons.person_outline,
-                      size: 14, color: accent.withOpacity(0.3))
+                      size: 14, color: accent.withOpacity(0.5))
                   : Text(
                       jugador!.alias.isNotEmpty
                           ? jugador!.alias[0].toUpperCase()
@@ -390,11 +372,11 @@ class _PlayerSlot extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: isEmpty
-                ? const Text(
+                ? Text(
                     'ESPERANDO…',
                     style: TextStyle(
                       fontSize: 8,
-                      color: Color(0xFF2A3040),
+                      color: war.borde,
                       fontFamily: 'Cinzel',
                       letterSpacing: 1,
                     ),
@@ -406,25 +388,24 @@ class _PlayerSlot extends StatelessWidget {
                         children: [
                           Text(
                             jugador!.alias.toUpperCase(),
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 9,
-                              color: Color(0xFFC8A860),
+                              color: war.primario,
                               fontFamily: 'Cinzel',
                               letterSpacing: 1,
                             ),
                           ),
                           if (isHost) ...[
                             const SizedBox(width: 5),
-                            const Icon(Icons.star,
-                                size: 9, color: Color(0xFFC8A860)),
+                            Icon(Icons.star, size: 9, color: war.primario),
                           ],
                           if (isLocal) ...[
                             const SizedBox(width: 5),
-                            const Text(
+                            Text(
                               'TÚ',
                               style: TextStyle(
                                 fontSize: 7,
-                                color: Color(0xFF4ABB58),
+                                color: war.secundario,
                                 fontFamily: 'Cinzel',
                                 letterSpacing: 1,
                               ),
@@ -435,9 +416,9 @@ class _PlayerSlot extends StatelessWidget {
                       if (jugador!.ejercitoId != null)
                         Text(
                           _getEjercitoNombre(jugador!.ejercitoId!),
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 7,
-                            color: Color(0xFF506070),
+                            color: war.textoTenue,
                             fontFamily: 'Cinzel',
                           ),
                         ),
@@ -450,9 +431,7 @@ class _PlayerSlot extends StatelessWidget {
               height: 8,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: jugador!.listo
-                    ? const Color(0xFF4ABB58)
-                    : const Color(0xFF506070),
+                color: jugador!.listo ? war.secundario : war.textoTenue,
               ),
             ),
         ],
@@ -476,16 +455,17 @@ class _ArmySelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(14, 14, 14, 8),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 8),
           child: Text(
             'ELIGE TU EJÉRCITO',
             style: TextStyle(
               fontSize: 9,
-              color: Color(0xFF506070),
+              color: war.textoTenue,
               fontFamily: 'Cinzel',
               letterSpacing: 2,
             ),
@@ -496,16 +476,16 @@ class _ArmySelector extends StatelessWidget {
             stream: EjercitoService().ejercitosStream(),
             builder: (ctx, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFC8A860)),
+                return Center(
+                  child: CircularProgressIndicator(color: war.primario),
                 );
               }
               if (snap.hasError || snap.data == null || snap.data!.isEmpty) {
-                return const Center(
+                return Center(
                   child: Text('Sin ejércitos disponibles',
                       style: TextStyle(
                           fontSize: 9,
-                          color: Color(0xFF506070),
+                          color: war.textoTenue,
                           fontFamily: 'Cinzel')),
                 );
               }
@@ -543,8 +523,8 @@ class _ArmyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accent =
-        isSelected ? const Color(0xFFC8A860) : const Color(0xFF2A3040);
+    final war = context.war;
+    final accent = isSelected ? war.primario : war.borde;
 
     return GestureDetector(
       onTap: onTap,
@@ -553,9 +533,7 @@ class _ArmyCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFFC8A860).withOpacity(0.08)
-              : const Color(0xFF080D18),
+          color: isSelected ? war.primario.withOpacity(0.08) : war.superficie,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: accent.withOpacity(isSelected ? 0.60 : 0.20),
@@ -564,7 +542,7 @@ class _ArmyCard extends StatelessWidget {
           boxShadow: isSelected
               ? [
                   BoxShadow(
-                    color: const Color(0xFFC8A860).withOpacity(0.08),
+                    color: war.primario.withOpacity(0.08),
                     blurRadius: 10,
                   )
                 ]
@@ -583,9 +561,7 @@ class _ArmyCard extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.bold,
-                      color: isSelected
-                          ? const Color(0xFFC8A860)
-                          : const Color(0xFF8A7858),
+                      color: isSelected ? war.primario : war.texto,
                       fontFamily: 'Cinzel',
                       letterSpacing: 1,
                     ),
@@ -593,9 +569,9 @@ class _ArmyCard extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     ejercito.descripcion,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 8,
-                      color: Color(0xFF506070),
+                      color: war.textoTenue,
                       fontFamily: 'Cinzel',
                       height: 1.5,
                     ),
@@ -604,8 +580,7 @@ class _ArmyCard extends StatelessWidget {
               ),
             ),
             if (isSelected)
-              const Icon(Icons.check_circle,
-                  size: 18, color: Color(0xFFC8A860)),
+              Icon(Icons.check_circle, size: 18, color: war.primario),
           ],
         ),
       ),
@@ -633,6 +608,7 @@ class _RoomFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final me = lobby.jugadores.firstWhere((j) => j.uid == localUid,
         orElse: () => LobbyJugador(uid: localUid, alias: 'Jugador'));
     final mismoEjercito = selectedEjercito ?? me.ejercitoId;
@@ -641,22 +617,22 @@ class _RoomFooter extends StatelessWidget {
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-      decoration: const BoxDecoration(
-        color: Color(0xFF02050D),
-        border: Border(top: BorderSide(color: Color(0x20C8A860), width: 1)),
+      decoration: BoxDecoration(
+        color: war.superficie,
+        border: Border(
+            top: BorderSide(color: war.primario.withOpacity(0.12), width: 1)),
       ),
       child: Row(
         children: [
-          // Progreso de listos
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   '${lobby.jugadores.where((j) => j.listo).length}/${lobby.jugadores.length} LISTOS',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 9,
-                    color: Color(0xFF506070),
+                    color: war.textoTenue,
                     fontFamily: 'Cinzel',
                     letterSpacing: 1.5,
                   ),
@@ -669,29 +645,28 @@ class _RoomFooter extends StatelessWidget {
                         ? 0
                         : lobby.jugadores.where((j) => j.listo).length /
                             lobby.jugadores.length,
-                    backgroundColor: const Color(0xFF0A1220),
-                    valueColor:
-                        const AlwaysStoppedAnimation<Color>(Color(0xFF4ABB58)),
+                    backgroundColor: war.fondo,
+                    valueColor: AlwaysStoppedAnimation<Color>(war.secundario),
                     minHeight: 4,
                   ),
                 ),
                 if (!hasEjercito) ...[
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     '← Elige un ejército para estar listo',
                     style: TextStyle(
                         fontSize: 8,
-                        color: Color(0xFFC04040),
+                        color: war.error,
                         fontFamily: 'Cinzel',
                         letterSpacing: 0.5),
                   ),
                 ] else if (isHost && !lobby.todosListos) ...[
                   const SizedBox(height: 6),
-                  const Text(
+                  Text(
                     'Esperando a que todos elijan ejército',
                     style: TextStyle(
                         fontSize: 8,
-                        color: Color(0xFF506070),
+                        color: war.textoTenue,
                         fontFamily: 'Cinzel',
                         letterSpacing: 0.5),
                   ),
@@ -700,8 +675,6 @@ class _RoomFooter extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 16),
-
-          // Botón
           if (isHost)
             GestureDetector(
               onTap: canStart ? onStart : null,
@@ -710,14 +683,12 @@ class _RoomFooter extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 decoration: BoxDecoration(
-                  color: canStart
-                      ? const Color(0xFFC8A860).withOpacity(0.18)
-                      : const Color(0xFF0A1220),
+                  color: canStart ? war.primario.withOpacity(0.18) : war.fondo,
                   borderRadius: BorderRadius.circular(5),
                   border: Border.all(
                     color: canStart
-                        ? const Color(0xFFC8A860).withOpacity(0.6)
-                        : const Color(0x30506070),
+                        ? war.primario.withOpacity(0.6)
+                        : war.borde.withOpacity(0.3),
                     width: 1,
                   ),
                 ),
@@ -725,9 +696,7 @@ class _RoomFooter extends StatelessWidget {
                   'INICIAR BATALLA',
                   style: TextStyle(
                     fontSize: 11,
-                    color: canStart
-                        ? const Color(0xFFC8A860)
-                        : const Color(0xFF354050),
+                    color: canStart ? war.primario : war.textoTenue,
                     fontFamily: 'Cinzel',
                     letterSpacing: 2,
                     fontWeight: FontWeight.bold,
@@ -739,14 +708,12 @@ class _RoomFooter extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               decoration: BoxDecoration(
-                color: me.listo
-                    ? const Color(0xFF4ABB58).withOpacity(0.10)
-                    : const Color(0xFF0A1220),
+                color: me.listo ? war.secundario.withOpacity(0.10) : war.fondo,
                 borderRadius: BorderRadius.circular(5),
                 border: Border.all(
                   color: me.listo
-                      ? const Color(0xFF4ABB58).withOpacity(0.4)
-                      : const Color(0x30506070),
+                      ? war.secundario.withOpacity(0.4)
+                      : war.borde.withOpacity(0.3),
                   width: 1,
                 ),
               ),
@@ -759,10 +726,10 @@ class _RoomFooter extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 11,
                   color: me.listo
-                      ? const Color(0xFF4ABB58)
+                      ? war.secundario
                       : me.ejercitoId == null
-                          ? const Color(0xFFC04040)
-                          : const Color(0xFF506070),
+                          ? war.error
+                          : war.textoTenue,
                   fontFamily: 'Cinzel',
                   letterSpacing: 2,
                 ),

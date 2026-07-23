@@ -2,10 +2,10 @@
 
 import 'dart:async';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:warzero/services/settings_controller.dart';
 import '../models/lobby_model.dart';
 import '../services/lobby_service.dart';
 import '../services/warzero_api.dart';
@@ -51,7 +51,6 @@ class _LobbyScreenState extends State<LobbyScreen>
   }
 
   void _goToRoom(String lobbyId) {
-    // Buscar el lobby en los datos actuales para saber si está en curso
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => RoomScreen(
         lobbyId: lobbyId,
@@ -61,7 +60,6 @@ class _LobbyScreenState extends State<LobbyScreen>
     ));
   }
 
-  /// Navega directamente al GameScreen (para partidas ya en curso).
   void _goDirectlyToGame(String lobbyId) {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => GameScreen(
@@ -130,40 +128,42 @@ class _LobbyScreenState extends State<LobbyScreen>
   }
 
   void _showError(String msg) {
+    final war = context.war;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content:
           Text(msg, style: const TextStyle(fontFamily: 'Cinzel', fontSize: 11)),
-      backgroundColor: const Color(0xFF3A0A08),
+      backgroundColor: war.error.withOpacity(0.25),
       behavior: SnackBarBehavior.floating,
     ));
   }
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Scaffold(
-      backgroundColor: const Color(0xFF030810),
+      backgroundColor: war.fondo,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF02050D),
+        backgroundColor: war.superficie,
         elevation: 0,
         centerTitle: false,
-        title: const Text(
+        title: Text(
           'SALA DE GUERRA',
           style: TextStyle(
             fontSize: 16,
             letterSpacing: 4,
-            color: Color(0xFFC8A860),
+            color: war.primario,
             fontFamily: 'Cinzel',
             fontWeight: FontWeight.bold,
           ),
         ),
         bottom: TabBar(
           controller: _tabs,
-          indicatorColor: const Color(0xFFC8A860),
+          indicatorColor: war.primario,
           indicatorWeight: 1.5,
           labelStyle: const TextStyle(
               fontSize: 10, letterSpacing: 2, fontFamily: 'Cinzel'),
-          unselectedLabelColor: const Color(0xFF506070),
-          labelColor: const Color(0xFFC8A860),
+          unselectedLabelColor: war.textoTenue,
+          labelColor: war.primario,
           tabs: const [
             Tab(text: 'EN CURSO'),
             Tab(text: 'PÚBLICAS'),
@@ -224,8 +224,6 @@ class _PublicLobbiesList extends StatefulWidget {
 }
 
 class _PublicLobbiesListState extends State<_PublicLobbiesList> {
-  // Vía API (sin Firestore realtime, que se cuelga en Android). El future se
-  // recrea al recargar.
   final WarZeroApi _api = WarZeroApi();
   Future<List<LobbyModel>>? _future;
 
@@ -253,6 +251,7 @@ class _PublicLobbiesListState extends State<_PublicLobbiesList> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final service = widget.service;
     final uid = widget.uid;
     final alias = widget.alias;
@@ -272,14 +271,14 @@ class _PublicLobbiesListState extends State<_PublicLobbiesList> {
         }
         final lobbies = snap.data ?? [];
         if (lobbies.isEmpty) {
-          return _EmptyState(
+          return const _EmptyState(
             icon: Icons.public_off,
             message: 'No hay partidas públicas.\n¡Crea la primera!',
           );
         }
         return RefreshIndicator(
-          color: const Color(0xFFC8A860),
-          backgroundColor: const Color(0xFF0A1220),
+          color: war.primario,
+          backgroundColor: war.superficie,
           onRefresh: _recargar,
           child: ListView.builder(
             padding: const EdgeInsets.all(12),
@@ -322,12 +321,13 @@ class _LobbyCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     final isFull = lobby.estaLleno;
     final accent = isMyLobby
-        ? const Color(0xFFC8A860)
+        ? war.primario
         : isFull
-            ? const Color(0xFF506070)
-            : const Color(0xFF4ABB58);
+            ? war.textoTenue
+            : war.secundario;
 
     return GestureDetector(
       onTap: isFull && !isMyLobby ? null : onTap,
@@ -335,7 +335,7 @@ class _LobbyCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: const Color(0xFF080D18),
+          color: war.superficie,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: accent.withOpacity(0.30), width: 1),
           boxShadow: [
@@ -367,9 +367,9 @@ class _LobbyCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(lobby.nombre,
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 12,
-                          color: Color(0xFFD0B870),
+                          color: war.primario,
                           fontFamily: 'Cinzel',
                           letterSpacing: 1,
                           fontWeight: FontWeight.bold)),
@@ -413,26 +413,27 @@ class _PrivateTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.lock_outline, size: 48, color: Color(0xFF3A4050)),
+          Icon(Icons.lock_outline, size: 48, color: war.borde),
           const SizedBox(height: 16),
-          const Text('SALA PRIVADA',
+          Text('SALA PRIVADA',
               style: TextStyle(
                   fontSize: 14,
-                  color: Color(0xFFC8A860),
+                  color: war.primario,
                   letterSpacing: 4,
                   fontFamily: 'Cinzel',
                   fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Introduce el ID de sala y la contraseña\npara unirte a una partida privada.',
             textAlign: TextAlign.center,
             style: TextStyle(
                 fontSize: 10,
-                color: Color(0xFF506070),
+                color: war.textoTenue,
                 fontFamily: 'Cinzel',
                 height: 1.8,
                 letterSpacing: 1),
@@ -476,7 +477,6 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
   ModoTurno _modoTurno = ModoTurno.rapida;
   bool _loading = false;
 
-  // ── Mapa ──────────────────────────────────────────────────
   List<MapaInfo> _mapas = [];
   String? _mapaId;
   bool _loadingMapas = false;
@@ -509,7 +509,6 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
     }
   }
 
-  /// Recarga mapas cuando cambia el número de jugadores
   Future<void> _onJugadoresChanged(int n) async {
     if (!mounted) return;
     setState(() {
@@ -560,11 +559,12 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Dialog(
-      backgroundColor: const Color(0xFF080D18),
+      backgroundColor: war.superficie,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0x405A4820), width: 1),
+        side: BorderSide(color: war.borde.withOpacity(0.4), width: 1),
       ),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -572,23 +572,19 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('CREAR SALA',
+            Text('CREAR SALA',
                 style: TextStyle(
                     fontSize: 16,
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     fontFamily: 'Cinzel',
                     letterSpacing: 3,
                     fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
-            const Divider(color: Color(0x30C8A860)),
+            Divider(color: war.primario.withOpacity(0.2)),
             const SizedBox(height: 16),
-
-            // ── Nombre ──────────────────────────────────────
             _FieldLabel('NOMBRE DE SALA'),
             _DarkTextField(controller: _nombreCtrl, hint: 'Mi Sala'),
             const SizedBox(height: 16),
-
-            // ── Jugadores ────────────────────────────────────
             _FieldLabel('JUGADORES'),
             Row(
               children: [2, 4, 6, 8].map((n) {
@@ -601,14 +597,10 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
                     height: 36,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: sel
-                          ? const Color(0xFFC8A860).withOpacity(0.15)
-                          : const Color(0xFF0A1220),
+                      color: sel ? war.primario.withOpacity(0.15) : war.fondo,
                       borderRadius: BorderRadius.circular(4),
                       border: Border.all(
-                        color: sel
-                            ? const Color(0xFFC8A860)
-                            : const Color(0x30506070),
+                        color: sel ? war.primario : war.borde.withOpacity(0.3),
                         width: 1,
                       ),
                     ),
@@ -616,17 +608,13 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
                         style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
-                            color: sel
-                                ? const Color(0xFFC8A860)
-                                : const Color(0xFF506070),
+                            color: sel ? war.primario : war.textoTenue,
                             fontFamily: 'Cinzel')),
                   ),
                 );
               }).toList(),
             ),
             const SizedBox(height: 16),
-
-            // ── Selector de mapa ─────────────────────────────
             _FieldLabel('MAPA'),
             _MapaSelector(
               mapas: _mapas,
@@ -636,16 +624,12 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
               onSelected: (id) => setState(() => _mapaId = id),
             ),
             const SizedBox(height: 16),
-
-            // ── Modo turno ───────────────────────────────────
             _FieldLabel('FIN DE TURNO'),
             _ModoTurnoSelector(
               selected: _modoTurno,
               onChanged: (m) => setState(() => _modoTurno = m),
             ),
             const SizedBox(height: 16),
-
-            // ── Sala privada ─────────────────────────────────
             GestureDetector(
               onTap: () => setState(() => _esPrivada = !_esPrivada),
               child: Row(
@@ -655,36 +639,30 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
                     width: 20,
                     height: 20,
                     decoration: BoxDecoration(
-                      color: _esPrivada
-                          ? const Color(0xFFC8A860)
-                          : Colors.transparent,
+                      color: _esPrivada ? war.primario : Colors.transparent,
                       borderRadius: BorderRadius.circular(4),
-                      border:
-                          Border.all(color: const Color(0xFF7A5A18), width: 1),
+                      border: Border.all(color: war.borde, width: 1),
                     ),
                     child: _esPrivada
-                        ? const Icon(Icons.check,
-                            size: 14, color: Color(0xFF030810))
+                        ? Icon(Icons.check, size: 14, color: war.fondo)
                         : null,
                   ),
                   const SizedBox(width: 10),
-                  const Text('SALA PRIVADA',
+                  Text('SALA PRIVADA',
                       style: TextStyle(
                           fontSize: 10,
-                          color: Color(0xFF9A8060),
+                          color: war.texto,
                           fontFamily: 'Cinzel',
                           letterSpacing: 1.5)),
                 ],
               ),
             ),
-
             if (_esPrivada) ...[
               const SizedBox(height: 16),
               _FieldLabel('CONTRASEÑA'),
               _DarkTextField(
                   controller: _passCtrl, hint: '••••••', obscure: true),
             ],
-
             const SizedBox(height: 24),
             Row(
               children: [
@@ -697,12 +675,12 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(4),
                         border: Border.all(
-                            color: const Color(0x30506070), width: 1),
+                            color: war.borde.withOpacity(0.3), width: 1),
                       ),
-                      child: const Text('CANCELAR',
+                      child: Text('CANCELAR',
                           style: TextStyle(
                               fontSize: 10,
-                              color: Color(0xFF506070),
+                              color: war.textoTenue,
                               fontFamily: 'Cinzel',
                               letterSpacing: 1.5)),
                     ),
@@ -716,22 +694,21 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
                       height: 40,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFC8A860).withOpacity(0.15),
+                        color: war.primario.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(4),
                         border: Border.all(
-                            color: const Color(0xFFC8A860).withOpacity(0.5),
-                            width: 1),
+                            color: war.primario.withOpacity(0.5), width: 1),
                       ),
                       child: _loading
-                          ? const SizedBox(
+                          ? SizedBox(
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(
-                                  color: Color(0xFFC8A860), strokeWidth: 2))
-                          : const Text('CREAR',
+                                  color: war.primario, strokeWidth: 2))
+                          : Text('CREAR',
                               style: TextStyle(
                                   fontSize: 10,
-                                  color: Color(0xFFC8A860),
+                                  color: war.primario,
                                   fontFamily: 'Cinzel',
                                   letterSpacing: 2,
                                   fontWeight: FontWeight.bold)),
@@ -767,15 +744,16 @@ class _MapaSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     if (loading) {
-      return const SizedBox(
+      return SizedBox(
         height: 36,
         child: Center(
           child: SizedBox(
             width: 16,
             height: 16,
             child: CircularProgressIndicator(
-                color: Color(0xFF506070), strokeWidth: 1.5),
+                color: war.textoTenue, strokeWidth: 1.5),
           ),
         ),
       );
@@ -785,19 +763,19 @@ class _MapaSelector extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: const Color(0xFF200808),
+          color: war.error.withOpacity(0.12),
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: const Color(0x60C04040), width: 1),
+          border: Border.all(color: war.error.withOpacity(0.4), width: 1),
         ),
         child: Row(children: [
-          const Icon(Icons.error_outline, size: 13, color: Color(0xFFC04040)),
+          Icon(Icons.error_outline, size: 13, color: war.error),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               'Error cargando mapas: $error',
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 8,
-                  color: Color(0xFFC04040),
+                  color: war.error,
                   fontFamily: 'Cinzel',
                   letterSpacing: 0.3),
             ),
@@ -810,23 +788,25 @@ class _MapaSelector extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: const Color(0xFF050A14),
+          color: war.fondo,
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: const Color(0x30506070), width: 1),
+          border: Border.all(color: war.borde.withOpacity(0.3), width: 1),
         ),
-        child: const Text(
+        child: Text(
           'Sin mapas para esta configuración — terreno estándar',
           style: TextStyle(
               fontSize: 9,
-              color: Color(0xFF506070),
+              color: war.textoTenue,
               fontFamily: 'Cinzel',
               letterSpacing: 0.5),
         ),
       );
     }
 
-    // Opción "Sin mapa" + lista de mapas
     final opciones = <MapaInfo?>[null, ...mapas];
+
+    // Acento de "mapa seleccionado": mantengo el azul semántico del selector.
+    const azulSel = Color(0xFF4090E0);
 
     return Column(
       children: opciones.map((mapa) {
@@ -835,8 +815,6 @@ class _MapaSelector extends StatelessWidget {
         final label = mapa == null
             ? 'SIN MAPA  (todo terrestre)'
             : mapa.nombre.toUpperCase();
-        final accent =
-            isSelected ? const Color(0xFF4090E0) : const Color(0xFF304050);
 
         return GestureDetector(
           onTap: () => onSelected(mapa?.id),
@@ -845,14 +823,12 @@ class _MapaSelector extends StatelessWidget {
             margin: const EdgeInsets.only(bottom: 6),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             decoration: BoxDecoration(
-              color: isSelected
-                  ? const Color(0xFF4090E0).withOpacity(0.08)
-                  : const Color(0xFF050A14),
+              color: isSelected ? azulSel.withOpacity(0.08) : war.fondo,
               borderRadius: BorderRadius.circular(4),
               border: Border.all(
                 color: isSelected
-                    ? const Color(0xFF4090E0).withOpacity(0.60)
-                    : const Color(0x25506070),
+                    ? azulSel.withOpacity(0.60)
+                    : war.borde.withOpacity(0.25),
                 width: isSelected ? 1.2 : 1,
               ),
             ),
@@ -861,7 +837,7 @@ class _MapaSelector extends StatelessWidget {
                 Icon(
                   mapa == null ? Icons.crop_square : Icons.map_outlined,
                   size: 14,
-                  color: accent,
+                  color: isSelected ? azulSel : war.textoTenue,
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -871,7 +847,7 @@ class _MapaSelector extends StatelessWidget {
                         fontSize: 10,
                         color: isSelected
                             ? const Color(0xFF80C0FF)
-                            : const Color(0xFF506070),
+                            : war.textoTenue,
                         fontFamily: 'Cinzel',
                         letterSpacing: 1,
                         fontWeight:
@@ -884,19 +860,14 @@ class _MapaSelector extends StatelessWidget {
                   height: 14,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: isSelected
-                        ? const Color(0xFF4090E0)
-                        : Colors.transparent,
+                    color: isSelected ? azulSel : Colors.transparent,
                     border: Border.all(
-                      color: isSelected
-                          ? const Color(0xFF4090E0)
-                          : const Color(0xFF506070),
+                      color: isSelected ? azulSel : war.textoTenue,
                       width: 1.5,
                     ),
                   ),
                   child: isSelected
-                      ? const Icon(Icons.check,
-                          size: 9, color: Color(0xFF030810))
+                      ? Icon(Icons.check, size: 9, color: war.fondo)
                       : null,
                 ),
               ],
@@ -948,11 +919,12 @@ class _UnirsePrivadoDialogState extends State<_UnirsePrivadoDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Dialog(
-      backgroundColor: const Color(0xFF080D18),
+      backgroundColor: war.superficie,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: const BorderSide(color: Color(0x405A4820), width: 1),
+        side: BorderSide(color: war.borde.withOpacity(0.4), width: 1),
       ),
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -960,14 +932,14 @@ class _UnirsePrivadoDialogState extends State<_UnirsePrivadoDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('UNIRSE A SALA PRIVADA',
+            Text('UNIRSE A SALA PRIVADA',
                 style: TextStyle(
                     fontSize: 14,
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     fontFamily: 'Cinzel',
                     letterSpacing: 2,
                     fontWeight: FontWeight.bold)),
-            const Divider(color: Color(0x30C8A860)),
+            Divider(color: war.primario.withOpacity(0.2)),
             const SizedBox(height: 16),
             _FieldLabel('ID DE SALA'),
             _DarkTextField(controller: _idCtrl, hint: 'Código de sala...'),
@@ -984,22 +956,21 @@ class _UnirsePrivadoDialogState extends State<_UnirsePrivadoDialog> {
                   height: 42,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: const Color(0xFFC8A860).withOpacity(0.15),
+                    color: war.primario.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(4),
                     border: Border.all(
-                        color: const Color(0xFFC8A860).withOpacity(0.5),
-                        width: 1),
+                        color: war.primario.withOpacity(0.5), width: 1),
                   ),
                   child: _loading
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(
-                              color: Color(0xFFC8A860), strokeWidth: 2))
-                      : const Text('ENTRAR',
+                              color: war.primario, strokeWidth: 2))
+                      : Text('ENTRAR',
                           style: TextStyle(
                               fontSize: 11,
-                              color: Color(0xFFC8A860),
+                              color: war.primario,
                               fontFamily: 'Cinzel',
                               letterSpacing: 3,
                               fontWeight: FontWeight.bold)),
@@ -1031,27 +1002,27 @@ class _GoldButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         width: width,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: const Color(0xFFC8A860).withOpacity(0.12),
+          color: war.primario.withOpacity(0.12),
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(
-              color: const Color(0xFFC8A860).withOpacity(0.40), width: 1),
+          border: Border.all(color: war.primario.withOpacity(0.40), width: 1),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 14, color: const Color(0xFFC8A860)),
+            Icon(icon, size: 14, color: war.primario),
             const SizedBox(width: 6),
             Text(label,
-                style: const TextStyle(
+                style: TextStyle(
                     fontSize: 9,
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     fontFamily: 'Cinzel',
                     letterSpacing: 1.5,
                     fontWeight: FontWeight.bold)),
@@ -1068,12 +1039,13 @@ class _FieldLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Text(text,
-          style: const TextStyle(
+          style: TextStyle(
               fontSize: 8,
-              color: Color(0xFF506070),
+              color: war.textoTenue,
               fontFamily: 'Cinzel',
               letterSpacing: 2)),
     );
@@ -1093,26 +1065,28 @@ class _DarkTextField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return TextField(
       controller: controller,
       obscureText: obscure,
-      style: const TextStyle(
-          color: Color(0xFFD0B870), fontFamily: 'Cinzel', fontSize: 13),
+      style: TextStyle(color: war.texto, fontFamily: 'Cinzel', fontSize: 13),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: const TextStyle(
-            color: Color(0x60506070), fontFamily: 'Cinzel', fontSize: 12),
+        hintStyle: TextStyle(
+            color: war.textoTenue.withOpacity(0.6),
+            fontFamily: 'Cinzel',
+            fontSize: 12),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         enabledBorder: OutlineInputBorder(
-          borderSide: const BorderSide(color: Color(0x40503214), width: 1),
+          borderSide: BorderSide(color: war.borde.withOpacity(0.4), width: 1),
           borderRadius: BorderRadius.circular(4),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: const BorderSide(color: Color(0xFFC8A860), width: 1.2),
+          borderSide: BorderSide(color: war.primario, width: 1.2),
           borderRadius: BorderRadius.circular(4),
         ),
-        fillColor: const Color(0xFF050A14),
+        fillColor: war.fondo,
         filled: true,
       ),
     );
@@ -1151,17 +1125,18 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 48, color: const Color(0xFF2A3040)),
+          Icon(icon, size: 48, color: war.borde),
           const SizedBox(height: 16),
           Text(message,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 10,
-                  color: Color(0xFF506070),
+                  color: war.textoTenue,
                   fontFamily: 'Cinzel',
                   height: 1.8,
                   letterSpacing: 1)),
@@ -1173,8 +1148,6 @@ class _EmptyState extends StatelessWidget {
 
 // ─────────────────────────────────────────────────────────────
 // CARGANDO CON OPCIÓN DE REINTENTO
-// Muestra un spinner; si la carga se prolonga, ofrece un botón para
-// reintentar, de modo que el jugador nunca quede atrapado indefinidamente.
 // ─────────────────────────────────────────────────────────────
 class _LoadingWithRetry extends StatefulWidget {
   final VoidCallback onRetry;
@@ -1204,18 +1177,19 @@ class _LoadingWithRetryState extends State<_LoadingWithRetry> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const CircularProgressIndicator(color: Color(0xFFC8A860)),
+          CircularProgressIndicator(color: war.primario),
           if (_mostrarReintento) ...[
             const SizedBox(height: 20),
-            const Text('La carga está tardando más de lo normal.',
+            Text('La carga está tardando más de lo normal.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 9,
-                    color: Color(0xFF506070),
+                    color: war.textoTenue,
                     fontFamily: 'Cinzel',
                     height: 1.6,
                     letterSpacing: 1)),
@@ -1238,17 +1212,18 @@ class _RetryState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.cloud_off, size: 48, color: Color(0xFF2A3040)),
+          Icon(Icons.cloud_off, size: 48, color: war.borde),
           const SizedBox(height: 16),
           Text(message,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 10,
-                  color: Color(0xFF506070),
+                  color: war.textoTenue,
                   fontFamily: 'Cinzel',
                   height: 1.8,
                   letterSpacing: 1)),
@@ -1266,27 +1241,27 @@ class _RetryButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return GestureDetector(
       onTap: onRetry,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 9),
         decoration: BoxDecoration(
-          color: const Color(0xFFC8A860).withOpacity(0.12),
+          color: war.primario.withOpacity(0.12),
           borderRadius: BorderRadius.circular(4),
-          border: Border.all(
-              color: const Color(0xFFC8A860).withOpacity(0.6), width: 1),
+          border: Border.all(color: war.primario.withOpacity(0.6), width: 1),
         ),
-        child: const Row(
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.refresh, size: 13, color: Color(0xFFC8A860)),
-            SizedBox(width: 8),
+            Icon(Icons.refresh, size: 13, color: war.primario),
+            const SizedBox(width: 8),
             Text('REINTENTAR',
                 style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 10,
                     letterSpacing: 2,
-                    color: Color(0xFFC8A860),
+                    color: war.primario,
                     fontWeight: FontWeight.bold)),
           ],
         ),
@@ -1316,10 +1291,11 @@ class _MisPartidasList extends StatefulWidget {
 }
 
 class _MisPartidasListState extends State<_MisPartidasList> {
-  // Vía API (sin Firestore realtime, que se cuelga en Android tras la partida).
-  // El future se recrea al recargar.
   final WarZeroApi _api = WarZeroApi();
   Future<List<LobbyModel>>? _future;
+
+  // Verde = "te toca mover" (mismo tono que PARTIDA RÁPIDA).
+  static const Color _kColorJugar = Color(0xFF4ABB58);
 
   @override
   void initState() {
@@ -1337,7 +1313,6 @@ class _MisPartidasListState extends State<_MisPartidasList> {
     return list;
   }
 
-  /// Recarga (botón "reintentar").
   Future<void> _recargar() async {
     setState(() {
       _future = _cargar();
@@ -1347,6 +1322,7 @@ class _MisPartidasListState extends State<_MisPartidasList> {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return FutureBuilder<List<LobbyModel>>(
       future: _future,
       builder: (ctx, snap) {
@@ -1357,8 +1333,6 @@ class _MisPartidasListState extends State<_MisPartidasList> {
           );
         }
         if (snap.connectionState == ConnectionState.waiting) {
-          // Spinner con opción de reintentar por si la carga se atasca, para no
-          // dejar al jugador atrapado en un spinner indefinido.
           return _LoadingWithRetry(onRetry: _recargar);
         }
 
@@ -1375,16 +1349,49 @@ class _MisPartidasListState extends State<_MisPartidasList> {
           itemCount: lobbies.length,
           itemBuilder: (_, i) {
             final lobby = lobbies[i];
-            final estado = lobby.estado == LobbyEstado.enCurso
-                ? 'EN BATALLA'
-                : 'ESPERANDO';
-            final accentColor = lobby.estado == LobbyEstado.enCurso
-                ? const Color(0xFFC04040)
-                : const Color(0xFFC8A860);
+
+            // ── Estado del turno desde la perspectiva del jugador local ──
+            // JUGAR      → aún no has cerrado tu turno (o el turno ya avanzó):
+            //              puedes entrar a mover.
+            // EN ESPERA  → ya cerraste; faltan otros jugadores por cerrar.
+            final bool enCurso = lobby.estado == LobbyEstado.enCurso;
+            final bool eliminado =
+                lobby.jugadoresEliminados.contains(widget.uid);
+            final bool yaCerre = lobby.cerradoPor.contains(widget.uid);
+
+            late final String estado;
+            late final Color accentColor;
+            late final IconData iconData;
+
+            if (!enCurso) {
+              // Sala todavía reuniendo jugadores.
+              estado = 'EN SALA';
+              accentColor = war.primario;
+              iconData = Icons.meeting_room;
+            } else if (eliminado) {
+              estado = 'ELIMINADO';
+              accentColor = war.textoTenue;
+              iconData = Icons.dangerous;
+            } else if (yaCerre) {
+              estado = 'EN ESPERA';
+              accentColor = war.primario; // dorado = esperando a los demás
+              iconData = Icons.hourglass_top;
+            } else {
+              estado = 'JUGAR';
+              accentColor = _kColorJugar; // verde = te toca mover
+              iconData = Icons.play_arrow;
+            }
+
+            // Progreso de cierres entre jugadores activos (solo en curso).
+            final activos = lobby.jugadores
+                .where((j) => !lobby.jugadoresEliminados.contains(j.uid))
+                .toList();
+            final int cerrados =
+                activos.where((j) => lobby.cerradoPor.contains(j.uid)).length;
 
             return GestureDetector(
               onTap: () {
-                if (lobby.estado == LobbyEstado.enCurso) {
+                if (enCurso) {
                   widget.onDirectGame(lobby.id);
                 } else {
                   widget.onJoin(lobby.id);
@@ -1394,7 +1401,7 @@ class _MisPartidasListState extends State<_MisPartidasList> {
                 margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF080D18),
+                  color: war.superficie,
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
                       color: accentColor.withOpacity(0.30), width: 1),
@@ -1417,9 +1424,7 @@ class _MisPartidasListState extends State<_MisPartidasList> {
                             color: accentColor.withOpacity(0.30), width: 1),
                       ),
                       child: Icon(
-                        lobby.estado == LobbyEstado.enCurso
-                            ? Icons.bolt
-                            : Icons.hourglass_top,
+                        iconData,
                         color: accentColor,
                         size: 20,
                       ),
@@ -1430,10 +1435,10 @@ class _MisPartidasListState extends State<_MisPartidasList> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(lobby.nombre,
-                              style: const TextStyle(
+                              style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
-                                  color: Color(0xFFD0B870),
+                                  color: war.primario,
                                   fontFamily: 'Cinzel',
                                   letterSpacing: 1)),
                           const SizedBox(height: 4),
@@ -1448,6 +1453,20 @@ class _MisPartidasListState extends State<_MisPartidasList> {
                                   fontFamily: 'Cinzel',
                                   letterSpacing: 1),
                             ),
+                            if (enCurso) ...[
+                              const SizedBox(width: 10),
+                              Icon(Icons.lock_clock,
+                                  size: 10, color: accentColor),
+                              const SizedBox(width: 4),
+                              Text(
+                                '$cerrados/${activos.length} cerraron',
+                                style: TextStyle(
+                                    fontSize: 9,
+                                    color: accentColor.withOpacity(0.8),
+                                    fontFamily: 'Cinzel',
+                                    letterSpacing: 1),
+                              ),
+                            ],
                             const SizedBox(width: 10),
                             if (lobby.esPrivada)
                               Icon(Icons.lock,
@@ -1557,18 +1576,19 @@ class _ModoOption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final war = context.war;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color:
-              isSelected ? accent.withOpacity(0.08) : const Color(0xFF050A14),
+          color: isSelected ? accent.withOpacity(0.08) : war.fondo,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color:
-                isSelected ? accent.withOpacity(0.60) : const Color(0x25506070),
+            color: isSelected
+                ? accent.withOpacity(0.60)
+                : war.borde.withOpacity(0.25),
             width: isSelected ? 1.2 : 1,
           ),
         ),
@@ -1576,15 +1596,13 @@ class _ModoOption extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              Icon(icon,
-                  size: 13,
-                  color: isSelected ? accent : const Color(0xFF506070)),
+              Icon(icon, size: 13, color: isSelected ? accent : war.textoTenue),
               const SizedBox(width: 8),
               Text(label,
                   style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      color: isSelected ? accent : const Color(0xFF506070),
+                      color: isSelected ? accent : war.textoTenue,
                       fontFamily: 'Cinzel',
                       letterSpacing: 1.5)),
               const Spacer(),
@@ -1596,12 +1614,12 @@ class _ModoOption extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: isSelected ? accent : Colors.transparent,
                   border: Border.all(
-                    color: isSelected ? accent : const Color(0xFF506070),
+                    color: isSelected ? accent : war.textoTenue,
                     width: 1.5,
                   ),
                 ),
                 child: isSelected
-                    ? const Icon(Icons.check, size: 9, color: Color(0xFF030810))
+                    ? Icon(Icons.check, size: 9, color: war.fondo)
                     : null,
               ),
             ]),
