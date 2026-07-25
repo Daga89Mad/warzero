@@ -126,6 +126,7 @@ class AccionController {
     required int indiceMano,
     required String obeliscoLocal,
     required Map<String, String> obeliscosPorJugador,
+    Set<String> coordsPropias = const {},
   }) {
     if (!carta.tieneHabilidad) return false;
     final h = CatalogoHabilidades.get(carta.idHabilidad);
@@ -146,6 +147,7 @@ class AccionController {
       habilidad: h,
       config: _config,
       obeliscosPorJugador: obeliscosPorJugador,
+      coordsPropias: coordsPropias,
     );
     _fase = FaseAccion.seleccionandoObjetivos;
     return true;
@@ -160,6 +162,7 @@ class AccionController {
     required String coord,
     required int indiceCelda,
     required Map<String, String> obeliscosPorJugador,
+    Set<String> coordsPropias = const {},
   }) {
     final carta = cartaEnCelda.carta;
     if (!carta.tieneHabilidad) return false;
@@ -180,6 +183,7 @@ class AccionController {
       habilidad: h,
       config: _config,
       obeliscosPorJugador: obeliscosPorJugador,
+      coordsPropias: coordsPropias,
     );
     _fase = FaseAccion.seleccionandoObjetivos;
     return true;

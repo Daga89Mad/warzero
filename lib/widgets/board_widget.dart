@@ -6,6 +6,18 @@ import '../models/board_state.dart';
 import '../models/carta_model.dart';
 import 'cell_widget.dart';
 
+/// Silueta fantasma de una carta que se movió este turno: recorre el camino de
+/// su celda de ORIGEN a su celda de DESTINO (animación de revisión post-cierre).
+typedef RevisionFantasma = ({
+  String origen,
+  String destino,
+  Color color,
+  IconData icon,
+  Color iconColor,
+  int movimiento,
+  String nombre,
+});
+
 /// Imagen usada cuando el mapa no define una propia (campo `imagen` vacío).
 const String kImagenTableroPorDefecto = 'assets/images/map_background.png';
 
@@ -58,6 +70,10 @@ class BoardWidget extends StatefulWidget {
   /// Coordenadas de TODOS los obeliscos (de cualquier jugador), del servidor.
   final Set<String> obeliscoCoords;
 
+  /// coord → color del dueño del obelisco. Colorea el cristal del cuartel
+  /// (SpawnMarker) con el color de su jugador en vez de blanco.
+  final Map<String, Color> obeliscoColores;
+
   /// uid → color del obelisco para colorear cartas
   final Map<String, Color> playerColors;
 
@@ -74,6 +90,13 @@ class BoardWidget extends StatefulWidget {
   /// coord → cartas de acción declaradas ahí, pendientes de resolverse al
   /// cerrar turno. Solo visión local (ver doc en CellWidget.fantasmas).
   final Map<String, List<CartaModel>> fantasmasAccion;
+
+  /// REVISIÓN POST-CIERRE: mientras el turno cerrado se resuelve, se dibuja una
+  /// SILUETA FANTASMA (copia tenue de la carta) en la celda de ORIGEN de cada
+  /// unidad que moví, y un resaltado en las celdas objetivo de mis acciones.
+  /// Vacío = no se pinta nada.
+  final List<RevisionFantasma> fantasmasRevision;
+  final Set<String> accionesRevision;
 
   final Function(String coord, int ri, int ci) onCellTap;
 
@@ -92,11 +115,14 @@ class BoardWidget extends StatefulWidget {
     this.movableCoords = const {},
     this.obeliscoLocal,
     this.obeliscoCoords = const {},
+    this.obeliscoColores = const {},
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
     this.onBackgroundTap,
     this.fantasmasAccion = const {},
+    this.fantasmasRevision = const [],
+    this.accionesRevision = const {},
     required this.onCellTap,
   });
 
@@ -119,7 +145,11 @@ class _BoardWidgetState extends State<BoardWidget>
   Offset _focalPoint = Offset.zero;
   Offset _panAtScale = Offset.zero; // pan snapshot when pinch started
 
-  static const double _minScale = 0.4;
+  // Zoom mínimo ADAPTATIVO al tamaño del tablero: los mapas grandes (muchas
+  // columnas, p. ej. 12×20) necesitan poder alejarse más para verse enteros.
+  //   · 16+ columnas (6/8 jugadores, mapas anchos) → 0.20 (20%)
+  //   · resto (2/4 jugadores)                      → 0.40 (40%)
+  double get _minScale => widget.config.cols >= 16 ? 0.15 : 0.4;
   static const double _maxScale = 2.0;
 
   double get _logicalW => kLabelW + widget.config.cols * kCellW + 80;
@@ -128,6 +158,10 @@ class _BoardWidgetState extends State<BoardWidget>
   @override
   void initState() {
     super.initState();
+    // Zoom INICIAL adaptativo: los mapas grandes (16+ columnas, p. ej. 12×20)
+    // arrancan algo alejados (80%) para ver más tablero de un vistazo; el resto
+    // arranca a 100%. Mismo umbral que _minScale.
+    _scale = widget.config.cols >= 16 ? 0.4 : 1.0;
     _momentumCtrl = AnimationController.unbounded(vsync: this)
       ..addListener(_applyMomentum);
     WidgetsBinding.instance.addPostFrameCallback((_) => _centerBoard());
@@ -250,10 +284,13 @@ class _BoardWidgetState extends State<BoardWidget>
                     movableCoords: widget.movableCoords,
                     obeliscoLocal: widget.obeliscoLocal,
                     obeliscoCoords: widget.obeliscoCoords,
+                    obeliscoColores: widget.obeliscoColores,
                     playerColors: widget.playerColors,
                     localPlayerUid: widget.localPlayerUid,
                     imagenMapa: widget.imagenMapa,
                     fantasmasAccion: widget.fantasmasAccion,
+                    fantasmasRevision: widget.fantasmasRevision,
+                    accionesRevision: widget.accionesRevision,
                     onCellTap: widget.onCellTap,
                   ),
                 ),
@@ -385,10 +422,13 @@ class _PerspectiveBoard extends StatelessWidget {
   final Set<String> movableCoords;
   final String? obeliscoLocal;
   final Set<String> obeliscoCoords;
+  final Map<String, Color> obeliscoColores;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
   final String? imagenMapa;
   final Map<String, List<CartaModel>> fantasmasAccion;
+  final List<RevisionFantasma> fantasmasRevision;
+  final Set<String> accionesRevision;
   final Function(String, int, int) onCellTap;
 
   const _PerspectiveBoard({
@@ -399,10 +439,13 @@ class _PerspectiveBoard extends StatelessWidget {
     this.movableCoords = const {},
     this.obeliscoLocal,
     this.obeliscoCoords = const {},
+    this.obeliscoColores = const {},
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
     this.fantasmasAccion = const {},
+    this.fantasmasRevision = const [],
+    this.accionesRevision = const {},
     required this.onCellTap,
   });
 
@@ -421,10 +464,14 @@ class _PerspectiveBoard extends StatelessWidget {
           highlightEmpty: highlightEmpty,
           movableCoords: movableCoords,
           obeliscoLocal: obeliscoLocal,
+          obeliscoCoords: obeliscoCoords,
+          obeliscoColores: obeliscoColores,
           playerColors: playerColors,
           localPlayerUid: localPlayerUid,
           imagenMapa: imagenMapa,
           fantasmasAccion: fantasmasAccion,
+          fantasmasRevision: fantasmasRevision,
+          accionesRevision: accionesRevision,
           onCellTap: onCellTap,
         ),
       ),
@@ -782,10 +829,13 @@ class _GridContent extends StatelessWidget {
   final Set<String> movableCoords;
   final String? obeliscoLocal;
   final Set<String> obeliscoCoords;
+  final Map<String, Color> obeliscoColores;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
   final String? imagenMapa;
   final Map<String, List<CartaModel>> fantasmasAccion;
+  final List<RevisionFantasma> fantasmasRevision;
+  final Set<String> accionesRevision;
   final Function(String, int, int) onCellTap;
 
   const _GridContent({
@@ -796,10 +846,13 @@ class _GridContent extends StatelessWidget {
     this.movableCoords = const {},
     this.obeliscoLocal,
     this.obeliscoCoords = const {},
+    this.obeliscoColores = const {},
     this.playerColors = const {},
     this.localPlayerUid,
     this.imagenMapa,
     this.fantasmasAccion = const {},
+    this.fantasmasRevision = const [],
+    this.accionesRevision = const {},
     required this.onCellTap,
   });
 
@@ -828,6 +881,7 @@ class _GridContent extends StatelessWidget {
                     isMovable: movableCoords.contains(coord),
                     isObelisco: coord == obeliscoLocal,
                     obeliscoCoords: obeliscoCoords,
+                    obeliscoColores: obeliscoColores,
                     isConquistado: boardState.esCuartelDestruido(coord),
                     isRayo: boardState.esRayo(coord), // ← nuevo
                     isEnvenenada: boardState.celdaTieneVeneno(coord),
@@ -873,10 +927,312 @@ class _GridContent extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: cellRows,
               ),
+              // Capa de REVISIÓN post-cierre: silueta fantasma de cada carta en
+              // su celda de origen + resaltado de celdas objetivo de acciones.
+              // Va encima de las celdas (hereda la misma perspectiva 3D). No
+              // intercepta toques.
+              if (fantasmasRevision.isNotEmpty || accionesRevision.isNotEmpty)
+                Positioned.fill(
+                  child: _RevisionLayer(
+                    config: config,
+                    fantasmas: fantasmasRevision,
+                    acciones: accionesRevision,
+                  ),
+                ),
             ],
           ),
         ),
       ],
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CAPA DE REVISIÓN (post-cierre de turno)
+// ─────────────────────────────────────────────────────────────
+
+/// Capa que se superpone a la rejilla mientras el turno cerrado se resuelve:
+///   · Una SILUETA FANTASMA (copia tenue de la carta) en la celda de ORIGEN de
+///     cada unidad que moví este turno -así se ve "de dónde viene".
+///   · Un anillo luminoso en las celdas objetivo de mis acciones/habilidades.
+/// Va DENTRO del Stack de la rejilla, por lo que hereda la misma perspectiva 3D
+/// que las celdas y queda perfectamente alineada. No intercepta toques.
+class _RevisionLayer extends StatefulWidget {
+  final GameConfig config;
+  final List<RevisionFantasma> fantasmas;
+  final Set<String> acciones;
+
+  const _RevisionLayer({
+    required this.config,
+    required this.fantasmas,
+    required this.acciones,
+  });
+
+  @override
+  State<_RevisionLayer> createState() => _RevisionLayerState();
+}
+
+class _RevisionLayerState extends State<_RevisionLayer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    // Bucle continuo: cada ciclo la silueta aparece en el origen, se desliza al
+    // destino y se desvanece al llegar a la carta real.
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1700),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  /// Rectángulo (en el espacio de la rejilla) de la celda [coord].
+  Rect? _rectFor(String coord) {
+    for (int ri = 0; ri < widget.config.rows; ri++) {
+      for (int ci = 0; ci < widget.config.cols; ci++) {
+        if (widget.config.coordLabel(ri, ci) == coord) {
+          return Rect.fromLTWH(
+            kLabelW + ci * kCellW,
+            ri * kCellH,
+            kCellW,
+            kCellH,
+          );
+        }
+      }
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final children = <Widget>[];
+
+    // Anillos de acción (estáticos, debajo de las siluetas).
+    for (final coord in widget.acciones) {
+      final r = _rectFor(coord);
+      if (r == null) continue;
+      children.add(Positioned(
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height,
+        child: const Center(child: _AccionRing()),
+      ));
+    }
+
+    // Marcador tenue fijo en la celda de ORIGEN, para que el punto de partida
+    // siga visible aunque la silueta esté a medio camino.
+    for (final f in widget.fantasmas) {
+      final r = _rectFor(f.origen);
+      if (r == null) continue;
+      children.add(Positioned(
+        left: r.left,
+        top: r.top,
+        width: r.width,
+        height: r.height,
+        child: Center(child: _GhostOrigenMarker(color: f.color)),
+      ));
+    }
+
+    // Siluetas ANIMADAS recorriendo origen→destino.
+    children.add(Positioned.fill(
+      child: AnimatedBuilder(
+        animation: _ctrl,
+        builder: (context, _) {
+          final movers = <Widget>[];
+          final raw = _ctrl.value;
+          // Posición: reposa un poco en el origen, se desliza, y reposa en el
+          // destino. Opacidad: entra al principio y se desvanece al final.
+          final posT = const Interval(0.12, 0.86, curve: Curves.easeInOutCubic)
+              .transform(raw);
+          double op;
+          if (raw < 0.14) {
+            op = raw / 0.14;
+          } else if (raw > 0.80) {
+            op = (1 - raw) / 0.20;
+          } else {
+            op = 1;
+          }
+          op = op.clamp(0.0, 1.0);
+
+          for (final f in widget.fantasmas) {
+            final ro = _rectFor(f.origen);
+            final rd = _rectFor(f.destino);
+            if (ro == null || rd == null) continue;
+            final pos = Offset.lerp(ro.center, rd.center, posT)!;
+            movers.add(Positioned(
+              left: pos.dx - kCellW / 2,
+              top: pos.dy - kCellH / 2,
+              width: kCellW,
+              height: kCellH,
+              child: Center(child: _GhostToken(fantasma: f, opacityFactor: op)),
+            ));
+          }
+          return Stack(children: movers);
+        },
+      ),
+    ));
+
+    return IgnorePointer(child: Stack(children: children));
+  }
+}
+
+/// Pequeño marcador tenue en la celda de origen (aro hueco), para anclar el
+/// punto de partida mientras la silueta viaja.
+class _GhostOrigenMarker extends StatelessWidget {
+  final Color color;
+  const _GhostOrigenMarker({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = (kCellW < kCellH ? kCellW : kCellH) * 0.34;
+    return Container(
+      width: d,
+      height: d,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color.withOpacity(0.10),
+        border: Border.all(color: color.withOpacity(0.55), width: 1.5),
+      ),
+    );
+  }
+}
+
+/// Copia tenue del token de la carta en su celda de origen. Reproduce el mismo
+/// lenguaje visual que el token real (icono de tipo + movimiento + nombre) pero
+/// atenuado y con borde punteado, para que se lea claramente como "fantasma".
+class _GhostToken extends StatelessWidget {
+  final RevisionFantasma fantasma;
+
+  /// Factor de opacidad (0..1) que aplica la animación al recorrer el camino.
+  final double opacityFactor;
+  const _GhostToken({required this.fantasma, this.opacityFactor = 1.0});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = fantasma.color;
+    return Opacity(
+      opacity: (0.82 * opacityFactor).clamp(0.0, 1.0),
+      child: SizedBox(
+        width: kCellW * 0.70,
+        child: Stack(
+          children: [
+            // Borde punteado + fondo translúcido.
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _GhostBorderPainter(color.withOpacity(0.85)),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(fantasma.icon,
+                          size: 10, color: fantasma.iconColor.withOpacity(0.9)),
+                      const SizedBox(width: 3),
+                      Text(
+                        '${fantasma.movimiento}',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: color,
+                          fontFamily: 'Cinzel',
+                          height: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    fantasma.nombre,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 6,
+                      color: color.withOpacity(0.85),
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Anillo luminoso para las celdas objetivo de una acción/habilidad.
+class _AccionRing extends StatelessWidget {
+  const _AccionRing();
+
+  static const Color _c = Color(0xFF40C0FF);
+
+  @override
+  Widget build(BuildContext context) {
+    final d = (kCellW < kCellH ? kCellW : kCellH) * 0.52;
+    return Container(
+      width: d,
+      height: d,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _c.withOpacity(0.12),
+        border: Border.all(color: _c, width: 2),
+        boxShadow: [
+          BoxShadow(color: _c.withOpacity(0.40), blurRadius: 8),
+        ],
+      ),
+      child: const Icon(Icons.flash_on, size: 15, color: _c),
+    );
+  }
+}
+
+/// Borde punteado redondeado + relleno translúcido para la silueta fantasma.
+class _GhostBorderPainter extends CustomPainter {
+  final Color color;
+  const _GhostBorderPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect =
+        RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(6));
+
+    // Fondo translúcido oscuro.
+    canvas.drawRRect(rrect, Paint()..color = const Color(0xCC060C14));
+
+    // Borde punteado.
+    final path = Path()..addRRect(rrect);
+    final dash = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = color;
+    const dashLen = 4.0, gapLen = 3.0;
+    for (final metric in path.computeMetrics()) {
+      double dist = 0;
+      while (dist < metric.length) {
+        final end = (dist + dashLen).clamp(0.0, metric.length);
+        canvas.drawPath(metric.extractPath(dist, end), dash);
+        dist += dashLen + gapLen;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_GhostBorderPainter old) => old.color != color;
 }

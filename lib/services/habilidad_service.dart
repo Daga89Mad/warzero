@@ -71,11 +71,19 @@ class HabilidadService {
   /// efectos a distancia/mágicos; el rango es Manhattan ortogonal).
   ///
   /// [obeliscosPorJugador] es necesario para aplicar `excluyeCG`.
+  ///
+  /// [coordsPropias] son las celdas que contienen alguna carta del jugador que
+  /// lanza la habilidad. Para efectos ofensivos (veneno / parálisis) esas
+  /// celdas se excluyen: el veneno y la parálisis NUNCA pueden apuntar a las
+  /// propias unidades del lanzador (incidencia: "veneno/parálisis no puede
+  /// afectar al propio jugador que lo lanzó"). Para el resto de habilidades no
+  /// tiene efecto.
   static Set<String> calcularObjetivosValidos({
     required String origen,
     required Habilidad habilidad,
     required GameConfig config,
     required Map<String, String> obeliscosPorJugador,
+    Set<String> coordsPropias = const {},
   }) {
     final candidatos = <String>{};
 
@@ -105,6 +113,15 @@ class HabilidadService {
     if (habilidad.excluyeCG && obeliscosPorJugador.isNotEmpty) {
       final cgs = obeliscosPorJugador.values.toSet();
       candidatos.removeWhere((c) => cgs.contains(c));
+    }
+
+    // Veneno y parálisis son efectos ofensivos: no pueden apuntar a celdas que
+    // contengan cartas del propio lanzador. Así el jugador no puede envenenar
+    // ni paralizar sus propias unidades (ni malgastar la carta en sí mismo).
+    if (coordsPropias.isNotEmpty &&
+        (habilidad.efecto.tipo == EfectoTipo.veneno ||
+            habilidad.efecto.tipo == EfectoTipo.paralisis)) {
+      candidatos.removeWhere(coordsPropias.contains);
     }
 
     return candidatos;

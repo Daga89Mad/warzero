@@ -18,6 +18,16 @@ dependencies:
   shared_preferences: ^2.0.15
   google_fonts: ^6.1.0
 
+  # Red HTTP (usado por WarZeroApi). Estaba implícito; se declara explícitamente.
+  http: ^1.2.0
+
+  # Notificaciones push (turno resuelto → "ya puedes jugar"), iOS + Android.
+  # firebase_messaging 16.x va alineado con firebase_core 4.x.
+  firebase_messaging: ^16.0.0
+  # Muestra la notificación cuando la app está en primer plano (Android no la
+  # pinta sola) y crea el canal de Android.
+  flutter_local_notifications: ^18.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -34,3 +44,4 @@ flutter:
     - assets/images/Mapa8New2.png
     - assets/images/Mapa8New3.png
     - assets/images/Mapa8New4.png
+    - assets/images/Mapa8New4.webp

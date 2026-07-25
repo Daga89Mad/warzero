@@ -127,6 +127,284 @@ class RevisionTurnoScreen extends StatelessWidget {
     return result;
   }
 
+  // ── Detalle por celda (al pulsar) ───────────────────────────
+
+  String _quien(String? uid) =>
+      (uid != null && uid == localUid) ? 'Tú' : 'Rival';
+
+  /// ¿La acción [a] toca la celda [coord] (como origen, objetivo o destino)?
+  bool _accionTocaCoord(Map<String, dynamic> a, String coord) {
+    if (a['origen'] == coord) return true;
+    if (a['objetivo'] == coord) return true;
+    if (a['destino'] == coord) return true;
+    if (a['cartaOrigenCoord'] == coord) return true;
+    final objs = a['objetivos'] as List? ?? const [];
+    return objs.contains(coord);
+  }
+
+  /// Icono, color y etiqueta legible por tipo de acción/habilidad.
+  (IconData, Color, String) _accionMeta(String tipo) {
+    switch (tipo) {
+      case 'disparo':
+        return (Icons.gps_fixed, _cAccion, 'Disparo');
+      case 'veneno':
+        return (Icons.science, const Color(0xFF7ED957), 'Veneno');
+      case 'paralisis':
+        return (Icons.bolt, const Color(0xFF66D0FF), 'Parálisis');
+      case 'teletransporte':
+        return (Icons.auto_awesome, const Color(0xFFB98CFF), 'Teletransporte');
+      case 'escudo':
+        return (Icons.shield, const Color(0xFF5AA0FF), 'Escudo');
+      case 'potFuerza':
+        return (Icons.bolt, const Color(0xFFFFB040), 'Potenciación de fuerza');
+      case 'potDefensa':
+        return (Icons.bolt, const Color(0xFFFFB040), 'Potenciación de defensa');
+      case 'potMovimiento':
+        return (
+          Icons.bolt,
+          const Color(0xFFFFB040),
+          'Potenciación de movimiento'
+        );
+      case 'fallida':
+        return (Icons.block, const Color(0xFF9AA0A6), 'Acción fallida');
+      default:
+        return (Icons.flash_on, _cAccion, tipo.isEmpty ? 'Acción' : tipo);
+    }
+  }
+
+  /// Reúne, para la celda [coord], todos los eventos del turno recién resuelto
+  /// (acciones/habilidades primero, luego combate, conquista, presencia rival y
+  /// las unidades que quedan en la celda). Es lo que muestra el panel de detalle.
+  List<_EventoCelda> _eventosDeCelda(String coord) {
+    final eventos = <_EventoCelda>[];
+
+    // ── 1. Acciones / habilidades (lo principal) ──────────────
+    final accionesLog = historialEntry['accionesLog'] as List? ?? const [];
+    for (final e in accionesLog) {
+      final a = Map<String, dynamic>.from(e as Map);
+      if (!_accionTocaCoord(a, coord)) continue;
+
+      final tipo = (a['tipo'] as String?) ?? '';
+      final (icon, color, etiqueta) = _accionMeta(tipo);
+      final habilidad = (a['habilidadNombre'] as String?) ?? '';
+      final quien = _quien(a['uid'] as String?);
+      final esObjetivo = a['objetivo'] == coord ||
+          a['destino'] == coord ||
+          (a['objetivos'] as List? ?? const []).contains(coord);
+      final esOrigen = a['origen'] == coord || a['cartaOrigenCoord'] == coord;
+
+      final titulo = habilidad.isNotEmpty ? '$etiqueta · $habilidad' : etiqueta;
+      final detalle = StringBuffer('Lanzada por: $quien');
+
+      switch (tipo) {
+        case 'disparo':
+          final destruidas = (a['cartasDestruidas'] as List? ?? const [])
+              .map((c) => Map<String, dynamic>.from(c as Map))
+              .map((c) => (c['Nombre'] ?? c['nombre'] ?? 'Carta').toString())
+              .toList();
+          if (esObjetivo) {
+            detalle.write('\nCelda objetivo · ');
+            detalle.write(destruidas.isEmpty
+                ? 'no impactó (sin bajas)'
+                : 'destruyó: ${destruidas.join(', ')}');
+          } else if (esOrigen) {
+            detalle.write('\nCelda de origen del disparo');
+          }
+          break;
+        case 'veneno':
+          final mag = (a['magnitud'] as num?)?.toInt() ?? 0;
+          final turnos = (a['turnosRestantes'] as num?)?.toInt() ?? 0;
+          if (esObjetivo) {
+            detalle
+                .write('\nCelda objetivo · −$mag defensa · $turnos turno(s)');
+          } else {
+            detalle.write('\nCelda de origen');
+          }
+          break;
+        case 'paralisis':
+          final turnos = (a['turnosRestantes'] as num?)?.toInt() ?? 0;
+          detalle.write(esObjetivo
+              ? '\nCelda objetivo · paraliza $turnos turno(s)'
+              : '\nCelda de origen');
+          break;
+        case 'teletransporte':
+          final carta = (a['cartaNombre'] as String?) ?? 'una carta';
+          final desde = (a['cartaOrigenCoord'] as String?) ?? '?';
+          final hasta = (a['destino'] as String?) ?? '?';
+          detalle.write('\n$carta: $desde → $hasta');
+          break;
+        case 'escudo':
+          final turnos = (a['turnosRestantes'] as num?)?.toInt() ?? 0;
+          detalle.write('\nProtege la celda $turnos turno(s)');
+          break;
+        case 'potFuerza':
+        case 'potDefensa':
+        case 'potMovimiento':
+          final turnos = (a['turnosRestantes'] as num?)?.toInt() ?? 0;
+          if (turnos > 0) detalle.write('\nDura $turnos turno(s)');
+          break;
+        case 'fallida':
+          final motivo = (a['motivo'] as String?) ?? 'no se pudo resolver';
+          detalle.write('\n$motivo');
+          break;
+      }
+
+      eventos.add(_EventoCelda(
+        icon: icon,
+        color: color,
+        titulo: titulo,
+        detalle: detalle.toString(),
+      ));
+    }
+
+    // ── 2. Combate en esta celda ──────────────────────────────
+    final combateLog = historialEntry['combateLog'] as List? ?? const [];
+    for (final e in combateLog) {
+      final c = Map<String, dynamic>.from(e as Map);
+      if (c['coord'] != coord) continue;
+      final ganador = c['ganadorUid'] as String?;
+      final esConquista = c['esConquistaObelisco'] == true;
+      final String resultado;
+      if (ganador == null) {
+        resultado = 'Empate en la celda';
+      } else if (ganador == localUid) {
+        resultado = 'Ganaste el combate';
+      } else {
+        resultado = 'Ganó un rival';
+      }
+      eventos.add(_EventoCelda(
+        icon: Icons.gavel,
+        color: _cCombate,
+        titulo: 'Combate',
+        detalle:
+            esConquista ? '$resultado · ¡conquista de cuartel!' : resultado,
+      ));
+    }
+
+    // ── 3. Conquista (por si viene solo en conquistasLog) ─────
+    if (_conquistaCoords().contains(coord) &&
+        !eventos.any((ev) =>
+            ev.titulo == 'Combate' && ev.detalle.contains('conquista'))) {
+      eventos.add(const _EventoCelda(
+        icon: Icons.castle,
+        color: _cConquista,
+        titulo: 'Cuartel conquistado',
+        detalle: 'El cuartel cambió de manos este turno.',
+      ));
+    }
+
+    // ── 4. Presencia de cartas rivales (movimientosLog) ───────
+    if (_movimientoRivalCoords().contains(coord)) {
+      eventos.add(const _EventoCelda(
+        icon: Icons.visibility,
+        color: _cMovRival,
+        titulo: 'Presencia rival',
+        detalle: 'Se detectaron unidades enemigas aquí al cerrar el turno.',
+      ));
+    }
+
+    // ── 5. Unidades que quedan ahora en la celda ──────────────
+    final cartas = boardState.getCelda(coord).cartas;
+    if (cartas.isNotEmpty) {
+      final lineas = cartas
+          .take(10)
+          .map((c) => '• ${c.carta.nombre} (${_quien(c.ownerUid)})')
+          .join('\n');
+      final extra = cartas.length > 10 ? '\n… y ${cartas.length - 10} más' : '';
+      eventos.add(_EventoCelda(
+        icon: Icons.groups,
+        color: const Color(0xFF9AA0A6),
+        titulo: 'Unidades en la celda (${cartas.length})',
+        detalle: '$lineas$extra',
+      ));
+    }
+
+    return eventos;
+  }
+
+  /// Muestra un panel inferior con el detalle de lo ocurrido en [coord].
+  void _mostrarDetalleCelda(BuildContext context, String coord) {
+    final war = context.war;
+    final eventos = _eventosDeCelda(coord);
+
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          decoration: BoxDecoration(
+            color: war.superficie,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+            border: Border.all(color: war.borde.withOpacity(0.5), width: 1),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Asa
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: war.borde.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Row(
+                children: [
+                  Icon(Icons.place, size: 14, color: war.primario),
+                  const SizedBox(width: 6),
+                  Text(
+                    'CELDA $coord',
+                    style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: war.primario,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (eventos.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'Sin eventos ni unidades en esta celda.',
+                    style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 9,
+                      color: war.textoTenue,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                )
+              else
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(ctx).size.height * 0.5,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final ev in eventos) _EventoTile(evento: ev),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   // ── Build ───────────────────────────────────────────────────
 
   @override
@@ -152,6 +430,25 @@ class RevisionTurnoScreen extends StatelessWidget {
               accion: accion.isNotEmpty,
               movRival: movRival.isNotEmpty,
               conquista: conquista.isNotEmpty,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.touch_app, size: 10, color: war.textoTenue),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Toca una celda para ver el detalle',
+                    style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 8,
+                      color: war.textoTenue,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ],
+              ),
             ),
             Expanded(
               child: Padding(
@@ -198,6 +495,8 @@ class RevisionTurnoScreen extends StatelessWidget {
                           playerColors: playerColors,
                           obeliscoLocal: obeliscoLocal,
                           obeliscosPorJugador: obeliscosPorJugador,
+                          onTapCoord: (coord) =>
+                              _mostrarDetalleCelda(context, coord),
                         ),
                       ),
                     );
@@ -438,6 +737,9 @@ class _MiniBoard extends StatelessWidget {
   final String? obeliscoLocal;
   final Map<String, String> obeliscosPorJugador;
 
+  /// Se invoca al pulsar una celda del mini-tablero (para mostrar su detalle).
+  final void Function(String coord) onTapCoord;
+
   const _MiniBoard({
     required this.config,
     required this.boardState,
@@ -451,6 +753,7 @@ class _MiniBoard extends StatelessWidget {
     required this.playerColors,
     required this.obeliscoLocal,
     required this.obeliscosPorJugador,
+    required this.onTapCoord,
   });
 
   bool _esObelisco(String coord) =>
@@ -519,6 +822,7 @@ class _MiniBoard extends StatelessWidget {
                     isLocalObelisco: false,
                     localUid: localUid,
                     playerColors: playerColors,
+                    onTapCoord: onTapCoord,
                   )._withFlags(
                     isCombate: combateCoords.contains(config.coordLabel(r, c)),
                     isAccion: accionCoords.contains(config.coordLabel(r, c)),
@@ -553,6 +857,9 @@ class _MiniCell extends StatelessWidget {
   final String localUid;
   final Map<String, Color> playerColors;
 
+  /// Se invoca al pulsar la celda (muestra el detalle de lo ocurrido).
+  final void Function(String coord) onTapCoord;
+
   const _MiniCell({
     required this.coord,
     required this.size,
@@ -565,6 +872,7 @@ class _MiniCell extends StatelessWidget {
     required this.isLocalObelisco,
     required this.localUid,
     required this.playerColors,
+    required this.onTapCoord,
   });
 
   /// Crea una copia con flags actualizadas (usado por el builder anterior).
@@ -588,6 +896,7 @@ class _MiniCell extends StatelessWidget {
       isLocalObelisco: isLocalObelisco,
       localUid: localUid,
       playerColors: playerColors,
+      onTapCoord: onTapCoord,
     );
   }
 
@@ -649,70 +958,74 @@ class _MiniCell extends StatelessWidget {
       borderWidth = 1.0;
     }
 
-    return Container(
-      width: size,
-      height: size,
-      margin: const EdgeInsets.all(0.5),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(2),
-        border: Border.all(color: borderColor, width: borderWidth),
-        boxShadow: shadows,
-      ),
-      child: Stack(
-        children: [
-          // Coord en esquina superior izquierda
-          Positioned(
-            top: 1,
-            left: 2,
-            child: Text(
-              coord,
-              style: TextStyle(
-                fontFamily: 'Cinzel',
-                fontSize: 6,
-                color: Color.lerp(borderColor, war.textoTenue, 0.4)!,
-                letterSpacing: 0.3,
+    return GestureDetector(
+      onTap: () => onTapCoord(coord),
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: size,
+        height: size,
+        margin: const EdgeInsets.all(0.5),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(2),
+          border: Border.all(color: borderColor, width: borderWidth),
+          boxShadow: shadows,
+        ),
+        child: Stack(
+          children: [
+            // Coord en esquina superior izquierda
+            Positioned(
+              top: 1,
+              left: 2,
+              child: Text(
+                coord,
+                style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 6,
+                  color: Color.lerp(borderColor, war.textoTenue, 0.4)!,
+                  letterSpacing: 0.3,
+                ),
               ),
             ),
-          ),
-          // Icono de conquista
-          if (isConquista)
-            const Positioned(
-              top: 2,
-              right: 2,
-              child: Icon(Icons.castle, size: 10, color: _cConquista),
-            ),
-          // Icono de acción (si no hay conquista para no chocar)
-          if (isAccion && !isConquista)
-            const Positioned(
-              top: 2,
-              right: 2,
-              child: Icon(Icons.flash_on, size: 9, color: _cAccion),
-            ),
-          // Icono del rayo de farmeo (abajo-derecha, para no chocar con los de arriba)
-          if (isRayo)
-            const Positioned(
-              bottom: 2,
-              right: 2,
-              child: Text('Ø',
-                  style: TextStyle(
-                      fontSize: 10,
-                      height: 1,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFFFFE066))),
-            ),
-          // Fichas de cartas en el centro (puntos coloreados por jugador)
-          if (tieneCartas)
-            Center(
-              child: _CardDots(
-                cartas: cartas,
-                localUid: localUid,
-                playerColors: playerColors,
-                maxDots: 4,
-                dotSize: (size * 0.13).clamp(3.0, 7.0),
+            // Icono de conquista
+            if (isConquista)
+              const Positioned(
+                top: 2,
+                right: 2,
+                child: Icon(Icons.castle, size: 10, color: _cConquista),
               ),
-            ),
-        ],
+            // Icono de acción (si no hay conquista para no chocar)
+            if (isAccion && !isConquista)
+              const Positioned(
+                top: 2,
+                right: 2,
+                child: Icon(Icons.flash_on, size: 9, color: _cAccion),
+              ),
+            // Icono del rayo de farmeo (abajo-derecha, para no chocar con los de arriba)
+            if (isRayo)
+              const Positioned(
+                bottom: 2,
+                right: 2,
+                child: Text('Ø',
+                    style: TextStyle(
+                        fontSize: 10,
+                        height: 1,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFFFE066))),
+              ),
+            // Fichas de cartas en el centro (puntos coloreados por jugador)
+            if (tieneCartas)
+              Center(
+                child: _CardDots(
+                  cartas: cartas,
+                  localUid: localUid,
+                  playerColors: playerColors,
+                  maxDots: 4,
+                  dotSize: (size * 0.13).clamp(3.0, 7.0),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -777,6 +1090,80 @@ class _CardDots extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// DETALLE DE CELDA (panel al pulsar)
+// ─────────────────────────────────────────────────────────────
+
+/// Un evento a mostrar en el panel de detalle de una celda: un icono, un color
+/// semántico, un título y una descripción.
+class _EventoCelda {
+  final IconData icon;
+  final Color color;
+  final String titulo;
+  final String detalle;
+  const _EventoCelda({
+    required this.icon,
+    required this.color,
+    required this.titulo,
+    required this.detalle,
+  });
+}
+
+/// Ficha visual de un [_EventoCelda] dentro del panel de detalle.
+class _EventoTile extends StatelessWidget {
+  final _EventoCelda evento;
+  const _EventoTile({required this.evento});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: evento.color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: evento.color.withOpacity(0.45), width: 1),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(evento.icon, size: 16, color: evento.color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  evento.titulo,
+                  style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: evento.color,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                if (evento.detalle.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    evento.detalle,
+                    style: TextStyle(
+                      fontSize: 10,
+                      height: 1.35,
+                      color: war.texto,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

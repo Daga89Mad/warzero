@@ -585,6 +585,61 @@ class WarZeroApi {
     throw Exception('desbloquearHistoria HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// Registra el token FCM del dispositivo para recibir notificaciones push
+  /// (iOS/Android) cuando se resuelve un turno. Best-effort: si falla, no
+  /// interrumpe el flujo (los reintentos internos absorben el arranque en frío).
+  Future<bool> registrarFcmToken({
+    required String uid,
+    required String token,
+    String? platform,
+  }) async {
+    try {
+      final res = await _enviarConReintentos(
+        () => http.post(
+          Uri.parse('$baseUrl/warzero/fcm/registrar'),
+          headers: _headers,
+          body: jsonEncode({
+            'uid': uid,
+            'token': token,
+            if (platform != null) 'platform': platform,
+          }),
+        ),
+        etiqueta: 'fcm/registrar',
+        intentos: 2,
+        timeout: _postTimeout,
+      );
+      debugPrint('[WZ][api] POST fcm/registrar status=${res.statusCode}');
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (e) {
+      debugPrint('[WZ][api] fcm/registrar falló (seguimos): $e');
+      return false;
+    }
+  }
+
+  /// Da de baja un token FCM (p. ej. al cerrar sesión).
+  Future<bool> eliminarFcmToken({
+    required String uid,
+    required String token,
+  }) async {
+    try {
+      final res = await _enviarConReintentos(
+        () => http.post(
+          Uri.parse('$baseUrl/warzero/fcm/eliminar'),
+          headers: _headers,
+          body: jsonEncode({'uid': uid, 'token': token}),
+        ),
+        etiqueta: 'fcm/eliminar',
+        intentos: 2,
+        timeout: _postTimeout,
+      );
+      debugPrint('[WZ][api] POST fcm/eliminar status=${res.statusCode}');
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (e) {
+      debugPrint('[WZ][api] fcm/eliminar falló (seguimos): $e');
+      return false;
+    }
+  }
+
   /// Convierte recursivamente valores no serializables a JSON (Timestamp →
   /// epoch millis, DateTime → ISO 8601) para poder enviarlos por HTTP.
   static dynamic _jsonSafe(dynamic value) {

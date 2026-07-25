@@ -15,7 +15,7 @@ import 'revision_turno_screen.dart';
 import '../models/lobby_model.dart';
 import '../widgets/board_widget.dart';
 import '../widgets/cell_sidebar.dart';
-import '../widgets/cell_widget.dart' show kObeliscoCoords, ownerColor;
+import '../widgets/cell_widget.dart' show ownerColor;
 import '../widgets/hand_widget.dart';
 import '../widgets/player_hud.dart';
 import '../models/accion_pendiente.dart';
@@ -25,6 +25,20 @@ import '../services/accion_controller.dart';
 import '../services/habilidad_service.dart';
 import 'cuartel_screen.dart';
 import 'puntuaciones_screen.dart';
+
+/// Silueta fantasma de una carta en su celda de origen (revisión post-cierre).
+/// Es estructuralmente idéntico a `RevisionFantasma` de board_widget.dart (los
+/// records de Dart son de tipado estructural), así que se puede pasar tal cual
+/// al parámetro `fantasmasRevision` del BoardWidget sin depender de aquel nombre.
+typedef _Fantasma = ({
+  String origen,
+  String destino,
+  Color color,
+  IconData icon,
+  Color iconColor,
+  int movimiento,
+  String nombre,
+});
 
 class GameScreen extends StatefulWidget {
   final String localPlayerUid;
@@ -45,7 +59,7 @@ class GameScreen extends StatefulWidget {
   State<GameScreen> createState() => _GameScreenState();
 }
 
-class _GameScreenState extends State<GameScreen> {
+class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   late GameConfig _config;
   BoardState _boardState = const BoardState();
 
@@ -54,6 +68,11 @@ class _GameScreenState extends State<GameScreen> {
 
   String? _obeliscoLocal;
   String? _obeliscoOponente;
+
+  /// Imagen de fondo del mapa de ESTA partida (ruta de asset o URL). Se carga en
+  /// _aplicarTerreno desde el documento del mapa. Null → BoardWidget usa la
+  /// imagen por defecto.
+  String? _imagenMapa;
 
   /// Lee las coords de los rayos de farmeo del doc/estado. Soporta el formato
   /// nuevo (`rayos`: lista de {coord,...} o `rayoCoords`: lista de coords) y el
@@ -106,7 +125,10 @@ class _GameScreenState extends State<GameScreen> {
   ModoTurno _modoTurno = ModoTurno.rapida;
   List<String> _cerradoPor = [];
   int _jugadoresEnPartida = 2;
-  int _segundosRestantes = 30;
+
+  /// Duración (segundos) de cada turno en PARTIDA RÁPIDA.
+  static const int _duracionTurnoRapidoSeg = 90;
+  int _segundosRestantes = _duracionTurnoRapidoSeg;
   bool _timerActivo = false;
 
   bool _resolviendo = false;
@@ -182,6 +204,10 @@ class _GameScreenState extends State<GameScreen> {
   int? _sidebarCi;
   bool _sidebarOpen = false;
 
+  /// Key estable del tablero: preserva su State (incluido el nivel de zoom) aunque
+  /// el árbol de widgets se reorganice al abrir/cerrar capas superpuestas.
+  final GlobalKey _boardKey = GlobalKey();
+
   // ── Modo movimiento ───────────────────────────────────────
   String? _moveFromCoord;
   List<int> _moveCardIndices = [];
@@ -232,6 +258,22 @@ class _GameScreenState extends State<GameScreen> {
   final Set<String> _cartasQueSeMovieron = {};
   final Set<String> _cartasQueUsaronHabilidad = {};
 
+  /// instanceId → celda de ORIGEN del movimiento de este turno (la primera celda
+  /// desde la que se movió la carta este turno). Se registra en el momento del
+  /// movimiento, por lo que es fiable incluso para cartas desplegadas o
+  /// recolocadas este turno; no depende de emparejar por instanceId con el
+  /// tablero inicial (que puede reasignar instanceId al reconstruirse).
+  final Map<String, String> _origenTurnoPorId = {};
+
+  /// REVISIÓN POST-CIERRE: instantánea de lo que hice este turno, tomada al
+  /// cerrar el turno. Se dibuja sobre el tablero (flechas origen→destino de mis
+  /// movimientos y resaltado de las celdas objetivo de mis acciones) hasta que
+  /// el turno se resuelve. Sobrevive a los refrescos de espera y se limpia
+  /// cuando el turno avanza. Así el jugador ve "de dónde a dónde se movió y
+  /// dónde puso cada acción" mientras espera.
+  List<_Fantasma> _revisionFantasmas = const [];
+  Set<String> _revisionAcciones = const {};
+
   bool get _hayCambiosPendientes =>
       _cartasMovidasEsteTurno.isNotEmpty || _accionesPendientes.isNotEmpty;
 
@@ -252,6 +294,10 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
+    // Observa el ciclo de vida para revertir en el servidor la energía gastada
+    // este turno si la app pasa a segundo plano / se cierra sin cerrar el turno
+    // (los movimientos no se persisten a mitad de turno; ver incidencia #1).
+    WidgetsBinding.instance.addObserver(this);
     _config = GameConfig.forPlayerCount(widget.playerCount);
     _accionController = AccionController(config: _config);
     _setupPlayers();
@@ -284,6 +330,23 @@ class _GameScreenState extends State<GameScreen> {
       puntos: 0,
     );
   }
+
+  /// Paleta de 8 colores distintos para cuarteles/jugadores. El color por coord
+  /// (_obeliscoColor) solo conocía las 4 posiciones clásicas y devolvía gris
+  /// para el resto; en mapas de 8 hay que dar un color propio a cada jugador.
+  static const List<Color> _paletaJugadores = [
+    Color(0xFFFF3030), // rojo
+    Color(0xFF3080FF), // azul
+    Color(0xFFFFCC00), // amarillo
+    Color(0xFF30FF70), // verde
+    Color(0xFFC060FF), // morado
+    Color(0xFFFF8C1A), // naranja
+    Color(0xFF20D0D0), // cian
+    Color(0xFFFF66AA), // rosa
+  ];
+
+  static Color _colorJugadorPorIndice(int i) =>
+      _paletaJugadores[i % _paletaJugadores.length];
 
   static Color _obeliscoColor(String coord) {
     switch (coord) {
@@ -551,7 +614,27 @@ class _GameScreenState extends State<GameScreen> {
         };
       });
 
-      setState(() => _config = _config.withTerrain(terreno));
+      // Rejilla REAL del mapa. Un mapa puede tener más celdas que el preset del
+      // nº de jugadores (p. ej. 12×20 en una partida de 8, cuyo preset es 12×18).
+      // Sin aplicar filas/columnas del mapa, esas columnas/filas extra no existen
+      // en juego y los obeliscos o continentes que caen ahí (p. ej. col 19-20) se
+      // salen del tablero. Requiere que el endpoint /warzero/mapa devuelva
+      // filas/columnas (WarZeroService.MapaTerrenoAsync + WarZeroExtensions).
+      final filas = (data['filas'] as num?)?.toInt();
+      final columnas = (data['columnas'] as num?)?.toInt();
+
+      // Imagen de fondo del mapa (ruta de asset o URL). Si viene vacía, se deja
+      // null para que BoardWidget use la imagen por defecto.
+      final imagen = (data['imagen'] as String?)?.trim();
+
+      setState(() {
+        var cfg = _config;
+        if (filas != null && columnas != null && filas > 0 && columnas > 0) {
+          cfg = cfg.withGrid(filas: filas, columnas: columnas);
+        }
+        _config = cfg.withTerrain(terreno);
+        if (imagen != null && imagen.isNotEmpty) _imagenMapa = imagen;
+      });
     } catch (_) {}
   }
 
@@ -695,10 +778,17 @@ class _GameScreenState extends State<GameScreen> {
         final obeliscosData = data['obeliscos'] as Map<String, dynamic>? ?? {};
         final colors = <String, Color>{};
         final obeliscosMap = <String, String>{};
-        obeliscosData.forEach((uid, coord) {
-          colors[uid] = _obeliscoColor(coord as String);
+        // Color por jugador con paleta de 8 (antes _obeliscoColor solo conocía
+        // las 4 coords clásicas y devolvía gris para el resto). Orden estable por
+        // coord para que el color sea consistente entre clientes.
+        final entradasObel = obeliscosData.entries.toList()
+          ..sort((a, b) => a.value.toString().compareTo(b.value.toString()));
+        for (var i = 0; i < entradasObel.length; i++) {
+          final uid = entradasObel[i].key;
+          final coord = entradasObel[i].value as String;
+          colors[uid] = _colorJugadorPorIndice(i);
           obeliscosMap[uid] = coord;
-        });
+        }
         // Extraer el cuartel del jugador local y del oponente directamente
         // del doc. Respaldo: el obelisco que el servidor dice haber asignado.
         final obeliscoLocalDoc =
@@ -738,6 +828,12 @@ class _GameScreenState extends State<GameScreen> {
         });
 
         // ── 5. Restaurar tablero ──────────────────────────────────
+        // `serverStartBoard` = tablero autoritativo (inicio del turno en curso).
+        // OJO: el estado puede NO traer `tablero` (p. ej. turno 1, donde aún no
+        // se ha resuelto nada y solo hay despliegues). Por eso reconstruimos
+        // SIEMPRE la vista con MIS movimientos comprometidos (movimientosTurno),
+        // así al reentrar se ven mis unidades donde las dejé y las flechas/acciones.
+        BoardState serverStartBoard = const BoardState();
         if (data.containsKey('tablero')) {
           final tableroRaw = TurnService.parseTablero(data);
           var restoredBoard = const BoardState();
@@ -753,13 +849,19 @@ class _GameScreenState extends State<GameScreen> {
               );
             }
           });
-          setState(() {
-            _boardState = restoredBoard
-                .copyWith(turnoActual: lobby!.turnoActual)
-                .withRayos(_rayoCoordsFromData(data))
-                .withCuarteles(_cuartelesDestruidosFromData(data));
-          });
+          serverStartBoard = restoredBoard;
         }
+        // Rayos / cuarteles / turno se aplican SIEMPRE (haya `tablero` o no).
+        serverStartBoard = serverStartBoard
+            .copyWith(turnoActual: lobby!.turnoActual)
+            .withRayos(_rayoCoordsFromData(data))
+            .withCuarteles(_cuartelesDestruidosFromData(data));
+        final displayBoard =
+            _reconstruirBoardConMisMovimientos(data, serverStartBoard);
+        setState(() {
+          _boardState = displayBoard;
+          _actualizarOverlayRevision(data);
+        });
 
         // ── 6. Restaurar mano y mazo (con soporte de duplicados) ──
         // El servidor reparte la mano (POST /warzero/entrar) y guarda los IDs en
@@ -820,14 +922,20 @@ class _GameScreenState extends State<GameScreen> {
           _hand = manoFinal;
           _mazoRestante = mazoRestanteFinal;
           _loading = false;
-          _boardStateInicial = _boardState;
+          // El "inicial" del turno es el tablero autoritativo del servidor (sin
+          // mis movimientos aplicados encima), para diffs/reversiones correctos.
+          _boardStateInicial = serverStartBoard;
           _handInicial = List.from(manoFinal);
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
+          _origenTurnoPorId.clear();
           _cartasQueUsaronHabilidad.clear();
           _energiaGastadaDespliegue = 0;
           _especialesCompradasEsteTurno.clear();
+          // NOTA: NO se limpia aquí la capa de revisión: ya se calculó desde el
+          // servidor en el paso 5 y debe persistir al reentrar mientras el turno
+          // cerrado se resuelve.
         });
         _turnoConfirmadoStream = lobby.turnoActual;
         _fechaResolucionMs = (data['fechaResolucion'] as num?)?.toInt();
@@ -881,10 +989,13 @@ class _GameScreenState extends State<GameScreen> {
         _cartasMovidasEsteTurno.clear();
         _cartasQueEvolucionaron.clear();
         _cartasQueSeMovieron.clear();
+        _origenTurnoPorId.clear();
         _cartasQueUsaronHabilidad.clear();
         _puntosInicial = 0;
         _energiaGastadaDespliegue = 0;
         _especialesCompradasEsteTurno.clear();
+        _revisionFantasmas = const [];
+        _revisionAcciones = const {};
       });
     } on TimeoutException catch (_) {
       if (mounted) {
@@ -1022,10 +1133,16 @@ class _GameScreenState extends State<GameScreen> {
       final obelData = data['obeliscos'] as Map<String, dynamic>? ?? {};
       final streamColors = <String, Color>{};
       final streamObeliscos = <String, String>{};
-      obelData.forEach((uid, coord) {
-        streamColors[uid] = _obeliscoColor(coord as String);
+      // Color por jugador con paleta de 8 (orden estable por coord), igual que
+      // en _loadGame, para que coincida entre carga inicial y sondeo.
+      final entradasObelStream = obelData.entries.toList()
+        ..sort((a, b) => a.value.toString().compareTo(b.value.toString()));
+      for (var i = 0; i < entradasObelStream.length; i++) {
+        final uid = entradasObelStream[i].key;
+        final coord = entradasObelStream[i].value as String;
+        streamColors[uid] = _colorJugadorPorIndice(i);
         streamObeliscos[uid] = coord;
-      });
+      }
 
       // ── Actualizar eliminados ─────────────────────────────────
       final rawElim = data['jugadoresEliminados'] as List? ?? [];
@@ -1109,9 +1226,12 @@ class _GameScreenState extends State<GameScreen> {
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
+          _origenTurnoPorId.clear();
           _cartasQueUsaronHabilidad.clear();
           _energiaGastadaDespliegue = 0;
           _especialesCompradasEsteTurno.clear();
+          _revisionFantasmas = const [];
+          _revisionAcciones = const {};
         });
 
         // BUG QAS #2: la mano y el mazo restante ya vienen del servidor con la
@@ -1146,6 +1266,14 @@ class _GameScreenState extends State<GameScreen> {
       // La resolución la hace el servidor cuando cierra el último jugador; el
       // stream entregará el turno avanzado y este listener lo aplicará arriba.
       // (Antes aquí se llamaba a _resolverTurno en el cliente.)
+
+      // Revisión post-cierre: si ya cerré y el turno todavía no se ha resuelto,
+      // recalculo desde el servidor las flechas de mis movimientos y las celdas
+      // de mis acciones. Al basarse en `movimientosTurno`, se mantiene aunque
+      // salga y vuelva a entrar.
+      if (mounted && _yoCerreElTurno) {
+        setState(() => _actualizarOverlayRevision(data));
+      }
     } catch (e, st) {
       debugPrint('[WZ][poll][ERROR] $e');
       debugPrint('[WZ][poll][ERROR] $st');
@@ -1190,7 +1318,7 @@ class _GameScreenState extends State<GameScreen> {
   void _startTimer() {
     if (_timerActivo) return;
     _timerActivo = true;
-    _segundosRestantes = 30;
+    _segundosRestantes = _duracionTurnoRapidoSeg;
     Future.doWhile(() async {
       await Future.delayed(const Duration(seconds: 1));
       if (!mounted || !_timerActivo) return false;
@@ -1206,9 +1334,97 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   void dispose() {
+    // Último intento de revertir la energía del turno en curso si el jugador
+    // abandona la pantalla sin cerrar el turno (además del hook de ciclo de
+    // vida, por si el pop ocurre sin pasar por `paused`). En dispose NO se puede
+    // llamar a setState, así que se pide la variante sin reconstruir la UI.
+    _revertirCambiosPorSalidaSiProcede(permitirSetState: false);
+    WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _timerActivo = false;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      // La app pasa a segundo plano o se cierra: revertir energía revertible.
+      _revertirCambiosPorSalidaSiProcede();
+    } else if (state == AppLifecycleState.resumed) {
+      // Al volver, permitir una nueva reversión si el jugador vuelve a gastar.
+      _revirtiendoPorSalida = false;
+    }
+  }
+
+  /// Guarda contra reversiones duplicadas (paused + detached + dispose).
+  bool _revirtiendoPorSalida = false;
+
+  /// Incidencia #1: al cerrar la app (o abandonar la pantalla) después de mover
+  /// cartas SIN cerrar el turno, los movimientos NO se persisten y al reentrar
+  /// el tablero vuelve a su estado inicial; pero la energía SÍ se persiste de
+  /// forma incremental (despliegues, compras, evoluciones), así que sin esto se
+  /// perdería ("las cartas vuelven a su ser pero la energía se pierde").
+  ///
+  /// Para dejar cliente y servidor coherentes hacemos lo mismo que "deshacer":
+  /// devolvemos en el servidor la energía revertible del turno y desmarcamos las
+  /// especiales compradas este turno, y reseteamos el estado local al inicio del
+  /// turno (así, si la app vuelve al mismo instante, no queda energía ya devuelta
+  /// pendiente de un futuro cierre de turno, evitando un exploit).
+  void _revertirCambiosPorSalidaSiProcede({bool permitirSetState = true}) {
+    if (_revirtiendoPorSalida) return;
+    if (widget.lobbyId == null) return;
+    if (_yoCerreElTurno || _estoyEliminado || _juegoTerminado) return;
+
+    final energiaADevolver = _energiaGastadaDespliegue;
+    final especialesADesmarcar = _especialesCompradasEsteTurno.toList();
+    if (energiaADevolver <= 0 && especialesADesmarcar.isEmpty) return;
+
+    _revirtiendoPorSalida = true;
+    final turno = _boardStateInicial.turnoActual;
+
+    // Fire-and-forget: devolver energía revertible y desmarcar especiales.
+    _api.deshacerTurno(
+      lobbyId: widget.lobbyId!,
+      uid: widget.localPlayerUid,
+      turno: turno,
+      energiesDelta: energiaADevolver,
+      especialesQuitar: especialesADesmarcar,
+    );
+
+    // Resetear estado local al snapshot de inicio de turno (coherente con el
+    // tablero que se recargará del servidor al reentrar).
+    void reset() {
+      _boardState = _boardStateInicial;
+      _hand = List.from(_handInicial);
+      _cartasMovidasEsteTurno.clear();
+      _cartasQueEvolucionaron.clear();
+      _cartasQueSeMovieron.clear();
+      _origenTurnoPorId.clear();
+      _cartasQueUsaronHabilidad.clear();
+      _moveFromCoord = null;
+      _moveCardIndices = [];
+      _movableCoords = {};
+      _selectedHandIndex = null;
+      _sidebarOpen = false;
+      _sidebarCoord = null;
+      _accionController.cancelar();
+      _accionesPendientes.clear();
+      _fantasmasAccion.clear();
+      _localPlayer.puntos = _puntosInicial;
+      _energiaGastadaDespliegue = 0;
+      _especialesCompradas.removeAll(especialesADesmarcar);
+      _especialesCompradasEsteTurno.clear();
+      _revisionFantasmas = const [];
+      _revisionAcciones = const {};
+    }
+
+    if (permitirSetState && mounted) {
+      setState(reset);
+    } else {
+      reset();
+    }
   }
 
   // ─────────────────────────────────────────────────────────
@@ -1729,6 +1945,9 @@ class _GameScreenState extends State<GameScreen> {
         st = st.placeCarta(dest, c);
         _cartasMovidasEsteTurno.add(c.instanceId);
         _cartasQueSeMovieron.add(c.instanceId);
+        // Origen del movimiento (solo la primera vez este turno): permite
+        // dibujar la silueta fantasma origen→destino de forma fiable.
+        _origenTurnoPorId.putIfAbsent(c.instanceId, () => from);
       }
       _boardState = st;
       _moveFromCoord = null;
@@ -1789,6 +2008,7 @@ class _GameScreenState extends State<GameScreen> {
         indiceMano: handIndex,
         obeliscoLocal: _obeliscoLocal!,
         obeliscosPorJugador: _obeliscosPorJugador,
+        coordsPropias: _coordsConCartaPropia(),
       );
     });
     _toast(
@@ -1832,6 +2052,7 @@ class _GameScreenState extends State<GameScreen> {
         coord: coord,
         indiceCelda: indiceCelda,
         obeliscosPorJugador: _obeliscosPorJugador,
+        coordsPropias: _coordsConCartaPropia(),
       );
     });
     _toast(
@@ -2040,6 +2261,21 @@ class _GameScreenState extends State<GameScreen> {
     setState(() => _accionController.cancelar());
   }
 
+  /// Celdas del tablero que contienen alguna carta del jugador local. Se usa
+  /// para impedir que veneno / parálisis apunten a las propias unidades
+  /// (incidencia #2: "veneno y parálisis no puede afectar al propio jugador que
+  /// lo lanzó"). Incluye también los fantasmas de acción propios pendientes.
+  Set<String> _coordsConCartaPropia() {
+    final uid = _localPlayer.datos.uid;
+    final res = <String>{};
+    _boardState.celdas.forEach((coord, celda) {
+      if (celda.cartas.any((c) => c.ownerUid == uid)) res.add(coord);
+    });
+    // Fantasmas de acción (cartas propias colocadas visualmente este turno).
+    res.addAll(_fantasmasAccion.keys);
+    return res;
+  }
+
   void _undoCambios() {
     // Gastos revertibles persistidos en el servidor este turno (despliegues +
     // compras + evoluciones) y especiales compradas este turno. El estado del
@@ -2055,6 +2291,7 @@ class _GameScreenState extends State<GameScreen> {
       _cartasMovidasEsteTurno.clear();
       _cartasQueEvolucionaron.clear();
       _cartasQueSeMovieron.clear();
+      _origenTurnoPorId.clear();
       _cartasQueUsaronHabilidad.clear();
       _moveFromCoord = null;
       _moveCardIndices = [];
@@ -2073,6 +2310,8 @@ class _GameScreenState extends State<GameScreen> {
       // recomprarlas) y limpiar el rastreo del turno.
       _especialesCompradas.removeAll(especialesADesmarcar);
       _especialesCompradasEsteTurno.clear();
+      _revisionFantasmas = const [];
+      _revisionAcciones = const {};
     });
 
     // Revertir en el servidor: devolver la energía revertible y desmarcar las
@@ -2168,13 +2407,26 @@ class _GameScreenState extends State<GameScreen> {
       });
 
   Map<String, List<Map<String, dynamic>>> _serializarTablero() {
+    // Origen (celda de inicio de turno) de cada carta propia, por instanceId.
+    // Sirve para etiquetar de DÓNDE viene una carta que se movió este turno, de
+    // modo que la flecha origen→destino se pueda dibujar incluso tras salir y
+    // volver a entrar (el estado del servidor no reenvía el tablero de inicio).
+    final origenPorId = <String, String>{};
+    _boardStateInicial.celdas.forEach((coord, celda) {
+      for (final c in celda.cartas) {
+        if (c.ownerUid == _localPlayer.datos.uid) {
+          origenPorId[c.instanceId] = coord;
+        }
+      }
+    });
+
     final result = <String, List<Map<String, dynamic>>>{};
     _boardState.celdas.forEach((coord, celda) {
       final misCartas = celda.cartas
           .where((c) => c.ownerUid == _localPlayer.datos.uid)
           .map((c) {
         final carta = c.carta;
-        return <String, dynamic>{
+        final map = <String, dynamic>{
           'id': carta.id,
           'Nombre': carta.nombre,
           'Descripcion': carta.descripcion,
@@ -2205,20 +2457,236 @@ class _GameScreenState extends State<GameScreen> {
           if (c.ultimoUsoHabilidad != null)
             'UltimoUsoHabilidad': c.ultimoUsoHabilidad,
         };
+        // Etiqueta de revisión: celda de origen si esta carta se movió este
+        // turno. El servidor la guarda tal cual en movimientosTurno (M.FromJson
+        // conserva campos extra) y la ignora en el combate.
+        final origen =
+            _origenTurnoPorId[c.instanceId] ?? origenPorId[c.instanceId];
+        if (_cartasQueSeMovieron.contains(c.instanceId) &&
+            origen != null &&
+            origen != coord) {
+          map['origenTurno'] = origen;
+        }
+        return map;
       }).toList();
       if (misCartas.isNotEmpty) result[coord] = misCartas;
     });
     return result;
   }
 
+  /// Toma la instantánea de revisión (siluetas de origen y acciones de este
+  /// turno) para mostrarla sobre el tablero mientras el turno cerrado se resuelve.
+  void _capturarRevisionTurno() {
+    final uid = widget.localPlayerUid;
+
+    // instanceId → coord al inicio del turno (solo mis cartas).
+    final iniPorId = <String, String>{};
+    _boardStateInicial.celdas.forEach((coord, celda) {
+      for (final c in celda.cartas) {
+        if (c.ownerUid == uid) iniPorId[c.instanceId] = coord;
+      }
+    });
+
+    // Silueta fantasma en la celda de ORIGEN de cada carta que moví (una por
+    // celda de origen).
+    final fantasmas = <_Fantasma>[];
+    final vistos = <String>{};
+    _boardState.celdas.forEach((coord, celda) {
+      for (final c in celda.cartas) {
+        if (c.ownerUid != uid) continue;
+        if (!_cartasQueSeMovieron.contains(c.instanceId)) continue;
+        final from = _origenTurnoPorId[c.instanceId] ?? iniPorId[c.instanceId];
+        if (from == null || from == coord) continue;
+        if (!vistos.add(from)) continue;
+        fantasmas.add(_ghostDeCarta(from, coord, c.carta));
+      }
+    });
+
+    // Celdas objetivo de acciones/habilidades declaradas + fantasmas de acción.
+    final acciones = <String>{};
+    for (final a in _accionesPendientes) {
+      acciones.addAll(a.objetivos);
+      final origenCarta = a.cartaOrigenCoord;
+      if (origenCarta != null && origenCarta.isNotEmpty) {
+        acciones.add(origenCarta);
+      }
+    }
+    acciones.addAll(_fantasmasAccion.keys);
+
+    _revisionFantasmas = fantasmas;
+    _revisionAcciones = acciones;
+  }
+
+  /// Construye la silueta fantasma de [carta] que se movió de [origen] a
+  /// [destino] (mismo lenguaje visual que su token: color del jugador, icono de
+  /// tipo, movimiento y nombre).
+  _Fantasma _ghostDeCarta(String origen, String destino, CartaModel carta) {
+    final color = _playerColors[widget.localPlayerUid] ?? ownerColor('');
+    return (
+      origen: origen,
+      destino: destino,
+      color: color,
+      icon: carta.tipoIconData,
+      iconColor: Color(carta.tipoColorValue),
+      movimiento: carta.movimiento,
+      nombre: carta.nombre,
+    );
+  }
+
+  /// Mi movimiento comprometido (celdas + acciones) para el turno actual, tal y
+  /// como lo guardó el servidor al cerrar. Es la fuente PERSISTENTE de la
+  /// revisión: sobrevive a refrescos y a salir/entrar de la pantalla. `null` si
+  /// aún no he cerrado (o no hay entrada para el turno en curso).
+  MovimientoTurno? _miMovimientoComprometido(Map<String, dynamic> estado) {
+    final turnoActual =
+        (estado['turnoActual'] as num?)?.toInt() ?? _boardState.turnoActual;
+    final rawMov =
+        estado['movimientosTurno'] as Map<String, dynamic>? ?? const {};
+    final mine = rawMov[widget.localPlayerUid];
+    if (mine == null) return null;
+    try {
+      final mov =
+          MovimientoTurno.fromMap(Map<String, dynamic>.from(mine as Map));
+      return mov.turno == turnoActual ? mov : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Recalcula la capa de revisión (flechas origen→destino de mis movimientos y
+  /// celdas objetivo de mis acciones) a partir del estado AUTORITATIVO del
+  /// servidor: compara mis posiciones de inicio de turno (`estado['tablero']`)
+  /// con mis celdas ya comprometidas (`movimientosTurno.{uid}.celdas`). Como se
+  /// basa en el servidor, funciona igual tras salir y volver a entrar.
+  /// Debe llamarse dentro de un setState.
+  void _actualizarOverlayRevision(Map<String, dynamic> estado) {
+    final mov = _miMovimientoComprometido(estado);
+    if (mov == null) {
+      _revisionFantasmas = const [];
+      _revisionAcciones = const {};
+      return;
+    }
+    // Celdas objetivo de mis acciones/habilidades: SIEMPRE disponibles desde
+    // `movimientosTurno.acciones` (no necesitan el tablero).
+    final uid = widget.localPlayerUid;
+    final acciones = <String>{};
+    for (final a in mov.acciones) {
+      acciones.addAll(a.objetivos);
+      final oc = a.cartaOrigenCoord;
+      if (oc != null && oc.isNotEmpty) acciones.add(oc);
+    }
+    _revisionAcciones = acciones;
+
+    // Siluetas fantasma en el ORIGEN. Fuente PRINCIPAL: el campo `origenTurno`
+    // que viaja con cada carta movida (se escribe en _serializarTablero al
+    // cerrar), así que funciona aunque el estado no traiga `tablero` (p. ej.
+    // tras reentrar).
+    final fantasmas = <_Fantasma>[];
+    final vistos = <String>{};
+    var huboOrigenTurno = false;
+    mov.celdas.forEach((coord, cartas) {
+      for (final c in cartas) {
+        final origen = (c['origenTurno'] as String?) ?? '';
+        if (origen.isEmpty) continue;
+        huboOrigenTurno = true;
+        if (origen == coord) continue;
+        if (!vistos.add(origen)) continue;
+        fantasmas.add(_ghostDeCarta(origen, coord, _cartaFromMap(c)));
+      }
+    });
+
+    if (huboOrigenTurno) {
+      _revisionFantasmas = fantasmas;
+      return;
+    }
+
+    // Respaldo (datos sin `origenTurno`): diff contra el tablero de inicio, si
+    // el estado lo trae. Si no lo trae, conservamos lo que hubiera (no lo
+    // borramos). En el turno 1 solo hay despliegues, así que no hay siluetas.
+    if (!estado.containsKey('tablero')) return;
+
+    final startById = <String, List<String>>{};
+    TurnService.parseTablero(estado).forEach((coord, cartas) {
+      for (final c in cartas) {
+        if ((c['ownerUid'] as String? ?? '') != uid) continue;
+        final id = (c['id'] ?? c['Id'] ?? '').toString();
+        (startById[id] ??= <String>[]).add(coord);
+      }
+    });
+
+    final fantasmas2 = <_Fantasma>[];
+    final vistos2 = <String>{};
+    mov.celdas.forEach((coord, cartas) {
+      for (final c in cartas) {
+        final id = (c['id'] ?? c['Id'] ?? '').toString();
+        final cola = startById[id];
+        if (cola == null || cola.isEmpty) continue; // desplegada este turno
+        if (cola.remove(coord)) continue; // seguía en la misma celda
+        final from = cola.removeAt(0);
+        if (from == coord) continue;
+        if (!vistos2.add(from)) continue;
+        fantasmas2.add(_ghostDeCarta(from, coord, _cartaFromMap(c)));
+      }
+    });
+
+    _revisionFantasmas = fantasmas2;
+  }
+
+  /// Devuelve el tablero de inicio [startBoard] con MIS cartas recolocadas en
+  /// las posiciones que ya comprometí este turno (`movimientosTurno.{uid}`), de
+  /// modo que, al reentrar mientras el turno se resuelve, se vean mis unidades
+  /// donde las moví (no en su posición de inicio). Las cartas ajenas y los
+  /// efectos/rayos/cuarteles del tablero se conservan intactos.
+  BoardState _reconstruirBoardConMisMovimientos(
+      Map<String, dynamic> estado, BoardState startBoard) {
+    final mov = _miMovimientoComprometido(estado);
+    if (mov == null) return startBoard;
+    final uid = widget.localPlayerUid;
+
+    var b = startBoard;
+    // Quitar mis cartas de todas las celdas donde aparezcan.
+    final coordsConMias = <String>[];
+    startBoard.celdas.forEach((coord, celda) {
+      if (celda.cartas.any((c) => c.ownerUid == uid)) coordsConMias.add(coord);
+    });
+    for (final coord in coordsConMias) {
+      final ajenas =
+          b.getCelda(coord).cartas.where((c) => c.ownerUid != uid).toList();
+      b = b.setCelda(coord, CeldaState(coord: coord, cartas: ajenas));
+    }
+    // Colocar mis cartas comprometidas en su celda de destino.
+    mov.celdas.forEach((coord, cartas) {
+      for (final c in cartas) {
+        b = b.placeCarta(
+          coord,
+          CartaEnCelda(
+            carta: _cartaFromMap(c),
+            ownerUid: c['ownerUid'] as String? ?? uid,
+            ownerZone: c['ownerZone'] as String? ?? '',
+          ),
+        );
+      }
+    });
+    return b;
+  }
+
   Future<void> _cerrarTurno() async {
     if (_yoCerreElTurno || _isSendingTurn || _estoyEliminado) return;
+    // Instantánea de revisión ANTES de tocar nada: se mostrará sobre el tablero
+    // hasta que el turno se resuelva.
+    _capturarRevisionTurno();
     setState(() {
       _isSendingTurn = true;
       _selectedHandIndex = null;
       _cancelMoveMode();
       _sidebarOpen = false;
       _timerActivo = false;
+      // Marcar mi cierre de forma optimista: así el banner de espera y la capa
+      // de revisión (flechas/acciones) aparecen al instante, sin esperar a que
+      // el servidor confirme en el siguiente sondeo. El poll lo reconcilia.
+      if (!_cerradoPor.contains(widget.localPlayerUid)) {
+        _cerradoPor = [..._cerradoPor, widget.localPlayerUid];
+      }
     });
 
     if (widget.lobbyId != null) {
@@ -2485,6 +2953,7 @@ class _GameScreenState extends State<GameScreen> {
           _cartasMovidasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
+          _origenTurnoPorId.clear();
           _cartasQueUsaronHabilidad.clear();
           // Las acciones (veneno, disparo, teletransporte…) pertenecían al
           // turno que acaba de resolverse; hay que descartarlas o se
@@ -2495,6 +2964,8 @@ class _GameScreenState extends State<GameScreen> {
           _fantasmasAccion.clear();
           _energiaGastadaDespliegue = 0;
           _especialesCompradasEsteTurno.clear();
+          _revisionFantasmas = const [];
+          _revisionAcciones = const {};
         });
 
         // BUG QAS #2: mano/mazo llegan del servidor con la carta ya repartida.
@@ -2522,6 +2993,12 @@ class _GameScreenState extends State<GameScreen> {
         debugPrint('[WZ][estado] tablero aplicado, turno=$turnoActual '
             'reparto=${_meRepartieronCarta(estado) ? 'sí' : 'no'}');
         return true;
+      }
+
+      // Revisión post-cierre (sin avance de turno): recalcular desde el servidor
+      // las flechas de mis movimientos y las celdas de mis acciones.
+      if (mounted && _yoCerreElTurno) {
+        setState(() => _actualizarOverlayRevision(estado));
       }
     } catch (e, st) {
       debugPrint('[WZ][estado][ERROR] $e');
@@ -2782,12 +3259,16 @@ class _GameScreenState extends State<GameScreen> {
         : null;
     final destruidoAqui =
         _sidebarCoord != null && _boardState.esCuartelDestruido(_sidebarCoord!);
+    // Obeliscos REALES asignados por el servidor (uid → coord). Antes se usaba
+    // kObeliscoCoords (4 esquinas hardcodeadas de un 6×10), que en cualquier mapa
+    // que no fuera el clásico marcaba celdas equivocadas como cuartel.
+    final obeliscoCoordsReales = _obeliscosPorJugador.values.toSet();
     final isEnemySidebar = _sidebarCoord != null &&
-        kObeliscoCoords.contains(_sidebarCoord) &&
+        obeliscoCoordsReales.contains(_sidebarCoord) &&
         _sidebarCoord != _obeliscoLocal &&
         !destruidoAqui;
     final isObeliscoSidebar = _sidebarCoord != null &&
-        kObeliscoCoords.contains(_sidebarCoord) &&
+        obeliscoCoordsReales.contains(_sidebarCoord) &&
         !destruidoAqui;
     final String? selectedCoord =
         _inMoveMode ? _moveFromCoord : (_sidebarOpen ? _sidebarCoord : null);
@@ -2798,16 +3279,19 @@ class _GameScreenState extends State<GameScreen> {
         child: Stack(
           children: [
             // ── Deseleccionar carta / cancelar acción al tocar fuera ────
-            // Va DETRÁS de todo (primer hijo del Stack): las celdas del
-            // tablero y el resto de widgets interactivos absorben su
-            // propio toque, así que este detector solo se dispara cuando
-            // el toque cae fuera de cualquiera de ellos (HUD, banner,
-            // espacios entre celdas, etc.). Cubre dos casos:
+            // Esta capa va DETRÁS de todo (primer hijo del Stack). IMPORTANTE:
+            // se mantiene SIEMPRE presente (aunque inactiva con IgnorePointer),
+            // no de forma condicional. Si apareciera/desapareciera, cambiaría el
+            // número de hijos del Stack y desplazaría la Column del tablero, con
+            // lo que Flutter recrearía el BoardWidget y se perdería el zoom (bug:
+            // al desplegar una carta o mover, el zoom saltaba al 100%). Con
+            // IgnorePointer sólo intercepta toques cuando hay algo que cancelar:
             //   - Carta normal seleccionada en la mano → se deselecciona.
             //   - Carta/habilidad de acción en curso (esperando objetivo)
             //     → se cancela, igual que si no se hubiera pulsado nunca.
-            if (_selectedHandIndex != null || _inActionMode)
-              Positioned.fill(
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: !(_selectedHandIndex != null || _inActionMode),
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onTap: () {
@@ -2819,6 +3303,7 @@ class _GameScreenState extends State<GameScreen> {
                   },
                 ),
               ),
+            ),
             Column(
               children: [
                 // ── Barra de partida: nombre + color asignado + menú ──
@@ -2849,16 +3334,26 @@ class _GameScreenState extends State<GameScreen> {
                 ),
                 Expanded(
                   child: BoardWidget(
+                    key: _boardKey,
                     config: _config,
                     boardState: _boardState,
+                    imagenMapa: _imagenMapa,
                     selectedCellCoord: selectedCoord,
                     highlightEmpty: _selectedHandIndex != null,
                     movableCoords: _highlightCoords,
                     obeliscoLocal: _obeliscoLocal,
                     obeliscoCoords: _obeliscosPorJugador.values.toSet(),
+                    obeliscoColores: {
+                      for (final e in _obeliscosPorJugador.entries)
+                        e.value: (_playerColors[e.key] ?? Colors.white),
+                    },
                     playerColors: _playerColors,
                     localPlayerUid: widget.localPlayerUid,
                     fantasmasAccion: _fantasmasAccion,
+                    fantasmasRevision:
+                        _yoCerreElTurno ? _revisionFantasmas : const [],
+                    accionesRevision:
+                        _yoCerreElTurno ? _revisionAcciones : const {},
                     onCellTap: _onCellTap,
                   ),
                 ),

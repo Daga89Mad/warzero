@@ -44,8 +44,15 @@ Border _reliefBorder({required Color lit, required Color shadow}) => Border(
 
 /// Todas las celdas comparten la misma decoración base sin color de terreno.
 /// La información de terreno se comunica únicamente mediante el badge (icono).
+///
+/// Antes se pintaba un DAMERO: las celdas con `(ri+ci)` par recibían un tinte
+/// negro semitransparente (0x18000000) y las impares uno blanco casi invisible
+/// (0x12FFFFFF). Ese negro se veía como "gris" en una de cada dos celdas. Ahora
+/// TODAS las celdas son transparentes: solo se ve el mapa de fondo y el borde de
+/// rejilla. (Si en el futuro quieres un tinte uniforme suave en vez de nada,
+/// sustituye `Color(0x00000000)` por `Color(0x10FFFFFF)`.)
 BoxDecoration _cellDecoration(bool isDark) => BoxDecoration(
-      color: isDark ? const Color(0x18000000) : const Color(0x12FFFFFF),
+      color: const Color(0x00000000),
       border: _reliefBorder(
         lit: const Color(0x55FFFFFF),
         shadow: const Color(0x44000000),
@@ -102,6 +109,10 @@ class CellWidget extends StatelessWidget {
   /// posiciones REALES para cualquier nº de jugadores. Vacío → fallback a
   /// [kObeliscoCoords] (p. ej. durante la carga inicial).
   final Set<String> obeliscoCoords;
+
+  /// coord → color del dueño del obelisco. Si trae color para esta celda, el
+  /// cristal del cuartel (SpawnMarker) se pinta de ese color; si no, blanco.
+  final Map<String, Color> obeliscoColores;
   final VoidCallback onTap;
 
   const CellWidget({
@@ -123,6 +134,7 @@ class CellWidget extends StatelessWidget {
     this.escudosCelda = const [],
     this.playerColors = const {},
     this.obeliscoCoords = const {},
+    this.obeliscoColores = const {},
     this.localPlayerUid,
     this.fantasmas = const [],
     required this.onTap,
@@ -136,8 +148,11 @@ class CellWidget extends StatelessWidget {
     final coord = config.coordLabel(ri, ci);
     final overlay = terrainAt(coord);
     final painter = terrainPainter(overlay);
-    final obeliscosEfectivos =
-        obeliscoCoords.isNotEmpty ? obeliscoCoords : kObeliscoCoords;
+    // Obeliscos REALES del servidor. SIN fallback a kObeliscoCoords: si aún no
+    // han cargado (o vienen vacíos), NO pintamos los 4 por defecto —que son las
+    // esquinas de un tablero 6×10 de 2/4 jugadores— sobre un mapa distinto. Es
+    // preferible no pintar ninguno a pintar 4 obeliscos falsos "de una de 4".
+    final obeliscosEfectivos = obeliscoCoords;
     final isSpawn = obeliscosEfectivos.contains(coord);
 
     // Todas las celdas usan la misma decoración — el terreno se indica solo con el badge.
@@ -249,7 +264,7 @@ class CellWidget extends StatelessWidget {
               const Positioned(right: 3, bottom: 3, child: _EscudoBadge()),
 
             if (isSpawn && celda.isEmpty && !isConquistado)
-              SpawnMarker(coord: coord),
+              SpawnMarker(coord: coord, color: obeliscoColores[coord]),
             if (isConquistado)
               const Positioned(
                 left: 0,
@@ -982,7 +997,12 @@ Color _spawnColor(String coord) {
 
 class SpawnMarker extends StatelessWidget {
   final String coord;
-  const SpawnMarker({super.key, required this.coord});
+
+  /// Color del dueño del cuartel. Si es null, se usa el color por coord
+  /// ([_spawnColor], que solo conoce las 4 clásicas y cae a blanco). Con el
+  /// color por jugador, cada cuartel se distingue en mapas de 8.
+  final Color? color;
+  const SpawnMarker({super.key, required this.coord, this.color});
 
   @override
   Widget build(BuildContext context) {
@@ -994,7 +1014,8 @@ class SpawnMarker extends StatelessWidget {
             width: kCellW * 0.88,
             height: kCellH * 0.92,
             child: CustomPaint(
-              painter: _PortalCrystalPainter(color: _spawnColor(coord)),
+              painter:
+                  _PortalCrystalPainter(color: color ?? _spawnColor(coord)),
             ),
           ),
         ),

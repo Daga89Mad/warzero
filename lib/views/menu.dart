@@ -16,6 +16,7 @@ import 'package:warzero/views/edicion_cartas_screen.dart';
 import 'package:warzero/views/edicion_historias_screen.dart';
 import 'package:warzero/views/edicion_skins_screen.dart';
 import 'package:warzero/views/edicion_mapas_screen.dart';
+import 'package:warzero/views/edicion_bots_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -209,6 +210,17 @@ class MenuScreen extends StatelessWidget {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const EdicionMapasScreen()),
+                        ),
+                      ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.smart_toy_outlined,
+                        label: 'BOTS',
+                        sublabel: 'Rellenar salas\ncon bots',
+                        accent: const Color(0xFF50B060),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionBotsScreen()),
                         ),
                       ),
                     _MenuTile(

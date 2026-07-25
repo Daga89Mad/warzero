@@ -1,6 +1,7 @@
 // lib/main.dart
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,6 +10,11 @@ import 'firebase_options.dart'; // ← generado por: flutterfire configure
 import 'views/loginBody.dart';
 import 'views/menu.dart';
 import 'services/settings_controller.dart';
+import 'services/notificaciones_service.dart';
+
+/// Clave global del navegador: permite navegar desde fuera del árbol de widgets
+/// (p. ej. al pulsar una notificación push).
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +33,24 @@ void main() async {
     cacheSizeBytes: 20 * 1024 * 1024, // 20 MB. NUNCA CACHE_SIZE_UNLIMITED.
   );
 
+  // ── Notificaciones push (turno resuelto → "ya puedes jugar") ──────────────
+  // Handler de mensajes en background/app terminada (debe registrarse antes de
+  // runApp y ser una función top-level).
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  // Qué hacer al pulsar la notificación. Llevamos al jugador a la pantalla
+  // principal (lista de partidas), desde donde entra a la que toca. Si más
+  // adelante se quiere deep-link directo a la sala concreta, aquí está el
+  // lobbyId disponible para construir RoomScreen/GameScreen.
+  NotificacionesService.instance.onAbrirPartida = (lobbyId) {
+    debugPrint('[WZ][push] abrir partida $lobbyId');
+    navigatorKey.currentState?.popUntil((r) => r.isFirst);
+  };
+
+  // Se inicializa en segundo plano para no bloquear el arranque de la UI.
+  // (Pide permisos, obtiene el token FCM y lo registra en el backend.)
+  NotificacionesService.instance.iniciar();
+
   // Cargar ajustes persistidos (tema + escala de texto) antes de arrancar la UI.
   await settingsController.cargar();
 
@@ -44,6 +68,7 @@ class WarZeroApp extends StatelessWidget {
       animation: settingsController,
       builder: (context, _) {
         return MaterialApp(
+          navigatorKey: navigatorKey,
           title: 'WarZero',
           debugShowCheckedModeBanner: false,
           theme: settingsController.tema.construir(),

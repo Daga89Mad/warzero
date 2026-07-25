@@ -1105,7 +1105,8 @@ class _RayoBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final war = context.war;
     final n = coords.length;
-    final titulo = n > 1 ? 'RAYOS ACTIVOS ($n)' : 'RAYO ACTIVO';
+    final titulo =
+        n > 1 ? 'CRISTALES ZERO ACTIVOS ($n)' : 'CRISTAL ZERO ACTIVO';
     final detalle = n > 1
         ? 'Celdas  ${coords.join(", ")}  →  +10 Zero c/u'
         : 'Celda  ${coords.isNotEmpty ? coords.first : "?"}  →  +10 Zero';
@@ -1124,13 +1125,13 @@ class _RayoBanner extends StatelessWidget {
         Expanded(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            const Text('RAYO',
+            const Text('CRISTAL ZERO',
                 style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 9,
                     letterSpacing: 2,
                     color: _cEnergy)),
-            Text(titulo == 'RAYO ACTIVO' ? detalle : '$titulo — $detalle',
+            Text(n > 1 ? '$titulo — $detalle' : detalle,
                 style: TextStyle(
                     fontFamily: 'Cinzel', fontSize: 8, color: war.textoTenue)),
           ]),
@@ -1185,7 +1186,7 @@ class _ReglasFarmeoCard extends StatelessWidget {
           const SizedBox(height: 4),
           _ReglaRow(
               icon: 'Ø',
-              label: 'Carta en posición del rayo',
+              label: 'Carta en posición del Cristal Zero',
               bonus: '+10 / carta'),
           const SizedBox(height: 4),
           _ReglaRow(icon: '🍀', label: 'Turno sin ganar energías', bonus: '+3'),
@@ -1322,7 +1323,10 @@ class _FarmeoTile extends StatelessWidget {
                   _FarmeoRow(icon: '🏝', label: 'Isla central', value: isla),
                 if (rayo > 0)
                   _FarmeoRow(
-                      icon: 'Ø', label: 'Rayo', value: rayo, highlight: true),
+                      icon: 'Ø',
+                      label: 'Cristal Zero',
+                      value: rayo,
+                      highlight: true),
                 if (suerte > 0)
                   _FarmeoRow(
                       icon: '🍀',
