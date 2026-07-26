@@ -203,7 +203,7 @@ class Habilidad {
 /// IDs reservados:
 ///   0       → sin habilidad
 ///   1, 2, 3 → disparo (cercano, medio, lejano)
-///   4, 5    → teletransporte (medio, lejano) ← invertido a propósito
+///   4, 5    → teletransporte (medio, lejano) — ambos alcanzan todo el tablero
 ///   6, 7, 8 → veneno (cercano, medio, lejano)
 ///   9, 10, 11 → parálisis (cercano, medio, lejano)
 ///   12, 13, 14 → escudo (propia, adyacente, lejano)
@@ -247,7 +247,12 @@ class CatalogoHabilidades {
       efecto: EfectoHabilidad.disparo(),
     ),
 
-    // ── TELETRANSPORTE (invertido a propósito) ─────────────
+    // ── TELETRANSPORTE ─────────────────────────────────────
+    // Ambos alcanzan cualquier celda del tablero (excepto cuarteles). El
+    // servidor NO revalida el rango al resolver (solo excluye CG y celdas
+    // protegidas), así que la selección de todo el tablero es coherente con la
+    // resolución. Se conservan los dos ids por compatibilidad con las cartas
+    // ya existentes.
     4: Habilidad(
       id: 4,
       nombre: 'Teletransporte medio',
@@ -264,10 +269,10 @@ class CatalogoHabilidades {
       id: 5,
       nombre: 'Teletransporte lejano',
       descripcion:
-          'Mueve una de tus cartas a una celda dentro de un radio de 7 desde '
-          'el origen, excepto cuarteles generales.',
+          'Mueve una de tus cartas a cualquier celda del mapa, excepto '
+          'cuarteles generales.',
       icon: '✨',
-      rango: RangoHabilidad.radioN(7),
+      rango: RangoHabilidad.cualquiera(),
       efecto: EfectoHabilidad.teletransporte(),
       excluyeCG: true,
       requiereCartaPropia: true,
