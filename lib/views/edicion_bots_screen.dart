@@ -6,18 +6,22 @@ import 'package:flutter/material.dart';
 /// Pantalla de administración de BOTS (solo editores). Mismo patrón visual que
 /// la edición de Mapas / Historias.
 ///
-/// Muestra 7 bots con un interruptor "activo". Al activar uno, el orquestador
-/// del backend (BotOrchestratorService) lo detecta y lo mete a rellenar las
-/// PARTIDAS PÚBLICAS más antiguas: llena primero la sala más vieja y, si sobran
-/// bots, desborda a la siguiente. Si desactivas un bot, deja de entrar a salas
-/// nuevas (la partida que esté jugando la termina).
+/// Muestra 50 bots con un interruptor "activo" y un control de PARTIDAS
+/// SIMULTÁNEAS. Al activar uno, el orquestador del backend
+/// (BotOrchestratorService) lo detecta y lo mete a rellenar las PARTIDAS
+/// PÚBLICAS más antiguas: llena primero la sala más vieja y, si sobran bots,
+/// desborda a la siguiente. Cada bot puede jugar hasta `maxPartidas` partidas a
+/// la vez. Si desactivas un bot, deja de entrar a salas nuevas (las partidas que
+/// ya está jugando las termina igualmente: la recuperación del backend sigue
+/// cerrando sus turnos aunque esté inactivo).
 ///
 /// Escribe en la colección Firestore `Bots`, un documento por bot:
-///   alias  : String   (nombre visible en la partida)
-///   activo : bool     (lo pone/quita este panel; lo lee el orquestador)
-///   orden  : int      (prioridad de asignación; menor entra antes)
+///   alias        : String   (nombre visible en la partida)
+///   activo       : bool     (lo pone/quita este panel; lo lee el orquestador)
+///   orden        : int      (prioridad de asignación; menor entra antes)
+///   maxPartidas  : int      (partidas simultáneas; por defecto 1)
 ///
-/// El `id` del documento ES el uid del bot dentro de la partida (bot_0…bot_6).
+/// El `id` del documento ES el uid del bot dentro de la partida (bot_0…bot_49).
 class EdicionBotsScreen extends StatefulWidget {
   const EdicionBotsScreen({super.key});
 
@@ -27,7 +31,13 @@ class EdicionBotsScreen extends StatefulWidget {
 
 class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
   static const _accent = Color(0xFF50B060);
-  static const _numBots = 7;
+
+  /// Nº de bots que gestiona el panel. Sembrará bot_0 … bot_(_numBots-1).
+  static const _numBots = 50;
+
+  /// Límites del control de partidas simultáneas.
+  static const _minPartidas = 1;
+  static const _maxPartidas = 20;
 
   final _col = FirebaseFirestore.instance.collection('Bots');
 
@@ -41,8 +51,9 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
     _load();
   }
 
-  /// Carga los bots, sembrando los 7 documentos por defecto si aún no existen
-  /// (así el panel y el orquestador comparten siempre las mismas entradas).
+  /// Carga los bots, sembrando los documentos que falten (así el panel y el
+  /// orquestador comparten siempre las mismas entradas). No pisa los que ya
+  /// existan: respeta su `activo`, `orden`, `alias` y `maxPartidas`.
   Future<void> _load() async {
     setState(() {
       _loading = true;
@@ -52,20 +63,23 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
       final snap = await _col.get();
       final existentes = {for (final d in snap.docs) d.id: d};
 
-      // Sembrar los que falten.
-      final faltan = <Future<void>>[];
+      // Sembrar los que falten (en lotes para no disparar 50 escrituras sueltas).
+      final batch = FirebaseFirestore.instance.batch();
+      var faltan = 0;
       for (var i = 0; i < _numBots; i++) {
         final id = 'bot_$i';
         if (!existentes.containsKey(id)) {
-          faltan.add(_col.doc(id).set({
+          batch.set(_col.doc(id), {
             'alias': 'IA Recluta ${i + 1}',
             'activo': false,
             'orden': i,
-          }));
+            'maxPartidas': 1,
+          });
+          faltan++;
         }
       }
-      if (faltan.isNotEmpty) {
-        await Future.wait(faltan);
+      if (faltan > 0) {
+        await batch.commit();
         return _load(); // recarga con los recién creados
       }
 
@@ -101,6 +115,20 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
     }
   }
 
+  /// Cambia las partidas simultáneas de un bot (con clamp) y lo persiste.
+  Future<void> _setMaxPartidas(_BotResumen bot, int nuevo) async {
+    final valor = nuevo.clamp(_minPartidas, _maxPartidas);
+    if (valor == bot.maxPartidas) return;
+    final anterior = bot.maxPartidas;
+    setState(() => bot.maxPartidas = valor);
+    try {
+      await _col.doc(bot.id).update({'maxPartidas': valor});
+    } catch (e) {
+      if (mounted) setState(() => bot.maxPartidas = anterior); // revertir
+      _toast('No se pudo actualizar partidas: $e', error: true);
+    }
+  }
+
   Future<void> _setTodos(bool activo) async {
     final batch = FirebaseFirestore.instance.batch();
     for (final b in _bots) {
@@ -114,6 +142,26 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
       });
       _toast(
           activo ? 'Todos los bots activados' : 'Todos los bots desactivados');
+    } catch (e) {
+      _toast('No se pudo aplicar a todos: $e', error: true);
+    }
+  }
+
+  /// Aplica el mismo nº de partidas simultáneas a TODOS los bots.
+  Future<void> _setPartidasTodos(int valor) async {
+    final v = valor.clamp(_minPartidas, _maxPartidas);
+    final batch = FirebaseFirestore.instance.batch();
+    for (final b in _bots) {
+      batch.update(_col.doc(b.id), {'maxPartidas': v});
+    }
+    try {
+      await batch.commit();
+      if (!mounted) return;
+      setState(() {
+        for (final b in _bots) b.maxPartidas = v;
+      });
+      _toast(
+          'Todos los bots a $v ${v == 1 ? "partida" : "partidas"} simultáneas');
     } catch (e) {
       _toast('No se pudo aplicar a todos: $e', error: true);
     }
@@ -177,7 +225,10 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                         itemBuilder: (_, i) => _BotTile(
                           bot: _bots[i],
                           accent: _accent,
+                          minPartidas: _minPartidas,
+                          maxPartidas: _maxPartidas,
                           onChanged: (v) => _toggle(_bots[i], v),
+                          onPartidas: (v) => _setMaxPartidas(_bots[i], v),
                         ),
                       ),
                     ),
@@ -223,11 +274,49 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                   onTap: () => _setTodos(false)),
             ],
           ),
+          const SizedBox(height: 12),
+          // Atajo: partidas simultáneas para TODOS de golpe.
+          Row(
+            children: [
+              const Icon(Icons.dynamic_feed_outlined,
+                  color: Color(0xFF8A94A0), size: 16),
+              const SizedBox(width: 8),
+              const Text(
+                'Partidas simultáneas a todos:',
+                style: TextStyle(
+                  color: Color(0xFF8A94A0),
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _MiniBoton(
+                  label: '1',
+                  accent: _accent,
+                  onTap: () => _setPartidasTodos(1)),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: '2',
+                  accent: _accent,
+                  onTap: () => _setPartidasTodos(2)),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: '3',
+                  accent: _accent,
+                  onTap: () => _setPartidasTodos(3)),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: '5',
+                  accent: _accent,
+                  onTap: () => _setPartidasTodos(5)),
+            ],
+          ),
           const SizedBox(height: 10),
           const Text(
             'Los bots activos entran a rellenar las partidas públicas más '
             'antiguas: llenan primero la sala más vieja y, si sobran, pasan a '
-            'la siguiente. Al desactivar uno deja de entrar a salas nuevas.',
+            'la siguiente. Cada bot juega hasta su nº de "Partidas" a la vez '
+            '(por defecto 1). Al desactivar uno deja de entrar a salas nuevas.',
             style: TextStyle(
               color: Color(0xFF8A94A0),
               fontFamily: 'Cinzel',
@@ -247,21 +336,27 @@ class _BotResumen {
   final String alias;
   final int orden;
   bool activo;
+  int maxPartidas;
 
   _BotResumen({
     required this.id,
     required this.alias,
     required this.orden,
     required this.activo,
+    required this.maxPartidas,
   });
 
   factory _BotResumen.fromDoc(QueryDocumentSnapshot<Map<String, dynamic>> d) {
     final data = d.data();
+    final mp = (data['maxPartidas'] as num?)?.toInt() ??
+        (data['partidasSimultaneas'] as num?)?.toInt() ??
+        1;
     return _BotResumen(
       id: d.id,
       alias: (data['alias'] as String?) ?? d.id,
       orden: (data['orden'] as num?)?.toInt() ?? 0,
       activo: (data['activo'] as bool?) ?? false,
+      maxPartidas: mp < 1 ? 1 : mp,
     );
   }
 }
@@ -269,12 +364,18 @@ class _BotResumen {
 class _BotTile extends StatelessWidget {
   final _BotResumen bot;
   final Color accent;
+  final int minPartidas;
+  final int maxPartidas;
   final ValueChanged<bool> onChanged;
+  final ValueChanged<int> onPartidas;
 
   const _BotTile({
     required this.bot,
     required this.accent,
+    required this.minPartidas,
+    required this.maxPartidas,
     required this.onChanged,
+    required this.onPartidas,
   });
 
   @override
@@ -332,6 +433,17 @@ class _BotTile extends StatelessWidget {
                     letterSpacing: 0.5,
                   ),
                 ),
+                const SizedBox(height: 6),
+                _StepperPartidas(
+                  valor: bot.maxPartidas,
+                  accent: accent,
+                  onMenos: bot.maxPartidas > minPartidas
+                      ? () => onPartidas(bot.maxPartidas - 1)
+                      : null,
+                  onMas: bot.maxPartidas < maxPartidas
+                      ? () => onPartidas(bot.maxPartidas + 1)
+                      : null,
+                ),
               ],
             ),
           ),
@@ -341,6 +453,87 @@ class _BotTile extends StatelessWidget {
             onChanged: onChanged,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Control compacto "− N +" para las partidas simultáneas de un bot.
+class _StepperPartidas extends StatelessWidget {
+  final int valor;
+  final Color accent;
+  final VoidCallback? onMenos;
+  final VoidCallback? onMas;
+
+  const _StepperPartidas({
+    required this.valor,
+    required this.accent,
+    required this.onMenos,
+    required this.onMas,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'Partidas',
+          style: TextStyle(
+            color: Color(0xFF6A727C),
+            fontFamily: 'Cinzel',
+            fontSize: 9,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(width: 8),
+        _StepBtn(icon: Icons.remove, accent: accent, onTap: onMenos),
+        Container(
+          constraints: const BoxConstraints(minWidth: 26),
+          alignment: Alignment.center,
+          child: Text(
+            '$valor',
+            style: TextStyle(
+              color: accent,
+              fontFamily: 'Cinzel',
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ),
+        _StepBtn(icon: Icons.add, accent: accent, onTap: onMas),
+      ],
+    );
+  }
+}
+
+class _StepBtn extends StatelessWidget {
+  final IconData icon;
+  final Color accent;
+  final VoidCallback? onTap;
+
+  const _StepBtn({
+    required this.icon,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final color = enabled ? accent : const Color(0xFF3A424C);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 26,
+        height: 26,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: color.withOpacity(0.40)),
+        ),
+        child: Icon(icon, size: 16, color: color),
       ),
     );
   }
