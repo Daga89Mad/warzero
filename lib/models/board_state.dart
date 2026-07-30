@@ -289,6 +289,46 @@ class BoardState {
     return getCelda(coord).cartas.any((c) => c.paralizado);
   }
 
+  /// Turnos restantes (máximo) de un efecto de ACCIÓN activo sobre la celda del
+  /// tipo indicado. Mira tanto los efectos propios de la celda (`efectosCelda`)
+  /// como los que arrastran las cartas presentes. Devuelve 0 si no hay ninguno
+  /// activo de ese tipo.
+  ///
+  /// Es la base del nuevo indicador de tablero (visible por TODOS los jugadores)
+  /// que muestra, sobre cada celda con una acción activa, el icono de la acción
+  /// y el número de turnos que seguirá surtiendo efecto sobre esa celda.
+  int turnosEfectoCelda(String coord, EfectoTipoEstado tipo) {
+    int maxT = 0;
+    final lista = efectosCelda[coord];
+    if (lista != null) {
+      for (final e in lista) {
+        if (e.tipo == tipo && e.turnosRestantes > maxT) {
+          maxT = e.turnosRestantes;
+        }
+      }
+    }
+    for (final c in getCelda(coord).cartas) {
+      for (final e in c.efectos) {
+        if (e.tipo == tipo && e.turnosRestantes > maxT) {
+          maxT = e.turnosRestantes;
+        }
+      }
+    }
+    return maxT;
+  }
+
+  /// Turnos restantes del veneno activo sobre la celda (0 = ninguno).
+  int turnosVenenoCelda(String coord) =>
+      turnosEfectoCelda(coord, EfectoTipoEstado.veneno);
+
+  /// Turnos restantes de la parálisis activa sobre la celda (0 = ninguna).
+  int turnosParalisisCelda(String coord) =>
+      turnosEfectoCelda(coord, EfectoTipoEstado.paralisis);
+
+  /// Turnos restantes del escudo activo sobre la celda (0 = ninguno).
+  int turnosEscudoCelda(String coord) =>
+      turnosEfectoCelda(coord, EfectoTipoEstado.escudo);
+
   /// Escudos activos en la celda (origen + magnitud). Se usa para que el
   /// preview de combate sume defensa solo a las cartas del lanzador.
   List<({String origen, int magnitud})> escudosCelda(String coord) {

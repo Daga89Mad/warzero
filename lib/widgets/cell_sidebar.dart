@@ -29,6 +29,15 @@ class CellSidebar extends StatefulWidget {
   /// Callback con los índices seleccionados cuando el jugador pulsa MOVER
   final void Function(List<int> indices)? onMoveSelected;
 
+  /// `instanceId` de las cartas que YA se movieron este turno. Para esas cartas
+  /// el botón inferior pasa a ser DESHACER (en vez de MOVER) y la selección no
+  /// puede mezclar cartas movidas con cartas sin mover.
+  final Set<String> movedInstanceIds;
+
+  /// Callback con los índices seleccionados cuando el jugador pulsa DESHACER.
+  /// Devuelve cada carta movida a su posición anterior a este turno.
+  final void Function(List<int> indices)? onUndoSelected;
+
   /// uid → color para colorear cartas por jugador
   final Map<String, Color> playerColors;
 
@@ -62,6 +71,8 @@ class CellSidebar extends StatefulWidget {
     this.isObelisco = false,
     this.localUid,
     this.onMoveSelected,
+    this.movedInstanceIds = const {},
+    this.onUndoSelected,
     this.playerColors = const {},
     this.energiasDisponibles,
     this.resolveEvolucion,
@@ -86,12 +97,50 @@ class _CellSidebarState extends State<CellSidebar> {
     }
   }
 
-  void _toggle(int i) => setState(
-      () => _selected.contains(i) ? _selected.remove(i) : _selected.add(i));
+  /// True si la carta [i] ya se movió este turno (candidata a DESHACER).
+  bool _isMoved(int i) {
+    final cards = widget.celda?.cartas ?? const [];
+    if (i < 0 || i >= cards.length) return false;
+    return widget.movedInstanceIds.contains(cards[i].instanceId);
+  }
+
+  /// Categoría de la selección actual:
+  ///   true  → todas las seleccionadas se han movido (modo DESHACER)
+  ///   false → todas las seleccionadas están sin mover (modo MOVER)
+  ///   null  → no hay nada seleccionado
+  ///
+  /// La selección es homogénea: al elegir la primera carta se fija la categoría
+  /// y solo se pueden seleccionar más cartas de esa misma categoría.
+  bool? get _selectionUndo {
+    if (_selected.isEmpty) return null;
+    return _isMoved(_selected.first);
+  }
+
+  /// ¿Se puede marcar/desmarcar la carta [i]? Siempre se permite desmarcar una
+  /// ya seleccionada; para marcar una nueva debe coincidir con la categoría de
+  /// la selección (movida vs. sin mover). Si no hay selección, todo vale.
+  bool _puedeToggle(int i) {
+    if (_selected.contains(i)) return true;
+    final cat = _selectionUndo;
+    if (cat == null) return true;
+    return _isMoved(i) == cat;
+  }
+
+  void _toggle(int i) {
+    if (!_puedeToggle(i)) return; // check deshabilitado por exclusión mutua
+    setState(
+        () => _selected.contains(i) ? _selected.remove(i) : _selected.add(i));
+  }
 
   void _confirmMove() {
     if (_selected.isEmpty) return;
     widget.onMoveSelected?.call(List<int>.from(_selected)..sort());
+    setState(() => _selected.clear());
+  }
+
+  void _confirmUndo() {
+    if (_selected.isEmpty) return;
+    widget.onUndoSelected?.call(List<int>.from(_selected)..sort());
     setState(() => _selected.clear());
   }
 
@@ -186,6 +235,8 @@ class _CellSidebarState extends State<CellSidebar> {
               localUid: widget.localUid,
               selected: _selected,
               onToggle: _toggle,
+              movedInstanceIds: widget.movedInstanceIds,
+              isEnabled: _puedeToggle,
               playerColors: widget.playerColors,
               energiasDisponibles: widget.energiasDisponibles,
               resolveEvolucion: widget.resolveEvolucion,
@@ -195,16 +246,22 @@ class _CellSidebarState extends State<CellSidebar> {
             ),
           ),
 
-          // Botón MOVER solo cuando hay cartas propias y onMoveSelected definido
+          // Botón inferior: DESHACER si la selección son cartas ya movidas;
+          // MOVER en cualquier otro caso. Solo con cartas propias en la celda.
           if (!widget.isEnemyObelisco &&
               hasLocal &&
-              widget.onMoveSelected != null)
-            _MoveButton(
-              selected: _selected.length,
-              total: localCount,
-              minMov: minMov,
-              onTap: _selected.isEmpty ? null : _confirmMove,
-            ),
+              (widget.onMoveSelected != null || widget.onUndoSelected != null))
+            (_selectionUndo == true)
+                ? _UndoButton(
+                    selected: _selected.length,
+                    onTap: _selected.isEmpty ? null : _confirmUndo,
+                  )
+                : _MoveButton(
+                    selected: _selected.length,
+                    total: localCount,
+                    minMov: minMov,
+                    onTap: _selected.isEmpty ? null : _confirmMove,
+                  ),
         ],
       ),
     );
@@ -523,6 +580,13 @@ class _Body extends StatelessWidget {
   final String? localUid;
   final Set<int> selected;
   final void Function(int) onToggle;
+
+  /// `instanceId` de las cartas ya movidas este turno (candidatas a DESHACER).
+  final Set<String> movedInstanceIds;
+
+  /// ¿Se puede marcar/desmarcar la carta [i]? (exclusión mutua movida/sin mover)
+  final bool Function(int index) isEnabled;
+
   final Map<String, Color> playerColors;
 
   // Evolución
@@ -545,6 +609,8 @@ class _Body extends StatelessWidget {
     required this.localUid,
     required this.selected,
     required this.onToggle,
+    required this.movedInstanceIds,
+    required this.isEnabled,
     this.playerColors = const {},
     this.energiasDisponibles,
     this.resolveEvolucion,
@@ -652,20 +718,30 @@ class _Body extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
       itemCount: cards.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) => _CardTile(
-        entry: cards[i],
-        indice: i,
-        coord: coord,
-        isLocal: cards[i].ownerUid == localUid,
-        isChecked: selected.contains(i),
-        onToggle: cards[i].ownerUid == localUid ? () => onToggle(i) : null,
-        playerColors: playerColors,
-        energiasDisponibles: energiasDisponibles,
-        resolveEvolucion: resolveEvolucion,
-        onEvolucionar: onEvolucionar,
-        turnoActual: turnoActual,
-        onLanzarHabilidad: onLanzarHabilidad,
-      ),
+      itemBuilder: (_, i) {
+        final isLocal = cards[i].ownerUid == localUid;
+        final moved = movedInstanceIds.contains(cards[i].instanceId);
+        final enabled = isLocal && isEnabled(i);
+        return _CardTile(
+          entry: cards[i],
+          indice: i,
+          coord: coord,
+          isLocal: isLocal,
+          isChecked: selected.contains(i),
+          moved: moved,
+          enabled: enabled,
+          // El check solo responde si la carta es propia y está habilitada por
+          // la exclusión mutua (movidas vs. sin mover). El detalle (pulsación
+          // larga) sigue disponible aunque el check esté deshabilitado.
+          onToggle: enabled ? () => onToggle(i) : null,
+          playerColors: playerColors,
+          energiasDisponibles: energiasDisponibles,
+          resolveEvolucion: resolveEvolucion,
+          onEvolucionar: onEvolucionar,
+          turnoActual: turnoActual,
+          onLanzarHabilidad: onLanzarHabilidad,
+        );
+      },
     );
   }
 }
@@ -679,6 +755,14 @@ class _CardTile extends StatelessWidget {
   final String? coord;
   final bool isLocal;
   final bool isChecked;
+
+  /// True si esta carta ya se movió este turno (candidata a DESHACER).
+  final bool moved;
+
+  /// True si el check puede pulsarse (exclusión mutua movida/sin mover). Cuando
+  /// es false, la carta se atenúa para indicar que su check está deshabilitado.
+  final bool enabled;
+
   final VoidCallback? onToggle;
   final Map<String, Color> playerColors;
   final int turnoActual;
@@ -697,6 +781,8 @@ class _CardTile extends StatelessWidget {
     required this.isLocal,
     required this.isChecked,
     required this.onToggle,
+    this.moved = false,
+    this.enabled = true,
     this.playerColors = const {},
     this.energiasDisponibles,
     this.resolveEvolucion,
@@ -772,164 +858,182 @@ class _CardTile extends StatelessWidget {
         : ownerColor(entry.ownerZone);
     final border =
         isChecked ? const Color(0xFF40B0FF) : const Color(0x40322814);
+    // Carta propia cuyo check está deshabilitado por la exclusión mutua (no se
+    // pueden mezclar cartas movidas con cartas sin mover): se atenúa para que
+    // se vea que su check no está disponible en esta selección.
+    final checkDeshabilitado = isLocal && !enabled;
 
     return Builder(
-      builder: (ctx) => GestureDetector(
-        onTap: onToggle,
-        onLongPress: () => _abrirDetalle(ctx),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 140),
-          padding: const EdgeInsets.all(9),
-          decoration: BoxDecoration(
-            color: isChecked
-                ? const Color(0xFF40B0FF).withOpacity(0.08)
-                : const Color(0xFF0A1220),
-            borderRadius: BorderRadius.circular(5),
-            border: Border.all(color: border, width: isChecked ? 1.2 : 0.5),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Checkbox (solo cartas locales)
-              if (isLocal)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8, top: 1),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 140),
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: isChecked
-                          ? const Color(0xFF40B0FF)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(3),
-                      border: Border.all(
+      builder: (ctx) => Opacity(
+        opacity: checkDeshabilitado ? 0.42 : 1.0,
+        child: GestureDetector(
+          onTap: onToggle,
+          onLongPress: () => _abrirDetalle(ctx),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 140),
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: isChecked
+                  ? const Color(0xFF40B0FF).withOpacity(0.08)
+                  : const Color(0xFF0A1220),
+              borderRadius: BorderRadius.circular(5),
+              border: Border.all(color: border, width: isChecked ? 1.2 : 0.5),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Checkbox (solo cartas locales)
+                if (isLocal)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8, top: 1),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 140),
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
                         color: isChecked
                             ? const Color(0xFF40B0FF)
-                            : const Color(0xFF506070),
-                        width: 1.2,
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(3),
+                        border: Border.all(
+                          color: isChecked
+                              ? const Color(0xFF40B0FF)
+                              : const Color(0xFF506070),
+                          width: 1.2,
+                        ),
                       ),
+                      child: isChecked
+                          ? const Icon(Icons.check,
+                              size: 11, color: Color(0xFF030810))
+                          : null,
                     ),
-                    child: isChecked
-                        ? const Icon(Icons.check,
-                            size: 11, color: Color(0xFF030810))
-                        : null,
+                  )
+                else
+                  Container(
+                    width: 24,
+                    height: 24,
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                          color: color.withOpacity(0.25), width: 0.5),
+                    ),
+                    child: Icon(Icons.shield, size: 13, color: color),
                   ),
-                )
-              else
-                Container(
-                  width: 24,
-                  height: 24,
-                  margin: const EdgeInsets.only(right: 8),
-                  decoration: BoxDecoration(
-                    color: color.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(4),
-                    border:
-                        Border.all(color: color.withOpacity(0.25), width: 0.5),
-                  ),
-                  child: Icon(Icons.shield, size: 13, color: color),
-                ),
 
-              Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(
-                              child: Text(carta.nombre,
-                                  overflow: TextOverflow.ellipsis,
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Expanded(
+                                child: Text(carta.nombre,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                        fontSize: 9,
+                                        color: isChecked
+                                            ? const Color(0xFF80D0FF)
+                                            : const Color(0xFFC8A860),
+                                        letterSpacing: 1,
+                                        fontFamily: 'Cinzel')),
+                              ),
+                              if (entry.envenenada) ...[
+                                const Text('☠',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF2BA046))),
+                                const SizedBox(width: 4),
+                                Text('🛡${entry.defensaEfectiva}',
+                                    style: const TextStyle(
+                                        fontSize: 9,
+                                        color: Color(0xFF5AD07A),
+                                        fontFamily: 'Cinzel')),
+                                const SizedBox(width: 6),
+                              ],
+                              if (entry.paralizado) ...[
+                                const Text('⏱',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF2C90C8))),
+                                const SizedBox(width: 6),
+                              ],
+                              if (entry.defensaExtraPorEfectos > 0) ...[
+                                const Text('🛡',
+                                    style: TextStyle(
+                                        fontSize: 10,
+                                        color: Color(0xFF6AB0FF))),
+                                const SizedBox(width: 2),
+                                Text('${entry.defensaEfectiva}',
+                                    style: const TextStyle(
+                                        fontSize: 9,
+                                        color: Color(0xFF9AD0FF),
+                                        fontFamily: 'Cinzel')),
+                                const SizedBox(width: 6),
+                              ],
+                              if (entry.movimientoExtraPorEfectos > 0) ...[
+                                const Text('💨',
+                                    style: TextStyle(fontSize: 10)),
+                                Text('${entry.movimientoEfectivo}',
+                                    style: const TextStyle(
+                                        fontSize: 9,
+                                        color: Color(0xFF9AD0FF),
+                                        fontFamily: 'Cinzel')),
+                                const SizedBox(width: 6),
+                              ],
+                              if (entry.fuerzaExtraPorEfectos > 0)
+                                const Text('💪',
+                                    style: TextStyle(fontSize: 10)),
+                              Text('${entry.fuerzaEfectiva}',
                                   style: TextStyle(
-                                      fontSize: 9,
-                                      color: isChecked
-                                          ? const Color(0xFF80D0FF)
-                                          : const Color(0xFFC8A860),
-                                      letterSpacing: 1,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                      color: entry.fuerzaExtraPorEfectos > 0
+                                          ? const Color(0xFFFFB84D)
+                                          : color,
                                       fontFamily: 'Cinzel')),
-                            ),
-                            if (entry.envenenada) ...[
-                              const Text('☠',
-                                  style: TextStyle(
-                                      fontSize: 11, color: Color(0xFF2BA046))),
-                              const SizedBox(width: 4),
-                              Text('🛡${entry.defensaEfectiva}',
-                                  style: const TextStyle(
-                                      fontSize: 9,
-                                      color: Color(0xFF5AD07A),
-                                      fontFamily: 'Cinzel')),
-                              const SizedBox(width: 6),
-                            ],
-                            if (entry.paralizado) ...[
-                              const Text('⏱',
-                                  style: TextStyle(
-                                      fontSize: 11, color: Color(0xFF2C90C8))),
-                              const SizedBox(width: 6),
-                            ],
-                            if (entry.defensaExtraPorEfectos > 0) ...[
-                              const Text('🛡',
-                                  style: TextStyle(
-                                      fontSize: 10, color: Color(0xFF6AB0FF))),
-                              const SizedBox(width: 2),
-                              Text('${entry.defensaEfectiva}',
-                                  style: const TextStyle(
-                                      fontSize: 9,
-                                      color: Color(0xFF9AD0FF),
-                                      fontFamily: 'Cinzel')),
-                              const SizedBox(width: 6),
-                            ],
-                            if (entry.movimientoExtraPorEfectos > 0) ...[
-                              const Text('💨', style: TextStyle(fontSize: 10)),
-                              Text('${entry.movimientoEfectivo}',
-                                  style: const TextStyle(
-                                      fontSize: 9,
-                                      color: Color(0xFF9AD0FF),
-                                      fontFamily: 'Cinzel')),
-                              const SizedBox(width: 6),
-                            ],
-                            if (entry.fuerzaExtraPorEfectos > 0)
-                              const Text('💪', style: TextStyle(fontSize: 10)),
-                            Text('${entry.fuerzaEfectiva}',
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    color: entry.fuerzaExtraPorEfectos > 0
-                                        ? const Color(0xFFFFB84D)
-                                        : color,
-                                    fontFamily: 'Cinzel')),
-                          ]),
-                      const SizedBox(height: 4),
-                      Text(carta.descripcion,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 8,
-                              color: Color(0xFF3D5060),
-                              height: 1.5,
-                              fontFamily: 'Georgia')),
-                      const SizedBox(height: 5),
-                      Row(children: [
-                        _Chip(
-                            label: 'MOV ${carta.movimientoEfectivo}',
-                            color: color),
-                        const SizedBox(width: 4),
-                        _Chip(
-                            label: _ownerLabel(entry.ownerZone), color: color),
-                        if (carta.condicion != CondicionCarta.basica) ...[
+                            ]),
+                        const SizedBox(height: 4),
+                        Text(carta.descripcion,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 8,
+                                color: Color(0xFF3D5060),
+                                height: 1.5,
+                                fontFamily: 'Georgia')),
+                        const SizedBox(height: 5),
+                        Row(children: [
+                          if (moved) ...[
+                            const _Chip(
+                                label: '↩ MOVIDA', color: Color(0xFF40B0FF)),
+                            const SizedBox(width: 4),
+                          ],
+                          _Chip(
+                              label: 'MOV ${carta.movimientoEfectivo}',
+                              color: color),
                           const SizedBox(width: 4),
                           _Chip(
-                              label:
-                                  '${carta.condicion.icon} ${carta.condicion.label.toUpperCase()}',
-                              color: Color(carta.condicion.colorValue)),
-                        ],
-                        if (carta.puedeEvolucionar) ...[
-                          const SizedBox(width: 4),
-                          _EvolChip(coste: carta.evolucion),
-                        ],
+                              label: _ownerLabel(entry.ownerZone),
+                              color: color),
+                          if (carta.condicion != CondicionCarta.basica) ...[
+                            const SizedBox(width: 4),
+                            _Chip(
+                                label:
+                                    '${carta.condicion.icon} ${carta.condicion.label.toUpperCase()}',
+                                color: Color(carta.condicion.colorValue)),
+                          ],
+                          if (carta.puedeEvolucionar) ...[
+                            const SizedBox(width: 4),
+                            _EvolChip(coste: carta.evolucion),
+                          ],
+                        ]),
                       ]),
-                    ]),
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1022,6 +1126,104 @@ class _MoveButton extends StatelessWidget {
                 const SizedBox(width: 7),
                 Text(
                   active ? 'MOVER SELECCIÓN' : 'MOVER',
+                  style: TextStyle(
+                      fontSize: 9,
+                      color: accent,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1.5,
+                      fontWeight: FontWeight.bold),
+                ),
+              ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// BOTÓN DESHACER — aparece en lugar de MOVER cuando la selección son cartas
+// que ya se movieron este turno. Devuelve cada carta a su posición anterior.
+// ─────────────────────────────────────────────────────────────
+class _UndoButton extends StatelessWidget {
+  final int selected;
+  final VoidCallback? onTap;
+
+  const _UndoButton({
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final active = onTap != null;
+    final accent = active ? const Color(0xFF40B0FF) : const Color(0xFF354050);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0x20506070), width: 1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                active
+                    ? '$selected MOVIDA(S) SELECCIONADA(S)'
+                    : 'TOCA UNA CARTA',
+                style: TextStyle(
+                    fontSize: 8,
+                    color: accent,
+                    fontFamily: 'Cinzel',
+                    letterSpacing: 1),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF40B0FF).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(
+                      color: const Color(0xFF40B0FF).withOpacity(0.4),
+                      width: 0.5),
+                ),
+                child: const Text('↩ VOLVER',
+                    style: TextStyle(
+                        fontSize: 8,
+                        color: Color(0xFF40B0FF),
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 1)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: active
+                    ? const Color(0xFF40B0FF).withOpacity(0.14)
+                    : const Color(0xFF0A1220),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(
+                  color: active
+                      ? const Color(0xFF40B0FF).withOpacity(0.55)
+                      : const Color(0x25506070),
+                  width: 1,
+                ),
+              ),
+              child:
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.undo, size: 13, color: accent),
+                const SizedBox(width: 7),
+                Text(
+                  active ? 'DESHACER MOVIMIENTO' : 'DESHACER',
                   style: TextStyle(
                       fontSize: 9,
                       color: accent,

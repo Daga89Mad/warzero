@@ -132,6 +132,13 @@ class RevisionTurnoScreen extends StatelessWidget {
   String _quien(String? uid) =>
       (uid != null && uid == localUid) ? 'Tú' : 'Rival';
 
+  /// True si [coord] es un cuartel general (de cualquier jugador). En los
+  /// cuarteles NUNCA se revelan las cartas que hay dentro durante la revisión.
+  bool _esObelisco(String coord) =>
+      kObeliscoCoords.contains(coord) ||
+      obeliscosPorJugador.values.contains(coord) ||
+      coord == obeliscoLocal;
+
   /// ¿La acción [a] toca la celda [coord] (como origen, objetivo o destino)?
   bool _accionTocaCoord(Map<String, dynamic> a, String coord) {
     if (a['origen'] == coord) return true;
@@ -304,7 +311,12 @@ class RevisionTurnoScreen extends StatelessWidget {
     }
 
     // ── 5. Unidades que quedan ahora en la celda ──────────────
-    final cartas = boardState.getCelda(coord).cartas;
+    // En los cuarteles NUNCA se listan las cartas que hay dentro (ni propias ni
+    // enemigas): la guarnición del cuartel es información protegida y no debe
+    // aparecer al pulsar la casilla en la revisión de turno.
+    final cartas = _esObelisco(coord)
+        ? const <CartaEnCelda>[]
+        : boardState.getCelda(coord).cartas;
     if (cartas.isNotEmpty) {
       final lineas = cartas
           .take(10)
@@ -1013,8 +1025,9 @@ class _MiniCell extends StatelessWidget {
                         fontWeight: FontWeight.bold,
                         color: Color(0xFFFFE066))),
               ),
-            // Fichas de cartas en el centro (puntos coloreados por jugador)
-            if (tieneCartas)
+            // Fichas de cartas en el centro (puntos coloreados por jugador).
+            // En los cuarteles NO se muestran: la guarnición no debe revelarse.
+            if (tieneCartas && !isObelisco)
               Center(
                 child: _CardDots(
                   cartas: cartas,

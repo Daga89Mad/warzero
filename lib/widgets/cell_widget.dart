@@ -83,6 +83,13 @@ class CellWidget extends StatelessWidget {
   /// True si la celda tiene un escudo activo (se marca con 🛡).
   final bool isEscudada;
 
+  /// Turnos que la acción seguirá activa sobre la celda (0 = sin número). Estos
+  /// valores se muestran en el badge de la celda —visible por TODOS— junto al
+  /// icono de la acción, para que cualquier jugador sepa cuántos turnos durará.
+  final int turnosVeneno;
+  final int turnosParalisis;
+  final int turnosEscudo;
+
   /// Venenos activos en la celda (origen + magnitud). El preview de combate
   /// resta defensa solo a las cartas enemigas del veneno. Vacío = sin veneno.
   final List<({String origen, int magnitud})> venenosCelda;
@@ -130,6 +137,9 @@ class CellWidget extends StatelessWidget {
     this.isEnvenenada = false,
     this.isParalizada = false,
     this.isEscudada = false,
+    this.turnosVeneno = 0,
+    this.turnosParalisis = 0,
+    this.turnosEscudo = 0,
     this.venenosCelda = const [],
     this.escudosCelda = const [],
     this.playerColors = const {},
@@ -223,7 +233,8 @@ class CellWidget extends StatelessWidget {
 
             // Badge de veneno (calavera) — esquina superior derecha.
             if (isEnvenenada)
-              const Positioned(right: 3, top: 3, child: _VenenoBadge()),
+              Positioned(
+                  right: 3, top: 3, child: _VenenoBadge(turnos: turnosVeneno)),
 
             // Tinte gélido de la celda paralizada.
             if (isParalizada)
@@ -242,7 +253,10 @@ class CellWidget extends StatelessWidget {
 
             // Badge de parálisis (reloj) — esquina inferior izquierda.
             if (isParalizada)
-              const Positioned(left: 3, bottom: 3, child: _ParalisisBadge()),
+              Positioned(
+                  left: 3,
+                  bottom: 3,
+                  child: _ParalisisBadge(turnos: turnosParalisis)),
 
             // Tinte azulado de la celda escudada.
             if (isEscudada)
@@ -261,7 +275,10 @@ class CellWidget extends StatelessWidget {
 
             // Badge de escudo — esquina inferior derecha.
             if (isEscudada)
-              const Positioned(right: 3, bottom: 3, child: _EscudoBadge()),
+              Positioned(
+                  right: 3,
+                  bottom: 3,
+                  child: _EscudoBadge(turnos: turnosEscudo)),
 
             if (isSpawn && celda.isEmpty && !isConquistado)
               SpawnMarker(coord: coord, color: obeliscoColores[coord]),
@@ -439,80 +456,122 @@ class _RayoBadge extends StatelessWidget {
   }
 }
 
-/// Indicador de celda envenenada (calavera ☠). Las cartas que estén o entren
-/// en la celda pierden defensa mientras el veneno siga activo.
-class _VenenoBadge extends StatelessWidget {
-  const _VenenoBadge();
+/// Badge base de un efecto de ACCIÓN activo sobre una celda: pastilla con el
+/// icono del efecto y —si [turnos] > 0— el número de turnos que seguirá activo.
+///
+/// Este indicador es visible por TODOS los jugadores (los efectos de celda se
+/// sincronizan desde el servidor), de modo que cualquiera puede saber que hay
+/// una acción sobre la celda y cuántos turnos le quedan.
+class _EfectoBadge extends StatelessWidget {
+  final Color color;
+  final String glyph;
+  final double glyphSize;
+  final int turnos;
+  const _EfectoBadge({
+    required this.color,
+    required this.glyph,
+    required this.turnos,
+    this.glyphSize = 11,
+  });
 
   @override
   Widget build(BuildContext context) {
+    // Sin turnos → badge compacto original (solo icono).
+    if (turnos <= 0) {
+      return Container(
+        width: 18,
+        height: 18,
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.92),
+          borderRadius: BorderRadius.circular(4),
+          boxShadow: [BoxShadow(color: color.withOpacity(0.6), blurRadius: 6)],
+        ),
+        alignment: Alignment.center,
+        child: Text(glyph, style: TextStyle(fontSize: glyphSize, height: 1.0)),
+      );
+    }
+
+    // Con turnos → pastilla oscura con borde de color: icono + nº de turnos.
     return Container(
-      width: 18,
       height: 18,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       decoration: BoxDecoration(
-        color: const Color(0xFF2BA046).withOpacity(0.92),
-        borderRadius: BorderRadius.circular(4),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF2BA046).withOpacity(0.6),
-            blurRadius: 6,
+        color: const Color(0xF20A1220),
+        borderRadius: BorderRadius.circular(5),
+        border: Border.all(color: color, width: 1),
+        boxShadow: [BoxShadow(color: color.withOpacity(0.55), blurRadius: 5)],
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(glyph, style: TextStyle(fontSize: glyphSize, height: 1.0)),
+          const SizedBox(width: 2),
+          Text(
+            '${turnos}T',
+            style: TextStyle(
+              fontSize: 9,
+              height: 1.0,
+              fontWeight: FontWeight.bold,
+              color: color,
+              fontFamily: 'Cinzel',
+            ),
           ),
         ],
       ),
-      alignment: Alignment.center,
-      child: const Text('☠', style: TextStyle(fontSize: 11, height: 1.0)),
+    );
+  }
+}
+
+/// Indicador de celda envenenada (calavera ☠). Las cartas que estén o entren
+/// en la celda pierden defensa mientras el veneno siga activo. Muestra los
+/// turnos restantes cuando el veneno es un efecto de la propia celda.
+class _VenenoBadge extends StatelessWidget {
+  final int turnos;
+  const _VenenoBadge({this.turnos = 0});
+
+  @override
+  Widget build(BuildContext context) {
+    return _EfectoBadge(
+      color: const Color(0xFF2BA046),
+      glyph: '☠',
+      glyphSize: 11,
+      turnos: turnos,
     );
   }
 }
 
 /// Indicador de celda paralizada (reloj ⏱). Las cartas que estén o entren en
-/// la celda no pueden moverse mientras la parálisis siga activa.
+/// la celda no pueden moverse mientras la parálisis siga activa. Muestra los
+/// turnos restantes cuando la parálisis es un efecto de la propia celda.
 class _ParalisisBadge extends StatelessWidget {
-  const _ParalisisBadge();
+  final int turnos;
+  const _ParalisisBadge({this.turnos = 0});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 18,
-      height: 18,
-      decoration: BoxDecoration(
-        color: const Color(0xFF2C90C8).withOpacity(0.92),
-        borderRadius: BorderRadius.circular(4),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF2C90C8).withOpacity(0.6),
-            blurRadius: 6,
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: const Text('⏱', style: TextStyle(fontSize: 11, height: 1.0)),
+    return _EfectoBadge(
+      color: const Color(0xFF2C90C8),
+      glyph: '⏱',
+      glyphSize: 11,
+      turnos: turnos,
     );
   }
 }
 
 /// Indicador de celda escudada (🛡). Las cartas del lanzador que estén o entren
-/// en la celda ganan defensa mientras el escudo siga activo.
+/// en la celda ganan defensa mientras el escudo siga activo. Muestra los turnos
+/// restantes del escudo de celda.
 class _EscudoBadge extends StatelessWidget {
-  const _EscudoBadge();
+  final int turnos;
+  const _EscudoBadge({this.turnos = 0});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 18,
-      height: 18,
-      decoration: BoxDecoration(
-        color: const Color(0xFF3A78C8).withOpacity(0.92),
-        borderRadius: BorderRadius.circular(4),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF3A78C8).withOpacity(0.6),
-            blurRadius: 6,
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: const Text('🛡', style: TextStyle(fontSize: 10, height: 1.0)),
+    return _EfectoBadge(
+      color: const Color(0xFF3A78C8),
+      glyph: '🛡',
+      glyphSize: 10,
+      turnos: turnos,
     );
   }
 }

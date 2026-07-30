@@ -1968,6 +1968,74 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _movableCoords = {};
     });
   }
+
+  /// Deshace el movimiento de las cartas seleccionadas en el menú lateral,
+  /// devolviéndolas a la posición que ocupaban al inicio de este turno.
+  ///
+  /// Solo actúa sobre cartas propias que se movieron ESTE turno (las que están
+  /// en [_cartasQueSeMovieron]); su origen se lee de [_origenTurnoPorId], que se
+  /// rellenó en [_executeMove]. Tras deshacer, la carta vuelve a poder moverse
+  /// (se limpian los rastreos por-instancia), de modo que el estado queda igual
+  /// que si nunca la hubieras movido.
+  void _undoMoveSelected(List<int> indices) {
+    if (_sidebarCoord == null || indices.isEmpty) return;
+    if (_yoCerreElTurno) {
+      _toast('Ya has cerrado el turno. Espera al siguiente.', error: true);
+      return;
+    }
+    final coord = _sidebarCoord!;
+    final celda = _boardState.getCelda(coord);
+
+    // Cartas válidas para deshacer: propias, movidas este turno y con un origen
+    // registrado distinto de la celda actual.
+    final aDeshacer = <CartaEnCelda>[];
+    for (final i in indices) {
+      if (i < 0 || i >= celda.cartas.length) continue;
+      final c = celda.cartas[i];
+      if (c.ownerUid != _localPlayer.datos.uid) continue;
+      if (!_cartasQueSeMovieron.contains(c.instanceId)) continue;
+      final origen = _origenTurnoPorId[c.instanceId];
+      if (origen == null || origen == coord) continue;
+      aDeshacer.add(c);
+    }
+
+    if (aDeshacer.isEmpty) {
+      _toast('No hay movimientos que deshacer en estas cartas.', error: true);
+      return;
+    }
+
+    final deshacerSet = aDeshacer.toSet();
+
+    setState(() {
+      // 1) Quitar las cartas a deshacer de la celda actual.
+      final quedan =
+          celda.cartas.where((c) => !deshacerSet.contains(c)).toList();
+      var st =
+          _boardState.setCelda(coord, CeldaState(coord: coord, cartas: quedan));
+
+      // 2) Devolver cada carta a su celda de origen y limpiar su rastreo, para
+      //    que vuelva a estar disponible para moverse este turno.
+      for (final c in aDeshacer) {
+        final origen = _origenTurnoPorId[c.instanceId]!;
+        st = st.placeCarta(origen, c);
+        _cartasMovidasEsteTurno.remove(c.instanceId);
+        _cartasQueSeMovieron.remove(c.instanceId);
+        _origenTurnoPorId.remove(c.instanceId);
+      }
+      _boardState = st;
+
+      // La celda pudo quedar vacía o cambiar de contenido: cerramos el menú
+      // lateral para evitar índices obsoletos (un nuevo toque lo reabre).
+      _sidebarOpen = false;
+      _sidebarCoord = null;
+      _cancelMoveMode();
+    });
+
+    final n = aDeshacer.length;
+    _toast(n == 1
+        ? 'Movimiento deshecho: la carta volvió a su posición.'
+        : 'Movimientos deshechos: $n cartas volvieron a su posición.');
+  }
 // ─────────────────────────────────────────────────────────
   // FLUJO DE ACCIONES / HABILIDADES
   // ─────────────────────────────────────────────────────────
@@ -3430,6 +3498,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 localUid: _localPlayer.datos.uid,
                 playerColors: _playerColors,
                 onMoveSelected: _estoyEliminado ? (_) {} : _onMoveSelected,
+                movedInstanceIds: _cartasQueSeMovieron,
+                onUndoSelected: _estoyEliminado ? (_) {} : _undoMoveSelected,
                 onClose: _closeSidebar,
                 energiasDisponibles: _localPlayer.puntos,
                 resolveEvolucion: _resolveEvolucion,
