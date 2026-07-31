@@ -194,6 +194,7 @@ class _CellSidebarState extends State<CellSidebar> {
           defensa: (prev?.defensa ?? 0) + c.defensaEfectiva,
           reduccion: (prev?.reduccion ?? 0) + c.defensaReducidaPorEfectos,
           color: widget.playerColors[c.ownerUid] ?? ownerColor(c.ownerZone),
+          tipos: {...(prev?.tipos ?? const <int>{}), c.carta.tipo},
         );
       }
       ejercitos.addAll(byUid.values);
@@ -298,7 +299,7 @@ class _Header extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-        Text(a.esLocal ? 'TÚ' : _ownerZoneLabel(a.zone),
+        Text(a.esLocal ? 'TÚ' : _tipoArmyLabel(a.tipos),
             style: TextStyle(
                 fontSize: 7,
                 color: a.color,
@@ -340,20 +341,6 @@ class _Header extends StatelessWidget {
         ]),
       ]),
     );
-  }
-
-  static String _ownerZoneLabel(String zone) {
-    const m = {
-      'north': 'NORTE',
-      'south': 'SUR',
-      'west': 'OESTE',
-      'east': 'ESTE',
-      'ne': 'NE',
-      'nw': 'NO',
-      'se': 'SE',
-      'sw': 'SO'
-    };
-    return m[zone] ?? zone.toUpperCase();
   }
 
   String _label(TerrainType? t) {
@@ -557,6 +544,11 @@ class _ArmyTotal {
   final int defensa;
   final int reduccion;
   final Color color;
+
+  /// Tipos de las cartas de este ejército en la celda (1=tierra, 2=aire, 3=mar).
+  /// Se usa para etiquetar el bloque con TIERRA/AIRE/MAR (o MIXTO si hay varios).
+  final Set<int> tipos;
+
   const _ArmyTotal({
     required this.uid,
     required this.zone,
@@ -565,7 +557,31 @@ class _ArmyTotal {
     required this.defensa,
     required this.reduccion,
     required this.color,
+    this.tipos = const {},
   });
+}
+
+/// Etiqueta del TIPO de una carta: 1=TIERRA, 2=AIRE, 3=MAR. Sustituye a la
+/// antigua etiqueta de zona (SUR/SE…) en el menú lateral.
+String _tipoLabel(int tipo) {
+  switch (tipo) {
+    case 1:
+      return 'TIERRA';
+    case 2:
+      return 'AIRE';
+    case 3:
+      return 'MAR';
+    default:
+      return '—';
+  }
+}
+
+/// Etiqueta de tipo para un conjunto de cartas (un ejército en la celda): el
+/// tipo si todas comparten uno, o MIXTO si hay varios.
+String _tipoArmyLabel(Set<int> tipos) {
+  if (tipos.isEmpty) return '—';
+  if (tipos.length == 1) return _tipoLabel(tipos.first);
+  return 'MIXTO';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -791,20 +807,6 @@ class _CardTile extends StatelessWidget {
     this.onLanzarHabilidad,
   });
 
-  String _ownerLabel(String zone) {
-    const m = {
-      'north': 'NORTE',
-      'south': 'SUR',
-      'west': 'OESTE',
-      'east': 'ESTE',
-      'ne': 'NE',
-      'nw': 'NO',
-      'se': 'SE',
-      'sw': 'SO'
-    };
-    return m[zone] ?? zone.toUpperCase();
-  }
-
   void _abrirDetalle(BuildContext ctx) {
     final puedeEvolucionar = isLocal &&
         onEvolucionar != null &&
@@ -1015,9 +1017,7 @@ class _CardTile extends StatelessWidget {
                               label: 'MOV ${carta.movimientoEfectivo}',
                               color: color),
                           const SizedBox(width: 4),
-                          _Chip(
-                              label: _ownerLabel(entry.ownerZone),
-                              color: color),
+                          _Chip(label: _tipoLabel(carta.tipo), color: color),
                           if (carta.condicion != CondicionCarta.basica) ...[
                             const SizedBox(width: 4),
                             _Chip(

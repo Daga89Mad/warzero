@@ -3601,20 +3601,28 @@ class _TurnWaitBannerState extends State<_TurnWaitBanner> {
   Widget build(BuildContext context) {
     final pending = widget.totalJugadores - widget.cerradoPor;
     final String msg;
-    if (widget.modoTurno == ModoTurno.diario) {
-      // Cierre real = fechaResolucion del servidor (00:00 UTC). Fallback al
-      // cálculo local sólo si aún no llegó del servidor.
-      final cierre = widget.fechaResolucionMs != null
-          ? DateTime.fromMillisecondsSinceEpoch(widget.fechaResolucionMs!,
-              isUtc: true)
-          : TurnService.proximoCierreUTC();
-      final diff = cierre.difference(DateTime.now().toUtc());
-      if (diff.isNegative) {
-        msg = 'Cierre vencido (00:00 UTC). Resolviendo…';
+    if (widget.modoTurno == ModoTurno.diario ||
+        widget.modoTurno == ModoTurno.turno12h) {
+      // Cierre real = fechaResolucion del servidor. En diario es 00:00 UTC; en
+      // turno12h es la hora de resolución + 12 h (la calcula el servidor, así
+      // que sin ese dato no hay fallback local fiable).
+      final esDiario = widget.modoTurno == ModoTurno.diario;
+      final ref = esDiario ? '(00:00 UTC)' : '(UTC +12 h)';
+      final cierreMs = widget.fechaResolucionMs;
+      final DateTime? cierre = cierreMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(cierreMs, isUtc: true)
+          : (esDiario ? TurnService.proximoCierreUTC() : null);
+      if (cierre == null) {
+        msg = 'Esperando cierre del turno…';
       } else {
-        final h = diff.inHours;
-        final m = diff.inMinutes % 60;
-        msg = 'Esperando. Cierre en ${h}h ${m}m (00:00 UTC)';
+        final diff = cierre.difference(DateTime.now().toUtc());
+        if (diff.isNegative) {
+          msg = 'Cierre vencido $ref. Resolviendo…';
+        } else {
+          final h = diff.inHours;
+          final m = diff.inMinutes % 60;
+          msg = 'Esperando. Cierre en ${h}h ${m}m $ref';
+        }
       }
     } else {
       final suf = pending == 1 ? '' : 'es';

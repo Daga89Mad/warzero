@@ -88,7 +88,11 @@ class StatsPartidaJugador {
 }
 
 // ── Modo de fin de turno ─────────────────────────────────────
-enum ModoTurno { rapida, diario }
+// rapida   → turnos de 30 s (temporizador en cliente).
+// diario   → el turno se resuelve a las 00:00 UTC.
+// turno12h → al resolverse un turno se fija el cierre del siguiente a la hora
+//            actual UTC + 12 h; llegado ese momento se cierra automáticamente.
+enum ModoTurno { rapida, diario, turno12h }
 
 // ── Estado general del lobby ──────────────────────────────────
 enum LobbyEstado { esperando, enCurso, finalizada }
@@ -222,8 +226,27 @@ class LobbyModel {
     }
   }
 
-  static ModoTurno _parseModoTurno(String? s) =>
-      s == 'diario' ? ModoTurno.diario : ModoTurno.rapida;
+  static ModoTurno _parseModoTurno(String? s) {
+    switch (s) {
+      case 'diario':
+        return ModoTurno.diario;
+      case 'turno12h':
+        return ModoTurno.turno12h;
+      default:
+        return ModoTurno.rapida;
+    }
+  }
+
+  static String modoTurnoStr(ModoTurno m) {
+    switch (m) {
+      case ModoTurno.diario:
+        return 'diario';
+      case ModoTurno.turno12h:
+        return 'turno12h';
+      case ModoTurno.rapida:
+        return 'rapida';
+    }
+  }
 
   Map<String, dynamic> toMap() => {
         'nombre': nombre,
@@ -234,7 +257,7 @@ class LobbyModel {
         'jugadores': jugadores.map((j) => j.toMap()).toList(),
         'estado': _estadoStr(estado),
         'creadoEn': Timestamp.fromDate(creadoEn),
-        'modoTurno': modoTurno == ModoTurno.diario ? 'diario' : 'rapida',
+        'modoTurno': modoTurnoStr(modoTurno),
         'turnoActual': turnoActual,
         'cerradoPor': cerradoPor,
         'statsPartida': statsPartida.map((uid, s) => MapEntry(uid, s.toMap())),

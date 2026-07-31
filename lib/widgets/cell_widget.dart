@@ -231,11 +231,6 @@ class CellWidget extends StatelessWidget {
                 ),
               ),
 
-            // Badge de veneno (calavera) — esquina superior derecha.
-            if (isEnvenenada)
-              Positioned(
-                  right: 3, top: 3, child: _VenenoBadge(turnos: turnosVeneno)),
-
             // Tinte gélido de la celda paralizada.
             if (isParalizada)
               const Positioned.fill(
@@ -251,13 +246,6 @@ class CellWidget extends StatelessWidget {
                 ),
               ),
 
-            // Badge de parálisis (reloj) — esquina inferior izquierda.
-            if (isParalizada)
-              Positioned(
-                  left: 3,
-                  bottom: 3,
-                  child: _ParalisisBadge(turnos: turnosParalisis)),
-
             // Tinte azulado de la celda escudada.
             if (isEscudada)
               const Positioned.fill(
@@ -272,13 +260,6 @@ class CellWidget extends StatelessWidget {
                   ),
                 ),
               ),
-
-            // Badge de escudo — esquina inferior derecha.
-            if (isEscudada)
-              Positioned(
-                  right: 3,
-                  bottom: 3,
-                  child: _EscudoBadge(turnos: turnosEscudo)),
 
             if (isSpawn && celda.isEmpty && !isConquistado)
               SpawnMarker(coord: coord, color: obeliscoColores[coord]),
@@ -301,6 +282,25 @@ class CellWidget extends StatelessWidget {
                   escudosCelda: escudosCelda,
                 ),
               ),
+
+            // ── AVISOS DE EFECTO POR ENCIMA DE LA CARTA ──────────────────────
+            // Los badges de veneno/parálisis/escudo (con los turnos restantes) se
+            // dibujan DESPUÉS del token de la carta —al final del Stack— para que
+            // queden por ENCIMA y su número sea legible aunque la celda tenga
+            // carta. Antes iban antes que la carta y esta los tapaba.
+            if (isEnvenenada)
+              Positioned(
+                  right: 3, top: 3, child: _VenenoBadge(turnos: turnosVeneno)),
+            if (isParalizada)
+              Positioned(
+                  left: 3,
+                  bottom: 3,
+                  child: _ParalisisBadge(turnos: turnosParalisis)),
+            if (isEscudada)
+              Positioned(
+                  right: 3,
+                  bottom: 3,
+                  child: _EscudoBadge(turnos: turnosEscudo)),
 
             // Marcador fantasma de acción pendiente (solo visión local).
             if (fantasmas.isNotEmpty)

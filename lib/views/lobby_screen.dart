@@ -1546,6 +1546,20 @@ class _ModoTurnoSelector extends StatelessWidget {
                   'Hora UTC actual: ${_horaUTC()}'
               : null,
         ),
+        const SizedBox(height: 8),
+        _ModoOption(
+          label: 'TURNO 12 HORAS',
+          icon: Icons.hourglass_bottom,
+          accent: const Color(0xFFC08040),
+          isSelected: selected == ModoTurno.turno12h,
+          onTap: () => onChanged(ModoTurno.turno12h),
+          info: selected == ModoTurno.turno12h
+              ? 'Cuando el último jugador cierra su turno y este se resuelve, '
+                  'el siguiente cierre se fija a la hora actual UTC + 12 h. '
+                  'Al llegar ese momento el turno se cierra automáticamente. '
+                  'Hora UTC actual: ${_horaUTC()}'
+              : null,
+        ),
       ],
     );
   }
