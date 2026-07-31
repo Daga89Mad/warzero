@@ -100,6 +100,28 @@ class EntrarResult {
       );
 }
 
+/// Resultado de una operación de alianza. `estado` es el doc completo de la
+/// partida (incluye `alianzas`) para refrescar sin leer Firestore.
+class AlianzaResult {
+  final bool ok;
+  final String mensaje;
+  final Map<String, dynamic>? estado;
+
+  const AlianzaResult({
+    required this.ok,
+    required this.mensaje,
+    this.estado,
+  });
+
+  factory AlianzaResult.fromJson(Map<String, dynamic> j) => AlianzaResult(
+        ok: j['ok'] == true,
+        mensaje: j['mensaje'] as String? ?? '',
+        estado: j['estado'] is Map
+            ? Map<String, dynamic>.from(j['estado'] as Map)
+            : null,
+      );
+}
+
 /// Cliente de la API Fenrir / WarZero.
 ///
 /// IMPORTANTE: el backend corre en Render con plan gratuito, que DUERME el
@@ -583,6 +605,112 @@ class WarZeroApi {
       return j['ok'] == true;
     }
     throw Exception('desbloquearHistoria HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  // ── Alianzas (partidas de 4+ jugadores) ────────────────────────────────────
+
+  /// Propone una alianza a otro jugador por [turnos] turnos.
+  Future<AlianzaResult> proponerAlianza({
+    required String lobbyId,
+    required String deUid,
+    required String paraUid,
+    required int turnos,
+  }) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/alianza/proponer'),
+        headers: _headers,
+        body: jsonEncode({
+          'lobbyId': lobbyId,
+          'deUid': deUid,
+          'paraUid': paraUid,
+          'turnos': turnos,
+        }),
+      ),
+      etiqueta: 'alianza/proponer',
+      intentos: 2,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST alianza/proponer status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return AlianzaResult.fromJson(
+          jsonDecode(res.body) as Map<String, dynamic>);
+    }
+    throw Exception('proponerAlianza HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Responde una propuesta de alianza recibida (aceptar o rechazar).
+  Future<AlianzaResult> responderAlianza({
+    required String lobbyId,
+    required String uid,
+    required String proponenteUid,
+    required bool aceptar,
+  }) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/alianza/responder'),
+        headers: _headers,
+        body: jsonEncode({
+          'lobbyId': lobbyId,
+          'uid': uid,
+          'proponenteUid': proponenteUid,
+          'aceptar': aceptar,
+        }),
+      ),
+      etiqueta: 'alianza/responder',
+      intentos: 2,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST alianza/responder status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return AlianzaResult.fromJson(
+          jsonDecode(res.body) as Map<String, dynamic>);
+    }
+    throw Exception('responderAlianza HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Marca una traición: al resolver el turno dejarás de ser aliado.
+  Future<AlianzaResult> traicionarAlianza({
+    required String lobbyId,
+    required String uid,
+  }) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/alianza/traicionar'),
+        headers: _headers,
+        body: jsonEncode({'lobbyId': lobbyId, 'uid': uid}),
+      ),
+      etiqueta: 'alianza/traicionar',
+      intentos: 2,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST alianza/traicionar status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return AlianzaResult.fromJson(
+          jsonDecode(res.body) as Map<String, dynamic>);
+    }
+    throw Exception('traicionarAlianza HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Limpia (en el servidor) los avisos de alianza dirigidos a [uid]. Best-effort.
+  Future<void> limpiarAvisosAlianza({
+    required String lobbyId,
+    required String uid,
+  }) async {
+    try {
+      await _enviarConReintentos(
+        () => http.post(
+          Uri.parse(
+              '$baseUrl/warzero/alianza/avisos/limpiar?lobbyId=$lobbyId&uid=$uid'),
+          headers: _headers,
+        ),
+        etiqueta: 'alianza/avisos/limpiar',
+        intentos: 2,
+        timeout: _postTimeout,
+      );
+    } catch (e) {
+      debugPrint('[WZ][api] alianza/avisos/limpiar falló (seguimos): $e');
+    }
   }
 
   /// Registra el token FCM del dispositivo para recibir notificaciones push

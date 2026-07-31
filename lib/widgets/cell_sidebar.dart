@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
 import '../models/game_config.dart';
-import 'cell_widget.dart' show ownerColor;
+import 'cell_widget.dart' show ownerColor, ZeroChip;
 import 'card_detail_overlay.dart';
 
 // ─────────────────────────────────────────────────────────────
@@ -1007,28 +1007,21 @@ class _CardTile extends StatelessWidget {
                                 height: 1.5,
                                 fontFamily: 'Georgia')),
                         const SizedBox(height: 5),
-                        Row(children: [
-                          if (moved) ...[
+                        Wrap(spacing: 4, runSpacing: 4, children: [
+                          if (moved)
                             const _Chip(
                                 label: '↩ MOVIDA', color: Color(0xFF40B0FF)),
-                            const SizedBox(width: 4),
-                          ],
                           _Chip(
                               label: 'MOV ${carta.movimientoEfectivo}',
                               color: color),
-                          const SizedBox(width: 4),
                           _Chip(label: _tipoLabel(carta.tipo), color: color),
-                          if (carta.condicion != CondicionCarta.basica) ...[
-                            const SizedBox(width: 4),
+                          if (carta.condicion != CondicionCarta.basica)
                             _Chip(
                                 label:
                                     '${carta.condicion.icon} ${carta.condicion.label.toUpperCase()}',
                                 color: Color(carta.condicion.colorValue)),
-                          ],
-                          if (carta.puedeEvolucionar) ...[
-                            const SizedBox(width: 4),
+                          if (carta.puedeEvolucionar)
                             _EvolChip(coste: carta.evolucion),
-                          ],
                         ]),
                       ]),
                 ),
@@ -1262,12 +1255,14 @@ class _EvolChip extends StatelessWidget {
         children: [
           const Icon(Icons.arrow_upward, size: 8, color: color),
           const SizedBox(width: 2),
-          Text('${coste}Ø',
+          Text('$coste',
               style: const TextStyle(
                   fontSize: 7,
                   color: color,
                   letterSpacing: 0.5,
                   fontFamily: 'Cinzel')),
+          const SizedBox(width: 2),
+          const ZeroChip(size: 9),
         ],
       ),
     );

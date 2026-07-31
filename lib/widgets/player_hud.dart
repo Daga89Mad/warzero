@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../models/jugador_model.dart';
+import 'cell_widget.dart' show ZeroChip;
 
 /// Datos de un jugador para el menú desplegable de la barra de partida.
 class HudJugadorInfo {
@@ -41,6 +42,8 @@ class PartidaTopBar extends StatelessWidget {
   final VoidCallback onInforme;
   final bool puedePuntuaciones;
   final VoidCallback onPuntuaciones;
+  final bool puedeAlianza;
+  final VoidCallback onAlianza;
   final bool puedeDeshacer;
   final VoidCallback onDeshacer;
 
@@ -56,6 +59,8 @@ class PartidaTopBar extends StatelessWidget {
     required this.onInforme,
     required this.puedePuntuaciones,
     required this.onPuntuaciones,
+    required this.puedeAlianza,
+    required this.onAlianza,
     required this.puedeDeshacer,
     required this.onDeshacer,
   });
@@ -86,6 +91,7 @@ class PartidaTopBar extends StatelessWidget {
               if (v == '__informe__' && puedeInforme) onInforme();
               if (v == '__puntuaciones__' && puedePuntuaciones)
                 onPuntuaciones();
+              if (v == '__alianza__' && puedeAlianza) onAlianza();
               if (v == '__deshacer__' && puedeDeshacer) onDeshacer();
             },
             itemBuilder: (context) => [
@@ -128,6 +134,17 @@ class PartidaTopBar extends StatelessWidget {
                   label: 'PUNTUACIONES',
                   color: const Color(0xFF9AD06A),
                   enabled: puedePuntuaciones,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: '__alianza__',
+                enabled: puedeAlianza,
+                height: 40,
+                child: _FilaAccion(
+                  icon: Icons.handshake,
+                  label: 'ALIANZA',
+                  color: const Color(0xFFC88AD0),
+                  enabled: puedeAlianza,
                 ),
               ),
               PopupMenuItem<String>(
@@ -297,7 +314,7 @@ class _FilaJugador extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         Text(
-          '${info.zeros} Ø',
+          '${info.zeros}',
           style: const TextStyle(
             fontSize: 12,
             fontFamily: 'Cinzel',
@@ -305,6 +322,8 @@ class _FilaJugador extends StatelessWidget {
             color: Color(0xFF2EA6FF),
           ),
         ),
+        const SizedBox(width: 4),
+        const ZeroChip(size: 13),
       ],
     );
   }
@@ -553,9 +572,10 @@ class _HudBar extends StatelessWidget {
           // player.puntos contiene las energías actuales (leídas de
           // statsPartida.{uid}.energies en Firestore).
           _StatColumn(
-            label: 'Ø ZERO',
+            label: 'ZERO',
             value: player.puntos,
             color: const Color(0xFF2EA6FF),
+            conZero: true,
           ),
 
           // ── End turn button (player only) ──
@@ -579,10 +599,15 @@ class _StatColumn extends StatelessWidget {
   final int value;
   final Color color;
 
+  /// Si es true, muestra el icono ZERO (Ø con relleno) junto al número, para
+  /// que la cifra no se confunda con la propia Ø.
+  final bool conZero;
+
   const _StatColumn({
     required this.label,
     required this.value,
     required this.color,
+    this.conZero = false,
   });
 
   @override
@@ -599,15 +624,24 @@ class _StatColumn extends StatelessWidget {
             fontFamily: 'Cinzel',
           ),
         ),
-        Text(
-          '$value',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.bold,
-            color: color,
-            fontFamily: 'Cinzel',
-            height: 1.1,
-          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '$value',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: color,
+                fontFamily: 'Cinzel',
+                height: 1.1,
+              ),
+            ),
+            if (conZero) ...[
+              const SizedBox(width: 4),
+              const ZeroChip(size: 15),
+            ],
+          ],
         ),
       ],
     );

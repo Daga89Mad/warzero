@@ -456,6 +456,40 @@ class _RayoBadge extends StatelessWidget {
   }
 }
 
+/// Icono del recurso ZERO: la "Ø" dentro de un disco relleno dorado, para que
+/// NO se confunda con un número (un 0) cuando aparece una cantidad al lado.
+/// Úsalo en lugar de escribir "Ø" pegado a una cifra: `Text('$n')` + ZeroChip().
+class ZeroChip extends StatelessWidget {
+  /// Diámetro del disco en píxeles. El resto (fuente, sombra) se escala con él.
+  final double size;
+  const ZeroChip({super.key, this.size = 14});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: const Color(0xFFD4A800),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+              color: const Color(0xFFD4A800).withOpacity(0.55),
+              blurRadius: size * 0.35),
+        ],
+      ),
+      child: Text('Ø',
+          style: TextStyle(
+            fontSize: size * 0.72,
+            height: 1.0,
+            fontWeight: FontWeight.bold,
+            color: const Color(0xFF201400),
+          )),
+    );
+  }
+}
+
 /// Badge base de un efecto de ACCIÓN activo sobre una celda: pastilla con el
 /// icono del efecto y —si [turnos] > 0— el número de turnos que seguirá activo.
 ///
@@ -871,16 +905,11 @@ class _CardStack extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // Icono de tipo (Tierra/Mar/Aire) + valor de movimiento.
+          // Valor de movimiento (el tipo Tierra/Aire/Mar ya se ve en el menú
+          // lateral por carta, así que aquí no repetimos el icono de tipo).
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                primary.carta.tipoIconData,
-                size: 11,
-                color: Color(primary.carta.tipoColorValue),
-              ),
-              const SizedBox(width: 3),
               Text(
                 '$movimientoPrimary',
                 style: TextStyle(

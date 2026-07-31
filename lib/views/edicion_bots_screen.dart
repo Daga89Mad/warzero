@@ -107,6 +107,8 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
             'orden': i,
             'maxPartidas': 1,
             'ejercitoId': ejercitoId,
+            'dificultad': 'medio',
+            'estilo': 'equilibrado',
           });
           faltan++;
         }
@@ -196,6 +198,148 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
     } catch (e) {
       if (mounted) setState(() => bot.ejercitoId = anterior); // revertir
       _toast('No se pudo cambiar el ejército: $e', error: true);
+    }
+  }
+
+  /// Cambia la DIFICULTAD del bot ('medio'|'alto') y la persiste.
+  Future<void> _setDificultad(_BotResumen bot, String dif) async {
+    if (dif == bot.dificultad || !kDificultades.contains(dif)) return;
+    final anterior = bot.dificultad;
+    setState(() => bot.dificultad = dif);
+    try {
+      await _col.doc(bot.id).update({'dificultad': dif});
+      _toast('${bot.alias} → dificultad ${etiquetaDificultad(dif)}');
+    } catch (e) {
+      if (mounted) setState(() => bot.dificultad = anterior); // revertir
+      _toast('No se pudo cambiar la dificultad: $e', error: true);
+    }
+  }
+
+  /// Cambia el ESTILO del bot ('equilibrado'|'defensivo'|'agresivo').
+  Future<void> _setEstilo(_BotResumen bot, String est) async {
+    if (est == bot.estilo || !kEstilos.contains(est)) return;
+    final anterior = bot.estilo;
+    setState(() => bot.estilo = est);
+    try {
+      await _col.doc(bot.id).update({'estilo': est});
+      _toast('${bot.alias} → estilo ${etiquetaEstilo(est)}');
+    } catch (e) {
+      if (mounted) setState(() => bot.estilo = anterior); // revertir
+      _toast('No se pudo cambiar el estilo: $e', error: true);
+    }
+  }
+
+  /// Diálogo para RENOMBRAR el bot (campo `alias`, el nombre visible en partida).
+  Future<void> _renombrar(_BotResumen bot) async {
+    final ctrl = TextEditingController(text: bot.alias);
+    final nuevo = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1220),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: _accent.withOpacity(0.4)),
+        ),
+        title: const Text(
+          'RENOMBRAR BOT',
+          style: TextStyle(
+            color: _accent,
+            fontFamily: 'Cinzel',
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.5,
+          ),
+        ),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 24,
+          textInputAction: TextInputAction.done,
+          onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+          style: const TextStyle(color: Colors.white, fontFamily: 'Cinzel'),
+          cursorColor: _accent,
+          decoration: InputDecoration(
+            hintText: 'Nombre visible en la partida',
+            hintStyle: const TextStyle(color: Color(0xFF6A727C)),
+            counterStyle: const TextStyle(color: Color(0xFF6A727C)),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: Color(0xFF1A2436)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(color: _accent),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('CANCELAR',
+                style:
+                    TextStyle(color: Color(0xFF808890), fontFamily: 'Cinzel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: Text('GUARDAR',
+                style: TextStyle(color: _accent, fontFamily: 'Cinzel')),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (nuevo == null || nuevo.isEmpty || nuevo == bot.alias) return;
+
+    final anterior = bot.alias;
+    setState(() => bot.alias = nuevo);
+    try {
+      await _col.doc(bot.id).update({'alias': nuevo});
+      _toast('Renombrado: $anterior → $nuevo');
+    } catch (e) {
+      if (mounted) setState(() => bot.alias = anterior); // revertir
+      _toast('No se pudo renombrar: $e', error: true);
+    }
+  }
+
+  /// Aplica la misma dificultad a TODOS los bots.
+  Future<void> _setDificultadTodos(String dif) async {
+    if (!kDificultades.contains(dif)) return;
+    final batch = FirebaseFirestore.instance.batch();
+    for (final b in _bots) {
+      batch.update(_col.doc(b.id), {'dificultad': dif});
+    }
+    try {
+      await batch.commit();
+      if (!mounted) return;
+      setState(() {
+        for (final b in _bots) {
+          b.dificultad = dif;
+        }
+      });
+      _toast('Todos los bots → dificultad ${etiquetaDificultad(dif)}');
+    } catch (e) {
+      _toast('No se pudo aplicar a todos: $e', error: true);
+    }
+  }
+
+  /// Aplica el mismo estilo a TODOS los bots.
+  Future<void> _setEstiloTodos(String est) async {
+    if (!kEstilos.contains(est)) return;
+    final batch = FirebaseFirestore.instance.batch();
+    for (final b in _bots) {
+      batch.update(_col.doc(b.id), {'estilo': est});
+    }
+    try {
+      await batch.commit();
+      if (!mounted) return;
+      setState(() {
+        for (final b in _bots) {
+          b.estilo = est;
+        }
+      });
+      _toast('Todos los bots → estilo ${etiquetaEstilo(est)}');
+    } catch (e) {
+      _toast('No se pudo aplicar a todos: $e', error: true);
     }
   }
 
@@ -412,6 +556,9 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                           onChanged: (v) => _toggle(_bots[i], v),
                           onPartidas: (v) => _setMaxPartidas(_bots[i], v),
                           onEjercito: () => _elegirEjercito(_bots[i]),
+                          onDificultad: (v) => _setDificultad(_bots[i], v),
+                          onEstilo: (v) => _setEstilo(_bots[i], v),
+                          onRenombrar: () => _renombrar(_bots[i]),
                         ),
                       ),
                     ),
@@ -530,11 +677,73 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
             ],
           ),
           const SizedBox(height: 10),
+          // Atajo: dificultad para TODOS.
+          Row(
+            children: [
+              const Icon(Icons.speed_outlined,
+                  color: Color(0xFF8A94A0), size: 16),
+              const SizedBox(width: 8),
+              const Text(
+                'Dificultad a todos:',
+                style: TextStyle(
+                  color: Color(0xFF8A94A0),
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _MiniBoton(
+                  label: 'MEDIO',
+                  accent: _accent,
+                  onTap: () => _setDificultadTodos('medio')),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: 'ALTO',
+                  accent: const Color(0xFFE0703A),
+                  onTap: () => _setDificultadTodos('alto')),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Atajo: estilo para TODOS.
+          Row(
+            children: [
+              const Icon(Icons.sports_kabaddi_outlined,
+                  color: Color(0xFF8A94A0), size: 16),
+              const SizedBox(width: 8),
+              const Text(
+                'Estilo a todos:',
+                style: TextStyle(
+                  color: Color(0xFF8A94A0),
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(width: 8),
+              _MiniBoton(
+                  label: 'EQUIL.',
+                  accent: _accent,
+                  onTap: () => _setEstiloTodos('equilibrado')),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: 'DEFENS.',
+                  accent: const Color(0xFF3A78E0),
+                  onTap: () => _setEstiloTodos('defensivo')),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: 'AGRES.',
+                  accent: const Color(0xFFE0703A),
+                  onTap: () => _setEstiloTodos('agresivo')),
+            ],
+          ),
+          const SizedBox(height: 10),
           const Text(
-            'Cada bot juega con SU ejército: sin asignarlo, el servidor le '
-            'reparte cartas de varios ejércitos mezcladas. "En juego" lo escribe '
-            'el backend y se refresca solo cada 20 s. Al desactivar un bot deja '
-            'de entrar a salas nuevas, pero termina las que ya juega.',
+            'DIFICULTAD: Medio (jugador competente) o Alto (más despliegues, '
+            'habilidades y evoluciones por turno, predice mejor y presiona más). '
+            'ESTILO: Equilibrado, Defensivo (aguanta y farmea) o Agresivo (empuja a '
+            'los cuarteles enemigos). Toca el lápiz para renombrar. Cada bot juega '
+            'con SU ejército: sin asignarlo, el servidor le reparte cartas mezcladas. '
+            '"En juego" lo escribe el backend y se refresca cada 20 s. Al desactivar '
+            'un bot deja de entrar a salas nuevas, pero termina las que ya juega.',
             style: TextStyle(
               color: Color(0xFF8A94A0),
               fontFamily: 'Cinzel',
@@ -548,14 +757,32 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
   }
 }
 
+/// Valores admitidos para el perfil de un bot (deben coincidir con lo que lee el
+/// backend en `PerfilBot.Parse`).
+const kDificultades = <String>['medio', 'alto'];
+const kEstilos = <String>['equilibrado', 'defensivo', 'agresivo'];
+
+/// Etiquetas visibles.
+String etiquetaDificultad(String d) => d == 'alto' ? 'Alto' : 'Medio';
+String etiquetaEstilo(String e) => switch (e) {
+      'defensivo' => 'Defensivo',
+      'agresivo' => 'Agresivo',
+      _ => 'Equilibrado',
+    };
+
 /// Resumen mutable de un bot para la UI.
 class _BotResumen {
   final String id;
-  final String alias;
+  String alias;
   final int orden;
   bool activo;
   int maxPartidas;
   int ejercitoId;
+
+  /// Perfil de juego: dificultad ('medio'|'alto') y estilo
+  /// ('equilibrado'|'defensivo'|'agresivo').
+  String dificultad;
+  String estilo;
 
   /// Partidas en las que está metido AHORA. Solo lectura: lo escribe el
   /// orquestador del backend en cada barrido.
@@ -568,6 +795,8 @@ class _BotResumen {
     required this.activo,
     required this.maxPartidas,
     required this.ejercitoId,
+    required this.dificultad,
+    required this.estilo,
     required this.partidasActivas,
   });
 
@@ -576,6 +805,10 @@ class _BotResumen {
     final mp = (data['maxPartidas'] as num?)?.toInt() ??
         (data['partidasSimultaneas'] as num?)?.toInt() ??
         1;
+    // Normaliza el perfil a los valores admitidos (retrocompatible: los bots
+    // antiguos sin estos campos caen a medio/equilibrado = comportamiento actual).
+    final dif = (data['dificultad'] as String?)?.trim().toLowerCase();
+    final est = (data['estilo'] as String?)?.trim().toLowerCase();
     return _BotResumen(
       id: d.id,
       alias: (data['alias'] as String?) ?? d.id,
@@ -583,6 +816,8 @@ class _BotResumen {
       activo: (data['activo'] as bool?) ?? false,
       maxPartidas: mp < 1 ? 1 : mp,
       ejercitoId: (data['ejercitoId'] as num?)?.toInt() ?? 0,
+      dificultad: kDificultades.contains(dif) ? dif! : 'medio',
+      estilo: kEstilos.contains(est) ? est! : 'equilibrado',
       partidasActivas: (data['partidasActivas'] as num?)?.toInt() ?? 0,
     );
   }
@@ -598,6 +833,9 @@ class _BotTile extends StatelessWidget {
   final ValueChanged<bool> onChanged;
   final ValueChanged<int> onPartidas;
   final VoidCallback onEjercito;
+  final ValueChanged<String> onDificultad;
+  final ValueChanged<String> onEstilo;
+  final VoidCallback onRenombrar;
 
   const _BotTile({
     required this.bot,
@@ -609,6 +847,9 @@ class _BotTile extends StatelessWidget {
     required this.onChanged,
     required this.onPartidas,
     required this.onEjercito,
+    required this.onDificultad,
+    required this.onEstilo,
+    required this.onRenombrar,
   });
 
   @override
@@ -660,6 +901,15 @@ class _BotTile extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                           fontSize: 13,
                         ),
+                      ),
+                    ),
+                    // RENOMBRAR: lápiz para editar el nombre visible del bot.
+                    GestureDetector(
+                      onTap: onRenombrar,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Icon(Icons.edit_outlined,
+                            size: 15, color: accent.withOpacity(0.85)),
                       ),
                     ),
                     // EN JUEGO: partidas en las que está metido ahora mismo.
@@ -731,7 +981,82 @@ class _BotTile extends StatelessWidget {
                     ),
                   ),
                 ),
+                const SizedBox(height: 8),
+                // DIFICULTAD: Medio / Alto.
+                Row(
+                  children: [
+                    const SizedBox(
+                      width: 62,
+                      child: Text(
+                        'Dificultad',
+                        style: TextStyle(
+                          color: Color(0xFF6A727C),
+                          fontFamily: 'Cinzel',
+                          fontSize: 9,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    _PerfilChip(
+                      label: 'Medio',
+                      seleccionado: bot.dificultad == 'medio',
+                      color: accent,
+                      onTap: () => onDificultad('medio'),
+                    ),
+                    const SizedBox(width: 6),
+                    _PerfilChip(
+                      label: 'Alto',
+                      seleccionado: bot.dificultad == 'alto',
+                      color: const Color(0xFFE0703A),
+                      onTap: () => onDificultad('alto'),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 6),
+                // ESTILO: Equilibrado / Defensivo / Agresivo.
+                Row(
+                  children: [
+                    const SizedBox(
+                      width: 62,
+                      child: Text(
+                        'Estilo',
+                        style: TextStyle(
+                          color: Color(0xFF6A727C),
+                          fontFamily: 'Cinzel',
+                          fontSize: 9,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          _PerfilChip(
+                            label: 'Equil.',
+                            seleccionado: bot.estilo == 'equilibrado',
+                            color: accent,
+                            onTap: () => onEstilo('equilibrado'),
+                          ),
+                          _PerfilChip(
+                            label: 'Defens.',
+                            seleccionado: bot.estilo == 'defensivo',
+                            color: const Color(0xFF3A78E0),
+                            onTap: () => onEstilo('defensivo'),
+                          ),
+                          _PerfilChip(
+                            label: 'Agres.',
+                            seleccionado: bot.estilo == 'agresivo',
+                            color: const Color(0xFFE0703A),
+                            onTap: () => onEstilo('agresivo'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 _StepperPartidas(
                   valor: bot.maxPartidas,
                   accent: accent,
@@ -832,6 +1157,54 @@ class _StepBtn extends StatelessWidget {
           border: Border.all(color: color.withOpacity(0.40)),
         ),
         child: Icon(icon, size: 16, color: color),
+      ),
+    );
+  }
+}
+
+/// Chip seleccionable para elegir dificultad / estilo de un bot. Resaltado
+/// cuando está activo; atenuado cuando no.
+class _PerfilChip extends StatelessWidget {
+  final String label;
+  final bool seleccionado;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _PerfilChip({
+    required this.label,
+    required this.seleccionado,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color:
+              seleccionado ? color.withOpacity(0.20) : const Color(0xFF0E1626),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: seleccionado
+                ? color.withOpacity(0.85)
+                : const Color(0xFF1A2436),
+            width: seleccionado ? 1.4 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: seleccionado ? color : const Color(0xFF8A94A0),
+            fontFamily: 'Cinzel',
+            fontSize: 10,
+            fontWeight: seleccionado ? FontWeight.bold : FontWeight.normal,
+            letterSpacing: 0.5,
+          ),
+        ),
       ),
     );
   }

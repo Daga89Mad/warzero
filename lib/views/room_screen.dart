@@ -34,6 +34,10 @@ class _RoomScreenState extends State<RoomScreen> {
   int? _selectedEjercitoId;
   bool _navigating = false;
 
+  /// Última instantánea de la sala recibida del stream. Se usa en [_gestionarSalida] para
+  /// saber si soy el host (y decidir si mantengo o borro la sala al salir).
+  LobbyModel? _lobby;
+
   @override
   void initState() {
     super.initState();
@@ -69,9 +73,87 @@ class _RoomScreenState extends State<RoomScreen> {
     _goToGame(lobby);
   }
 
-  Future<void> _salir() async {
-    await _service.salirDeLobby(lobbyId: widget.lobbyId, uid: widget.localUid);
-    if (mounted) Navigator.of(context).pop();
+  /// Salida EXPLÍCITA de la sala (botón de salir de la cabecera). El botón
+  /// ATRÁS solo minimiza la pantalla y te deja CONECTADO (ver onWillPop): así
+  /// nadie tiene que esperar dentro a que la sala se llene. Te avisará una
+  /// notificación cuando arranque, y puedes estar conectado a VARIAS salas a la
+  /// vez. Aquí se ofrece: seguir conectado, o abandonar (invitado) / cancelar
+  /// (host) la sala de verdad.
+  Future<void> _gestionarSalida() async {
+    final soyHost = _lobby?.hostUid == widget.localUid;
+
+    final accion = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1525),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: Color(0x40C8A860), width: 1),
+        ),
+        title: const Text('SALIR DE LA SALA',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 12,
+                color: Color(0xFFC8A860),
+                letterSpacing: 1.2)),
+        content: Text(
+          soyHost
+              ? 'Puedes SEGUIR CONECTADO: la sala queda abierta y te avisaremos '
+                  'con una notificación cuando arranque (puedes estar en varias '
+                  'salas a la vez). O CANCELAR la sala para eliminarla.'
+              : 'Puedes SEGUIR CONECTADO: te quedas apuntado y te avisaremos con '
+                  'una notificación cuando la sala arranque (puedes estar en '
+                  'varias salas a la vez). O ABANDONAR esta sala para liberar tu '
+                  'plaza.',
+          style: const TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 10,
+              color: Color(0xFF8A9AAA),
+              height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('quedar'),
+            child: const Text('SEGUIR CONECTADO',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                    color: Color(0xFF4ABB58),
+                    fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(soyHost ? 'cancelar' : 'abandonar'),
+            child: Text(soyHost ? 'CANCELAR SALA' : 'ABANDONAR',
+                style: const TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                    color: Color(0xFFC04040))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('SEGUIR AQUÍ',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                    color: Color(0xFF506070))),
+          ),
+        ],
+      ),
+    );
+
+    if (accion == 'quedar') {
+      // Salgo de la pantalla PERO sigo dentro de la sala (conectado).
+      if (mounted) Navigator.of(context).pop();
+    } else if (accion == 'cancelar') {
+      await _service.cancelarLobby(widget.lobbyId);
+      if (mounted) Navigator.of(context).pop();
+    } else if (accion == 'abandonar') {
+      await _service.salirDeLobby(
+          lobbyId: widget.lobbyId, uid: widget.localUid);
+      if (mounted) Navigator.of(context).pop();
+    }
+    // accion == null → seguir en la pantalla (no hacer nada).
   }
 
   @override
@@ -79,8 +161,12 @@ class _RoomScreenState extends State<RoomScreen> {
     final war = context.war;
     return WillPopScope(
       onWillPop: () async {
-        await _salir();
-        return false;
+        // Atrás = MINIMIZAR: sales de la pantalla pero SIGUES CONECTADO a la
+        // sala (no liberas tu plaza). Nadie tiene que esperar dentro a que se
+        // llene; una notificación avisará cuando arranque y puedes estar en
+        // varias salas a la vez. Para abandonar/cancelar de verdad, usa el
+        // botón de salir de la cabecera.
+        return true;
       },
       child: Scaffold(
         backgroundColor: war.fondo,
@@ -97,6 +183,7 @@ class _RoomScreenState extends State<RoomScreen> {
                   .addPostFrameCallback((_) => Navigator.of(context).pop());
               return const SizedBox();
             }
+            _lobby = lobby; // cache para _gestionarSalida (saber si soy host)
 
             if (lobby.estado == LobbyEstado.enCurso) {
               _goToGame(lobby);
@@ -114,7 +201,7 @@ class _RoomScreenState extends State<RoomScreen> {
                   _RoomHeader(
                     lobby: lobby,
                     isHost: isHost,
-                    onLeave: _salir,
+                    onLeave: _gestionarSalida,
                   ),
                   Divider(color: war.primario.withOpacity(0.12), height: 1),
                   Expanded(

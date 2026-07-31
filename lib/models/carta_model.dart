@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 ///   3 → Estática
 ///   4 → Acción
 ///   5 → Especial
+///   6 → Acción estática (trampa invisible)
 enum CondicionCarta {
   /// Carta normal, sin restricciones.
   basica,
@@ -35,6 +36,17 @@ enum CondicionCarta {
   /// Carta especial: NO se reparte (ni al inicio ni cada turno), igual que las
   /// evoluciones. Solo se obtiene comprándola en el cuartel a cambio de Energies.
   especial,
+
+  /// Acción estática (trampa invisible). Se juega desde la mano como una acción,
+  /// pero SOLO puede lanzarse sobre una celda donde el jugador YA tiene una
+  /// carta propia que lleva al menos 2 turnos sobre esa posición.
+  ///
+  /// Al lanzarla se coloca una trampa OCULTA en la celda: nadie la ve en el
+  /// tablero. Cuando una carta ENEMIGA cae en esa celda, la trampa se dispara
+  /// (aplica la habilidad `idHabilidad` sobre quien cae) y a partir de ese
+  /// momento queda REVELADA para todos, marcada con su icono y el número de
+  /// turnos que le quedan de permanencia.
+  accionEstatica,
 }
 
 extension CondicionCartaExt on CondicionCarta {
@@ -51,6 +63,8 @@ extension CondicionCartaExt on CondicionCarta {
         return 4;
       case CondicionCarta.especial:
         return 5;
+      case CondicionCarta.accionEstatica:
+        return 6;
     }
   }
 
@@ -67,6 +81,8 @@ extension CondicionCartaExt on CondicionCarta {
         return 'Acción';
       case CondicionCarta.especial:
         return 'Especial';
+      case CondicionCarta.accionEstatica:
+        return 'Acción estática';
     }
   }
 
@@ -83,6 +99,8 @@ extension CondicionCartaExt on CondicionCarta {
         return '⚡';
       case CondicionCarta.especial:
         return '⭐';
+      case CondicionCarta.accionEstatica:
+        return '💣';
     }
   }
 
@@ -99,6 +117,8 @@ extension CondicionCartaExt on CondicionCarta {
         return 0xFF40C0FF;
       case CondicionCarta.especial:
         return 0xFFE0C040;
+      case CondicionCarta.accionEstatica:
+        return 0xFFD84545;
     }
   }
 
@@ -113,6 +133,8 @@ extension CondicionCartaExt on CondicionCarta {
         return CondicionCarta.accion;
       case 5:
         return CondicionCarta.especial;
+      case 6:
+        return CondicionCarta.accionEstatica;
       default:
         return CondicionCarta.basica;
     }
@@ -211,12 +233,18 @@ class CartaModel {
   /// True si la carta es Especial: no se reparte; solo se compra en el cuartel.
   bool get esEspecial => condicion == CondicionCarta.especial;
 
+  /// True si la carta es una Acción estática (trampa invisible): se juega desde
+  /// la mano sobre una celda propia asentada ≥2 turnos y coloca una trampa
+  /// oculta que dispara `idHabilidad` cuando un enemigo cae encima.
+  bool get esAccionEstatica => condicion == CondicionCarta.accionEstatica;
+
   /// True si la carta tiene una habilidad asignada (id > 0 en el catálogo).
   bool get tieneHabilidad => idHabilidad > 0;
 
-  /// Movimiento efectivo: las estáticas y las cartas de acción siempre
-  /// tienen 0 (las acciones no se colocan).
-  int get movimientoEfectivo => (esEstatica || esAccion) ? 0 : movimiento;
+  /// Movimiento efectivo: las estáticas, las cartas de acción y las acciones
+  /// estáticas siempre tienen 0 (no se colocan como cartas móviles).
+  int get movimientoEfectivo =>
+      (esEstatica || esAccion || esAccionEstatica) ? 0 : movimiento;
 
   // ── Parseo robusto ────────────────────────────────────────
   static int _parseInt(dynamic v, {int fallback = 0}) {

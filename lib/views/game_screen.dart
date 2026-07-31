@@ -9,6 +9,8 @@ import '../models/board_state.dart';
 import '../models/jugador_model.dart';
 import '../services/turn_service.dart';
 import '../services/warzero_api.dart';
+import '../models/alianza_estado.dart';
+import 'alianza_screen.dart';
 import '../services/combate_service.dart';
 import 'informe_batalla_screen.dart';
 import 'revision_turno_screen.dart';
@@ -135,6 +137,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _isSendingTurn = false;
   bool _sondeoActivo = false;
   final WarZeroApi _api = WarZeroApi();
+
+  /// Estado `alianzas` de la partida (para la pantalla y los avisos).
+  Map<String, dynamic> _alianzas = {};
+
+  /// Claves de propuestas/avisos ya mostrados (para no repetir en cada sondeo).
+  final Set<String> _alianzaVistos = {};
 
   /// Jugadores eliminados (cuartel conquistado).
   List<String> _jugadoresEliminados = [];
@@ -711,6 +719,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _jugadoresEnPartida = lobby.jugadores.length;
           _cerradoPor = List<String>.from(lobby.cerradoPor);
         });
+        _revisarAlianzas(data);
 
         if (lobby.mapaId != null) {
           await _aplicarTerreno(lobby.mapaId!);
@@ -1118,6 +1127,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!mounted) return;
 
     _fechaResolucionMs = (data['fechaResolucion'] as num?)?.toInt();
+    _revisarAlianzas(data);
 
     debugPrint('[WZ][poll] turnoActual=${lobby.turnoActual} '
         'turnoConfirmado=$_turnoConfirmadoStream '
@@ -1680,6 +1690,144 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Abre las PUNTUACIONES de esta partida: victorias/derrotas (por combate) y
   /// PC de cada jugador, leídos de statsPartida del lobby.
+  // ── Alianzas (partidas de 4+ jugadores) ──────────────────────────────
+  void _revisarAlianzas(Map<String, dynamic> data) {
+    final raw = data['alianzas'];
+    _alianzas = raw is Map ? Map<String, dynamic>.from(raw) : {};
+    if (!mounted) return;
+    final est = EstadoAlianzas.fromMap(_alianzas);
+    final miUid = widget.localPlayerUid;
+
+    // Propuesta entrante para mí no vista aún → diálogo aceptar/rechazar.
+    final prop = est.propuestaEntrantePara(miUid);
+    if (prop != null && !_alianzaVistos.contains(prop.clave)) {
+      _alianzaVistos.add(prop.clave);
+      _mostrarPropuestaAlianza(prop);
+    }
+
+    // Avisos para mí no vistos → toast + limpiar en el servidor.
+    final mis = est
+        .avisosPara(miUid)
+        .where((a) => !_alianzaVistos.contains(a.clave))
+        .toList();
+    if (mis.isNotEmpty) {
+      for (final a in mis) {
+        _alianzaVistos.add(a.clave);
+        _toast(_mensajeAviso(a));
+      }
+      if (widget.lobbyId != null) {
+        _api.limpiarAvisosAlianza(lobbyId: widget.lobbyId!, uid: miUid);
+      }
+    }
+  }
+
+  String _aliasDeUidAlianza(String uid) {
+    for (final j in (_currentLobby?.jugadores ?? const [])) {
+      if (j.uid == uid) return j.alias;
+    }
+    return 'Un jugador';
+  }
+
+  String _mensajeAviso(AvisoAlianza a) {
+    switch (a.tipo) {
+      case 'traicionado':
+        return '${_aliasDeUidAlianza(a.deUid)} te ha traicionado. Ya sois enemigos.';
+      case 'alianza_terminada':
+        return 'Tu alianza con ${_aliasDeUidAlianza(a.deUid)} ha terminado.';
+      case 'aceptada':
+        return '${_aliasDeUidAlianza(a.deUid)} ha aceptado tu alianza.';
+      case 'rechazada':
+        return '${_aliasDeUidAlianza(a.deUid)} ha rechazado tu alianza.';
+      default:
+        return 'Novedad en tus alianzas.';
+    }
+  }
+
+  void _mostrarPropuestaAlianza(PropuestaAlianza p) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0C1828),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Color(0x66C8A860)),
+        ),
+        title: const Text('Propuesta de alianza',
+            style: TextStyle(
+                color: Color(0xFFE0D8C0), fontFamily: 'Cinzel', fontSize: 16)),
+        content: Text(
+          '${_aliasDeUidAlianza(p.deUid)} te propone una alianza durante '
+          '${p.turnos} turnos. ¿Aceptas?',
+          style: const TextStyle(color: Color(0xFFB0C0D0), fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _responderPropuesta(p, false);
+            },
+            child: const Text('RECHAZAR',
+                style: TextStyle(color: Color(0xFFE06060))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              _responderPropuesta(p, true);
+            },
+            child: const Text('ACEPTAR',
+                style: TextStyle(
+                    color: Color(0xFF9AD06A), fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _responderPropuesta(PropuestaAlianza p, bool aceptar) async {
+    if (widget.lobbyId == null) return;
+    try {
+      final r = await _api.responderAlianza(
+        lobbyId: widget.lobbyId!,
+        uid: widget.localPlayerUid,
+        proponenteUid: p.deUid,
+        aceptar: aceptar,
+      );
+      if (r.estado != null && r.estado!['alianzas'] is Map) {
+        _alianzas = Map<String, dynamic>.from(r.estado!['alianzas'] as Map);
+      }
+      _toast(r.mensaje.isEmpty
+          ? (aceptar ? 'Alianza aceptada.' : 'Propuesta rechazada.')
+          : r.mensaje);
+    } catch (e) {
+      _toast('No se pudo responder la alianza', error: true);
+    }
+  }
+
+  void _abrirAlianza() {
+    if (widget.lobbyId == null) return;
+    final jugadores = <Map<String, dynamic>>[];
+    for (final j in (_currentLobby?.jugadores ?? const [])) {
+      if (j.uid == widget.localPlayerUid) continue;
+      if (_jugadoresEliminados.contains(j.uid)) continue;
+      jugadores.add({
+        'uid': j.uid,
+        'alias': j.alias,
+        'color': _colorDeUid(j.uid),
+      });
+    }
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => AlianzaScreen(
+        api: _api,
+        lobbyId: widget.lobbyId!,
+        miUid: widget.localPlayerUid,
+        jugadores: jugadores,
+        alianzasIniciales: _alianzas,
+      ),
+    ));
+  }
+
   void _abrirPuntuaciones() {
     final lobby = _currentLobby;
     final localUid = _localPlayer.datos.uid;
@@ -2973,6 +3121,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _aplicarEstado(Map<String, dynamic> estado) {
     if (!mounted) return false;
     _fechaResolucionMs = (estado['fechaResolucion'] as num?)?.toInt();
+    _revisarAlianzas(estado);
     final turnoActual = (estado['turnoActual'] as num?)?.toInt() ?? 0;
     final cerradoPor = ((estado['cerradoPor'] as List?) ?? [])
         .map((e) => e.toString())
@@ -3389,6 +3538,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   onInforme: _abrirInformeBatalla,
                   puedePuntuaciones: true,
                   onPuntuaciones: _abrirPuntuaciones,
+                  puedeAlianza: _jugadoresEnPartida >= 4 && !_estoyEliminado,
+                  onAlianza: _abrirAlianza,
                   puedeDeshacer: _hayCambiosPendientes &&
                       !_yoCerreElTurno &&
                       !_estoyEliminado,

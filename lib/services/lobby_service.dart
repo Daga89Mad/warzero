@@ -134,7 +134,14 @@ class LobbyService {
     await _db.collection('Partidas').doc(lobbyId).update(updates);
   }
 
-  // ── Seleccionar ejército y marcar listo ───────────────────
+  // ── Cancelar (eliminar) una sala ──────────────────────────
+  /// Borra la sala por completo. Pensado para que SOLO el host cancele
+  /// explícitamente una sala que ya no quiere. A diferencia de [salirDeLobby],
+  /// no depende de que la sala quede vacía: elimina el documento directamente.
+  Future<void> cancelarLobby(String lobbyId) async {
+    await _db.collection('Partidas').doc(lobbyId).delete();
+  }
+
   Future<void> seleccionarEjercito({
     required String lobbyId,
     required String uid,
