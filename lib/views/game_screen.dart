@@ -25,6 +25,7 @@ import '../models/efecto_estado.dart';
 import '../models/habilidad_model.dart';
 import '../services/accion_controller.dart';
 import '../services/habilidad_service.dart';
+import '../services/pending_revert_store.dart';
 import 'cuartel_screen.dart';
 import 'puntuaciones_screen.dart';
 
@@ -292,6 +293,95 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Energía total gastada en despliegues este turno (para restaurar en Firestore).
   int _energiaGastadaDespliegue = 0;
 
+  /// Marca que, al pausar la app, quedó una reversión de turno pendiente de
+  /// reembolsar en el servidor. Al reanudar se consume para reintentar el
+  /// reembolso (ver _reembolsarPendienteAlReanudar).
+  bool _reembolsoPendienteTrasPausa = false;
+
+  /// Persiste en disco la deuda de energía/especiales NO consolidada del turno
+  /// en curso. Se llama tras CADA gasto y tras cada reversión local, con la app
+  /// activa (fiable frente a suspensiones y cierres forzados). Así, si el móvil
+  /// se bloquea sin cerrar turno, el reembolso puede reintentarse al reentrar.
+  void _persistirDeudaPendiente() {
+    final id = widget.lobbyId;
+    if (id == null) return;
+    PendingRevertStore.guardar(
+      id,
+      DeudaRevert(
+        turno: _boardState.turnoActual,
+        energia: _energiaGastadaDespliegue,
+        especiales: _especialesCompradasEsteTurno.toList(),
+      ),
+    );
+  }
+
+  /// Borra la deuda persistida (tras consolidar el gasto: cerrar turno, deshacer
+  /// manual o salir con reembolso inmediato ya aplicado).
+  void _limpiarDeudaPendiente() {
+    final id = widget.lobbyId;
+    if (id == null) return;
+    PendingRevertStore.limpiar(id);
+  }
+
+  /// Reembolsa en el SERVIDOR la energía NO consolidada que quedó pendiente de un
+  /// turno en curso al salir/bloquear el móvil sin cerrar turno, leyéndola del
+  /// almacén persistente. Idempotente y con guardas para NO reembolsar de más:
+  /// solo actúa si la deuda pertenece al turno abierto ACTUAL y el jugador aún no
+  /// lo ha cerrado. Devuelve la energía reembolsada (0 si no procede). Desmarca
+  /// localmente las especiales revertidas.
+  Future<int> _reconciliarReembolsoPendiente({
+    required int turnoServidor,
+    required bool cerradoPorMi,
+  }) async {
+    final id = widget.lobbyId;
+    if (id == null) return 0;
+
+    final deuda = await PendingRevertStore.leer(id);
+    if (deuda == null || deuda.vacia) {
+      await PendingRevertStore.limpiar(id);
+      return 0;
+    }
+
+    // Guardas anti doble-reembolso: si el turno ya avanzó (deuda de un turno
+    // anterior) o si YO cerré este turno (el gasto se consolidó al cerrar), la
+    // deuda no debe reembolsarse: se descarta.
+    if (deuda.turno != turnoServidor || cerradoPorMi) {
+      await PendingRevertStore.limpiar(id);
+      return 0;
+    }
+
+    // Reembolsar en el servidor la energía revertible y desmarcar especiales.
+    await _api.deshacerTurno(
+      lobbyId: id,
+      uid: widget.localPlayerUid,
+      turno: deuda.turno,
+      energiesDelta: deuda.energia,
+      especialesQuitar: deuda.especiales,
+    );
+    await PendingRevertStore.limpiar(id);
+
+    // Reflejar localmente el desmarcado de especiales (el estado cargado del
+    // servidor aún las traía marcadas).
+    if (deuda.especiales.isNotEmpty && mounted) {
+      setState(() => _especialesCompradas.removeAll(deuda.especiales));
+    }
+    debugPrint('[WZ][deuda] reembolso reconciliado turno=${deuda.turno} '
+        'energia=${deuda.energia} especiales=${deuda.especiales.length}');
+    return deuda.energia;
+  }
+
+  /// Al reanudar la app tras haber revertido el turno en la pausa: reintenta el
+  /// reembolso ahora que hay red. No ajusta la energía local porque al pausar ya
+  /// se restauró al snapshot de inicio de turno (_puntosInicial), que coincide
+  /// con la energía del servidor una vez aplicado el reembolso.
+  Future<void> _reembolsarPendienteAlReanudar() async {
+    if (widget.lobbyId == null || _estoyEliminado || _juegoTerminado) return;
+    await _reconciliarReembolsoPendiente(
+      turnoServidor: _boardState.turnoActual,
+      cerradoPorMi: _yoCerreElTurno,
+    );
+  }
+
   bool _loading = true;
   String? _error;
 
@@ -465,6 +555,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
 
     _toast('${original.carta.nombre} → ${evolucion.nombre}  (-${coste}Ø)');
+    _persistirDeudaPendiente();
   }
 
   // ── Helper para reconstruir un CartaModel desde un mapa ───
@@ -603,6 +694,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       energiesDelta: energia,
       especialesQuitar: especiales,
     );
+    // El reembolso ya se lanzó aquí (app activa): borrar la deuda persistida para
+    // que _loadGame no la reembolse otra vez al reentrar.
+    _limpiarDeudaPendiente();
   }
 
   // ── Cargar terreno del mapa vía API (sin Firestore) ──────
@@ -774,6 +868,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             (data['ultimoAccionesLog'] as List<dynamic>? ?? [])
                 .map((e) => Map<String, dynamic>.from(e as Map))
                 .toList();
+        // Reembolsar energía pendiente de un turno anterior que quedó sin cerrar
+        // al bloquear el móvil / matar la app (ver PendingRevertStore). Va ANTES
+        // de fijar _puntosInicial para que el snapshot de inicio de turno ya
+        // incluya el reembolso.
+        final int turnoServidorCarga =
+            (data['turnoActual'] as num?)?.toInt() ?? 0;
+        final bool cerradoPorMiCarga =
+            _cerradoPor.contains(widget.localPlayerUid);
+        final int reembolso = await _reconciliarReembolsoPendiente(
+          turnoServidor: turnoServidorCarga,
+          cerradoPorMi: cerradoPorMiCarga,
+        );
+        if (!mounted) return;
+        if (reembolso > 0) puntosRestaurados += reembolso;
+
         _puntosInicial = puntosRestaurados;
         final loadedHistorial =
             (data['historialCombates'] as List<dynamic>? ?? [])
@@ -1365,6 +1474,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     } else if (state == AppLifecycleState.resumed) {
       // Al volver, permitir una nueva reversión si el jugador vuelve a gastar.
       _revirtiendoPorSalida = false;
+      // Si al pausar quedó una reversión pendiente de reembolsar (el reembolso
+      // fire-and-forget no llegó porque el SO suspendió el proceso), reintentarlo
+      // ahora que hay red.
+      if (_reembolsoPendienteTrasPausa) {
+        _reembolsoPendienteTrasPausa = false;
+        _reembolsarPendienteAlReanudar();
+      }
     }
   }
 
@@ -1392,16 +1508,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (energiaADevolver <= 0 && especialesADesmarcar.isEmpty) return;
 
     _revirtiendoPorSalida = true;
-    final turno = _boardStateInicial.turnoActual;
 
-    // Fire-and-forget: devolver energía revertible y desmarcar especiales.
-    _api.deshacerTurno(
-      lobbyId: widget.lobbyId!,
-      uid: widget.localPlayerUid,
-      turno: turno,
-      energiesDelta: energiaADevolver,
-      especialesQuitar: especialesADesmarcar,
-    );
+    // NO se lanza aquí `deshacerTurno`: al bloquear el móvil el SO suspende el
+    // proceso antes de que la petición HTTP termine y el reembolso se perdía (el
+    // jugador reentraba sin la energía). La deuda ya está persistida en disco
+    // (se escribió en el momento del gasto), así que el reembolso se REINTENTA
+    // de forma fiable al reanudar la app (didChangeAppLifecycleState.resumed) o
+    // al reentrar a la partida (_loadGame), cuando hay red disponible.
+    _reembolsoPendienteTrasPausa = true;
 
     // Resetear estado local al snapshot de inicio de turno (coherente con el
     // tablero que se recargará del servidor al reentrar).
@@ -1643,6 +1757,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (coste > 0) {
       _toast('${carta.nombre} desplegada  (-$coste Ø)');
     }
+    _persistirDeudaPendiente();
   }
 
   // ── CUARTEL: compra de cartas especiales ──────────────────
@@ -1969,6 +2084,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       }
     }
 
+    _persistirDeudaPendiente();
     return CompraResult(
       ok: true,
       mensaje: '${carta.nombre} comprada y desplegada en tu cuartel.',
@@ -2542,6 +2658,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         especialesQuitar: especialesADesmarcar,
       );
     }
+    // Deshacer manual: el gasto queda revertido, así que borramos la deuda
+    // persistida (evita un doble reembolso al reentrar).
+    _limpiarDeudaPendiente();
 
     _toast('Cambios revertidos al estado inicial del turno.');
   }
@@ -2958,6 +3077,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         }
       }
       if (!mounted) return;
+      // Turno cerrado: el gasto queda consolidado, no hay nada que reembolsar.
+      _limpiarDeudaPendiente();
       // BUG QAS #2: NO se vuelve a persistir la mano aquí. El servidor ya
       // repartió la carta de fin de turno sobre la mano que subimos ANTES de
       // cerrar; reescribirla ahora la machacaría. La mano se resincroniza desde
@@ -3184,6 +3305,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _revisionFantasmas = const [];
           _revisionAcciones = const {};
         });
+        // Turno nuevo: sin deuda pendiente que reembolsar.
+        _limpiarDeudaPendiente();
 
         // BUG QAS #2: mano/mazo llegan del servidor con la carta ya repartida.
         _sincronizarManoDesdeEstado(estado);

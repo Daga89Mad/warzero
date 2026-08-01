@@ -1305,9 +1305,12 @@ class _MisPartidasListState extends State<_MisPartidasList> {
 
   Future<List<LobbyModel>> _cargar() async {
     final docs = await _api.obtenerMisPartidas(widget.uid);
+    // NO se filtran aquí las finalizadas: el servidor (MisPartidasAsync) ya
+    // decide qué partidas finalizadas mostrar (solo al GANADOR y solo hasta que
+    // entra a ver el mensaje de victoria). Si filtrásemos aquí por estado, el
+    // ganador nunca vería la partida para entrar y ver su victoria.
     final list = docs
         .map((d) => LobbyModel.fromMap(d['id'] as String? ?? '', d))
-        .where((l) => l.estado != LobbyEstado.finalizada)
         .toList();
     list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
     return list;
@@ -1355,6 +1358,8 @@ class _MisPartidasListState extends State<_MisPartidasList> {
             //              puedes entrar a mover.
             // EN ESPERA  → ya cerraste; faltan otros jugadores por cerrar.
             final bool enCurso = lobby.estado == LobbyEstado.enCurso;
+            final bool finalizada = lobby.estado == LobbyEstado.finalizada;
+            final bool soyGanador = lobby.ganadorUid == widget.uid;
             final bool eliminado =
                 lobby.jugadoresEliminados.contains(widget.uid);
             final bool yaCerre = lobby.cerradoPor.contains(widget.uid);
@@ -1363,7 +1368,14 @@ class _MisPartidasListState extends State<_MisPartidasList> {
             late final Color accentColor;
             late final IconData iconData;
 
-            if (!enCurso) {
+            if (finalizada) {
+              // Partida terminada. Solo llega aquí el ganador (el servidor no la
+              // muestra a los demás), y tras entrar a verla desaparece.
+              estado = soyGanador ? 'VICTORIA' : 'FINALIZADA';
+              accentColor =
+                  soyGanador ? const Color(0xFFFFCC00) : war.textoTenue;
+              iconData = soyGanador ? Icons.emoji_events : Icons.flag_outlined;
+            } else if (!enCurso) {
               // Sala todavía reuniendo jugadores.
               estado = 'EN SALA';
               accentColor = war.primario;
@@ -1391,7 +1403,9 @@ class _MisPartidasListState extends State<_MisPartidasList> {
 
             return GestureDetector(
               onTap: () {
-                if (enCurso) {
+                if (enCurso || finalizada) {
+                  // Finalizada → entrar directamente al juego para ver el
+                  // mensaje de victoria/fin (no a la sala de espera).
                   widget.onDirectGame(lobby.id);
                 } else {
                   widget.onJoin(lobby.id);
