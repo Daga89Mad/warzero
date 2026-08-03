@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
+import '../models/efecto_estado.dart';
 import '../models/game_config.dart';
 import 'cell_widget.dart' show ownerColor, ZeroChip;
 import 'card_detail_overlay.dart';
@@ -41,6 +42,12 @@ class CellSidebar extends StatefulWidget {
   /// uid → color para colorear cartas por jugador
   final Map<String, Color> playerColors;
 
+  /// Efectos de ACCIÓN activos sobre ESTA celda (veneno de celda, escudo,
+  /// parálisis, potenciaciones…), tal y como los persiste el servidor en
+  /// `efectosCelda[coord]`. Se combinan con los efectos que arrastran las
+  /// cartas para pintar el indicador de acciones activas de la cabecera.
+  final List<EfectoActivo> efectosCelda;
+
   // ── Sistema de evoluciones ───────────────────────────────
   final int? energiasDisponibles;
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
@@ -74,6 +81,7 @@ class CellSidebar extends StatefulWidget {
     this.movedInstanceIds = const {},
     this.onUndoSelected,
     this.playerColors = const {},
+    this.efectosCelda = const [], // NUEVO
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
@@ -239,6 +247,7 @@ class _CellSidebarState extends State<CellSidebar> {
               movedInstanceIds: widget.movedInstanceIds,
               isEnabled: _puedeToggle,
               playerColors: widget.playerColors,
+              efectosCelda: widget.efectosCelda, // NUEVO
               energiasDisponibles: widget.energiasDisponibles,
               resolveEvolucion: widget.resolveEvolucion,
               onEvolucionar: widget.onEvolucionar,
@@ -605,6 +614,9 @@ class _Body extends StatelessWidget {
 
   final Map<String, Color> playerColors;
 
+  /// Efectos de acción activos sobre la celda (fuente: `efectosCelda[coord]`).
+  final List<EfectoActivo> efectosCelda;
+
   // Evolución
   final int? energiasDisponibles;
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
@@ -628,6 +640,7 @@ class _Body extends StatelessWidget {
     required this.movedInstanceIds,
     required this.isEnabled,
     this.playerColors = const {},
+    this.efectosCelda = const [],
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
@@ -718,46 +731,73 @@ class _Body extends StatelessWidget {
       );
     }
 
+    // ── Indicador de ACCIONES ACTIVAS sobre la celda ─────────
+    // Combina los efectos de celda (efectosCelda) con los que arrastran las
+    // cartas presentes. Cada chip muestra icono + turnos restantes; al pulsar,
+    // si el efecto afecta a una carta concreta, abre su detalle.
+    final efectosActivos = _EfectoCeldaEntry.recolectar(efectosCelda, cards);
+    final Widget actionsBar = efectosActivos.isEmpty
+        ? const SizedBox.shrink()
+        : _CellActionsBar(entries: efectosActivos);
+
     // ── Celda vacía (no obelisco) ────────────────────────────
     if (cards.isEmpty) {
-      return const Center(
-        child: Text('CELDA VACÍA',
-            style: TextStyle(
-                fontSize: 10,
-                color: Color(0xFF354050),
-                letterSpacing: 1,
-                fontFamily: 'Cinzel')),
+      // Aun sin unidades puede haber efectos de celda (p. ej. veneno lejano
+      // colocado sobre una casilla vacía): mostramos el indicador arriba.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          actionsBar,
+          const Expanded(
+            child: Center(
+              child: Text('CELDA VACÍA',
+                  style: TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF354050),
+                      letterSpacing: 1,
+                      fontFamily: 'Cinzel')),
+            ),
+          ),
+        ],
       );
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-      itemCount: cards.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (_, i) {
-        final isLocal = cards[i].ownerUid == localUid;
-        final moved = movedInstanceIds.contains(cards[i].instanceId);
-        final enabled = isLocal && isEnabled(i);
-        return _CardTile(
-          entry: cards[i],
-          indice: i,
-          coord: coord,
-          isLocal: isLocal,
-          isChecked: selected.contains(i),
-          moved: moved,
-          enabled: enabled,
-          // El check solo responde si la carta es propia y está habilitada por
-          // la exclusión mutua (movidas vs. sin mover). El detalle (pulsación
-          // larga) sigue disponible aunque el check esté deshabilitado.
-          onToggle: enabled ? () => onToggle(i) : null,
-          playerColors: playerColors,
-          energiasDisponibles: energiasDisponibles,
-          resolveEvolucion: resolveEvolucion,
-          onEvolucionar: onEvolucionar,
-          turnoActual: turnoActual,
-          onLanzarHabilidad: onLanzarHabilidad,
-        );
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        actionsBar,
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+            itemCount: cards.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (_, i) {
+              final isLocal = cards[i].ownerUid == localUid;
+              final moved = movedInstanceIds.contains(cards[i].instanceId);
+              final enabled = isLocal && isEnabled(i);
+              return _CardTile(
+                entry: cards[i],
+                indice: i,
+                coord: coord,
+                isLocal: isLocal,
+                isChecked: selected.contains(i),
+                moved: moved,
+                enabled: enabled,
+                // El check solo responde si la carta es propia y está habilitada
+                // por la exclusión mutua (movidas vs. sin mover). El detalle
+                // (pulsación larga) sigue disponible aunque el check lo esté.
+                onToggle: enabled ? () => onToggle(i) : null,
+                playerColors: playerColors,
+                energiasDisponibles: energiasDisponibles,
+                resolveEvolucion: resolveEvolucion,
+                onEvolucionar: onEvolucionar,
+                turnoActual: turnoActual,
+                onLanzarHabilidad: onLanzarHabilidad,
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1263,6 +1303,247 @@ class _EvolChip extends StatelessWidget {
                   fontFamily: 'Cinzel')),
           const SizedBox(width: 2),
           const ZeroChip(size: 9),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// INDICADOR DE ACCIONES ACTIVAS SOBRE LA CELDA
+// ─────────────────────────────────────────────────────────────
+
+/// Acumulador mutable interno para fusionar efectos por (tipo, origen).
+class _MutEfecto {
+  EfectoTipoEstado tipo;
+  int turnos;
+  int magnitud;
+  String origen;
+  CartaEnCelda? carta;
+  _MutEfecto(this.tipo, this.turnos, this.magnitud, this.origen, this.carta);
+}
+
+/// Una acción activa sobre la celda, lista para mostrarse: tipo de efecto,
+/// turnos restantes (máximo), magnitud, origen y —si procede— la carta concreta
+/// a la que está afectando (para abrir su detalle al pulsar).
+class _EfectoCeldaEntry {
+  final EfectoTipoEstado tipo;
+  final int turnos;
+  final int magnitud;
+  final String origenUid;
+  final CartaEnCelda? cartaAfectada;
+
+  const _EfectoCeldaEntry({
+    required this.tipo,
+    required this.turnos,
+    required this.magnitud,
+    required this.origenUid,
+    required this.cartaAfectada,
+  });
+
+  /// Combina los efectos de CELDA (`efectosCelda`) con los que arrastran las
+  /// cartas presentes, deduplicando por (tipo, origen) y quedándose con el
+  /// máximo de turnos restantes. Asocia a cada efecto la primera carta que lo
+  /// arrastra (si la hay), para poder abrir su detalle al pulsar. Así funciona
+  /// tanto para un veneno recién colocado sobre la celda como para un efecto que
+  /// una carta arrastra tras moverse a otra casilla.
+  static List<_EfectoCeldaEntry> recolectar(
+      List<EfectoActivo> efectosCelda, List<CartaEnCelda> cards) {
+    final acc = <String, _MutEfecto>{};
+
+    void upsert(EfectoActivo e, CartaEnCelda? carta) {
+      if (e.turnosRestantes <= 0) return;
+      final key = '${e.tipo.name}|${e.origenUid}';
+      final prev = acc[key];
+      if (prev == null) {
+        acc[key] = _MutEfecto(
+            e.tipo, e.turnosRestantes, e.magnitud, e.origenUid, carta);
+      } else {
+        if (e.turnosRestantes > prev.turnos) prev.turnos = e.turnosRestantes;
+        if (e.magnitud > prev.magnitud) prev.magnitud = e.magnitud;
+        prev.carta ??= carta;
+      }
+    }
+
+    for (final e in efectosCelda) {
+      upsert(e, null);
+    }
+    for (final c in cards) {
+      for (final e in c.efectos) {
+        upsert(e, c);
+      }
+    }
+
+    int rank(EfectoTipoEstado t) {
+      switch (t) {
+        case EfectoTipoEstado.veneno:
+          return 0;
+        case EfectoTipoEstado.paralisis:
+          return 1;
+        case EfectoTipoEstado.escudo:
+          return 2;
+        case EfectoTipoEstado.potFuerza:
+          return 3;
+        case EfectoTipoEstado.potDefensa:
+          return 4;
+        case EfectoTipoEstado.potMovimiento:
+          return 5;
+      }
+    }
+
+    final list = acc.values
+        .map((m) => _EfectoCeldaEntry(
+              tipo: m.tipo,
+              turnos: m.turnos,
+              magnitud: m.magnitud,
+              origenUid: m.origen,
+              cartaAfectada: m.carta,
+            ))
+        .toList()
+      ..sort((a, b) => rank(a.tipo).compareTo(rank(b.tipo)));
+    return list;
+  }
+}
+
+/// Cabecera con las acciones activas sobre la celda. Cada chip muestra el icono
+/// del efecto, su magnitud (si aplica) y los turnos que le quedan; si el efecto
+/// está afectando a una carta concreta, al pulsarlo se abre el detalle de esa
+/// carta con sus estadísticas ya modificadas por el efecto.
+class _CellActionsBar extends StatelessWidget {
+  final List<_EfectoCeldaEntry> entries;
+  const _CellActionsBar({required this.entries});
+
+  Color _colorDe(EfectoTipoEstado t) {
+    switch (t) {
+      case EfectoTipoEstado.veneno:
+        return const Color(0xFF2BA046);
+      case EfectoTipoEstado.paralisis:
+        return const Color(0xFF2C90C8);
+      case EfectoTipoEstado.escudo:
+        return const Color(0xFF6AB0FF);
+      case EfectoTipoEstado.potFuerza:
+        return const Color(0xFFFFB84D);
+      case EfectoTipoEstado.potDefensa:
+        return const Color(0xFF9AD0FF);
+      case EfectoTipoEstado.potMovimiento:
+        return const Color(0xFF9AD0FF);
+    }
+  }
+
+  /// Texto de magnitud con signo (veneno resta defensa, potenciaciones suman).
+  String _signo(EfectoTipoEstado t, int mag) {
+    if (mag <= 0) return '';
+    switch (t) {
+      case EfectoTipoEstado.veneno:
+        return '-$mag';
+      case EfectoTipoEstado.potFuerza:
+      case EfectoTipoEstado.potDefensa:
+      case EfectoTipoEstado.potMovimiento:
+        return '+$mag';
+      default:
+        return '';
+    }
+  }
+
+  void _abrirCarta(BuildContext ctx, CartaEnCelda entry) {
+    showCardDetail(
+      ctx,
+      entry.carta,
+      defensaReducida: entry.defensaReducidaPorEfectos,
+      defensaExtra: entry.defensaExtraPorEfectos,
+      fuerzaExtra: entry.fuerzaExtraPorEfectos,
+      movimientoExtra: entry.movimientoExtraPorEfectos,
+      paralizada: entry.paralizado,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+      decoration: const BoxDecoration(
+        color: Color(0x14000000),
+        border: Border(bottom: BorderSide(color: Color(0x20503214), width: 1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('ACCIONES ACTIVAS',
+              style: TextStyle(
+                  fontSize: 7,
+                  color: Color(0xFF7A6040),
+                  letterSpacing: 1.5,
+                  fontFamily: 'Cinzel')),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: entries.map((e) {
+              final color = _colorDe(e.tipo);
+              final carta = e.cartaAfectada;
+              final tappable = carta != null;
+              final signo = _signo(e.tipo, e.magnitud);
+              return Builder(builder: (ctx) {
+                return GestureDetector(
+                  onTap: tappable ? () => _abrirCarta(ctx, carta) : null,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: color.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(
+                          color: color.withOpacity(tappable ? 0.55 : 0.28),
+                          width: 0.8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(e.tipo.icon, style: const TextStyle(fontSize: 11)),
+                        const SizedBox(width: 3),
+                        Text(e.tipo.nombre.toUpperCase(),
+                            style: TextStyle(
+                                fontSize: 7,
+                                color: color,
+                                letterSpacing: 0.5,
+                                fontFamily: 'Cinzel')),
+                        if (signo.isNotEmpty) ...[
+                          const SizedBox(width: 3),
+                          Text(signo,
+                              style: TextStyle(
+                                  fontSize: 8,
+                                  color: color,
+                                  fontFamily: 'Cinzel',
+                                  fontWeight: FontWeight.bold)),
+                        ],
+                        const SizedBox(width: 5),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.18),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text('${e.turnos}t',
+                              style: TextStyle(
+                                  fontSize: 8,
+                                  color: color,
+                                  fontFamily: 'Cinzel',
+                                  fontWeight: FontWeight.bold)),
+                        ),
+                        if (tappable) ...[
+                          const SizedBox(width: 3),
+                          Icon(Icons.open_in_new,
+                              size: 9, color: color.withOpacity(0.8)),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              });
+            }).toList(),
+          ),
         ],
       ),
     );

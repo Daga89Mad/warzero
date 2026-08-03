@@ -7,6 +7,7 @@ import '../models/carta_model.dart';
 import '../models/lobby_model.dart';
 import '../services/warzero_api.dart';
 import '../services/settings_controller.dart';
+import '../widgets/card_detail_overlay.dart';
 
 // ─────────────────────────────────────────────────────────────
 // MAZO SCREEN  (gestión de mazos por ejército)
@@ -971,6 +972,9 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
                   carta: carta,
                   qty: qty,
                   onTap: () => _toggle(carta.id),
+                  // Pulsación larga: abrir la carta en grande (misma vista de
+                  // detalle que en la colección / tablero).
+                  onLongPress: () => showCardDetail(context, carta),
                 );
               },
             ),
@@ -983,10 +987,14 @@ class _CardPickerTile extends StatelessWidget {
   final int qty; // 0 o 1
   final VoidCallback onTap;
 
+  /// Pulsación larga: abre la carta en grande (vista de detalle). Opcional.
+  final VoidCallback? onLongPress;
+
   const _CardPickerTile({
     required this.carta,
     required this.qty,
     required this.onTap,
+    this.onLongPress,
   });
 
   @override
@@ -997,6 +1005,7 @@ class _CardPickerTile extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(

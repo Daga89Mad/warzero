@@ -957,21 +957,29 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           var restoredBoard = const BoardState();
           tableroRaw.forEach((coord, cartas) {
             for (final c in cartas) {
+              // IMPORTANTE: `CartaEnCelda.fromMap` preserva el campo `Efectos`
+              // de la carta (veneno arrastrado, potenciaciones, etc.). El
+              // constructor pelado los descartaba, por eso al reentrar
+              // desaparecían los buffs/venenos aunque el servidor sí los
+              // persiste. Debe hacerse EXACTAMENTE igual que en _aplicarEstado.
               restoredBoard = restoredBoard.placeCarta(
                 coord,
-                CartaEnCelda(
-                  carta: _cartaFromMap(c),
-                  ownerUid: c['ownerUid'] as String? ?? '',
-                  ownerZone: c['ownerZone'] as String? ?? '',
-                ),
+                CartaEnCelda.fromMap(c),
               );
             }
           });
           serverStartBoard = restoredBoard;
         }
-        // Rayos / cuarteles / turno se aplican SIEMPRE (haya `tablero` o no).
+        // Efectos de CELDA (veneno de celda, escudo, parálisis…). También se
+        // descartaban en esta ruta: sin ellos el tablero no marca las celdas
+        // afectadas ni el sidebar muestra su estado.
+        final efectosCeldaEntrar = TurnService.parseEfectosCelda(data);
+        // Rayos / cuarteles / turno / efectosCelda se aplican SIEMPRE.
         serverStartBoard = serverStartBoard
-            .copyWith(turnoActual: lobby!.turnoActual)
+            .copyWith(
+              turnoActual: lobby!.turnoActual,
+              efectosCelda: efectosCeldaEntrar,
+            )
             .withRayos(_rayoCoordsFromData(data))
             .withCuarteles(_cuartelesDestruidosFromData(data));
         final displayBoard =
@@ -1309,17 +1317,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (lobby.turnoActual > _turnoConfirmadoStream &&
           data.containsKey('tablero')) {
         final tableroRaw = TurnService.parseTablero(data);
+        // Efectos de CELDA persistidos por el servidor (veneno de celda, escudo,
+        // parálisis…). Esta ruta la usan los jugadores que NO resolvieron el
+        // turno (la actualización llega por el stream de Firestore). Antes se
+        // descartaban aquí, de modo que el que resolvía veía los efectos
+        // (_aplicarEstado) y el resto no. Ahora se preservan igual.
+        final efectosCeldaStream = TurnService.parseEfectosCelda(data);
         var restoredState = const BoardState();
         tableroRaw.forEach((coord, cartas) {
           for (final c in cartas) {
             try {
+              // `CartaEnCelda.fromMap` conserva el campo `Efectos` de la carta
+              // (potenciaciones y veneno arrastrado). El constructor pelado los
+              // perdía, por eso los buffs/venenos no se veían tras resolver.
               restoredState = restoredState.placeCarta(
                 coord,
-                CartaEnCelda(
-                  carta: _cartaFromMap(c),
-                  ownerUid: c['ownerUid'] as String? ?? '',
-                  ownerZone: c['ownerZone'] as String? ?? '',
-                ),
+                CartaEnCelda.fromMap(c),
               );
             } catch (e) {
               debugPrint('[WZ][stream][ERROR] carta mal formada en $coord: '
@@ -1331,7 +1344,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
         setState(() {
           _boardState = restoredState
-              .copyWith(turnoActual: lobby.turnoActual)
+              .copyWith(
+                turnoActual: lobby.turnoActual,
+                efectosCelda: efectosCeldaStream,
+              )
               .withRayos(_rayoCoordsFromData(data))
               .withCuarteles(_cuartelesDestruidosFromData(data));
           _cerradoPor = [];
@@ -1339,7 +1355,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _isSendingTurn = false;
           _cargaCompletada = true;
           _boardStateInicial = restoredState
-              .copyWith(turnoActual: lobby.turnoActual)
+              .copyWith(
+                turnoActual: lobby.turnoActual,
+                efectosCelda: efectosCeldaStream,
+              )
               .withRayos(_rayoCoordsFromData(data))
               .withCuarteles(_cuartelesDestruidosFromData(data));
           _cartasMovidasEsteTurno.clear();
@@ -2168,6 +2187,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       return;
     }
 
+    // ── Aviso: cartas con TELETRANSPORTE pendiente ───────────
+    // Si alguna carta seleccionada ya tiene un teletransporte declarado este
+    // turno, moverla manualmente entra en conflicto con esa acción (el servidor
+    // la teletransporta al resolver). Avisamos y solo movemos las que NO tengan
+    // acción pendiente.
+    final conTeleport = validIndices
+        .where((i) =>
+            _teleportPendienteDeCarta(_sidebarCoord!, celda.cartas[i]) != null)
+        .toList();
+    if (conTeleport.isNotEmpty) {
+      final restantes =
+          validIndices.where((i) => !conTeleport.contains(i)).toList();
+      _avisarTeleportPendiente(celda, conTeleport, restantes);
+      return;
+    }
+
+    _entrarModoMovimiento(celda, validIndices);
+  }
+
+  /// Entra en modo movimiento con las cartas [validIndices] de [celda]: calcula
+  /// el alcance (BFS) y resalta las celdas destino válidas. Extraído de
+  /// [_onMoveSelected] para poder reutilizarlo tras confirmar un aviso.
+  void _entrarModoMovimiento(CeldaState celda, List<int> validIndices) {
+    if (validIndices.isEmpty || _sidebarCoord == null) return;
     final minMov = validIndices
         .map((i) => celda.cartas[i].movimientoEfectivo)
         .reduce((a, b) => a < b ? a : b);
@@ -2183,6 +2226,94 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _movableCoords = _computeMovableBFS(_sidebarCoord!, minMov, tipo);
       _sidebarOpen = false;
     });
+  }
+
+  /// Acción de teletransporte pendiente cuyo origen es [carta] situada en
+  /// [coord], o null si no hay ninguna. Solo el teletransporte fija
+  /// `cartaOrigen*`; se identifica por la celda de origen y el id de catálogo de
+  /// la carta (robusto ante cambios de índice dentro de la celda).
+  AccionPendiente? _teleportPendienteDeCarta(String coord, CartaEnCelda carta) {
+    for (final a in _accionesPendientes) {
+      final oc = a.cartaOrigenCoord;
+      if (oc == null || oc != coord) continue;
+      if (a.cartaOrigenId != null && a.cartaOrigenId != carta.carta.id) {
+        continue;
+      }
+      return a;
+    }
+    return null;
+  }
+
+  /// Informa de que las cartas [conTeleport] (índices en [celda]) tienen un
+  /// teletransporte pendiente. Si el jugador lo acepta y hay cartas libres,
+  /// mueve solo las [restantes]. Si no quedan libres, es solo informativo.
+  Future<void> _avisarTeleportPendiente(
+    CeldaState celda,
+    List<int> conTeleport,
+    List<int> restantes,
+  ) async {
+    final nombres =
+        conTeleport.map((i) => celda.cartas[i].carta.nombre).toSet().join(', ');
+    final hayRestantes = restantes.isNotEmpty;
+
+    final proceder = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1220),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: Color(0x40C8A860), width: 1),
+        ),
+        title: const Row(children: [
+          Icon(Icons.swap_horiz, size: 18, color: Color(0xFFC8A860)),
+          SizedBox(width: 8),
+          Text('ACCIÓN PENDIENTE',
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 12,
+                  letterSpacing: 1,
+                  color: Color(0xFFC8A860))),
+        ]),
+        content: Text(
+          hayRestantes
+              ? '↔ «$nombres» tiene un teletransporte declarado este turno y se '
+                  'moverá al resolver. No puede moverse manualmente.\n\n'
+                  '¿Mover el resto de la selección?'
+              : '↔ «$nombres» tiene un teletransporte declarado este turno: se '
+                  'moverá al resolver el turno. No puede moverse manualmente.\n\n'
+                  'Si quieres reasignarla, usa «Deshacer cambios».',
+          style: const TextStyle(
+              fontFamily: 'Georgia',
+              fontSize: 11,
+              height: 1.6,
+              color: Color(0xFFBFC8D0)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(hayRestantes ? 'CANCELAR' : 'ENTENDIDO',
+                style: const TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    color: Color(0xFF506070))),
+          ),
+          if (hayRestantes)
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('MOVER EL RESTO',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 10,
+                      color: Color(0xFF40B0FF))),
+            ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+    if (proceder == true && restantes.isNotEmpty) {
+      _entrarModoMovimiento(celda, restantes);
+    }
   }
 
   void _executeMove(String dest, int ri, int ci) {
@@ -2989,16 +3120,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           b.getCelda(coord).cartas.where((c) => c.ownerUid != uid).toList();
       b = b.setCelda(coord, CeldaState(coord: coord, cartas: ajenas));
     }
-    // Colocar mis cartas comprometidas en su celda de destino.
+    // Colocar mis cartas comprometidas en su celda de destino. Se usa
+    // `CartaEnCelda.fromMap` para preservar el campo `Efectos` que
+    // `_serializarTablero` ya escribe en `movimientosTurno` (así mis cartas
+    // conservan sus venenos/potenciaciones al reentrar mientras el turno se
+    // resuelve). Si el map no trajera ownerUid, caemos al uid local.
     mov.celdas.forEach((coord, cartas) {
       for (final c in cartas) {
+        final base = CartaEnCelda.fromMap(c);
         b = b.placeCarta(
           coord,
-          CartaEnCelda(
-            carta: _cartaFromMap(c),
-            ownerUid: c['ownerUid'] as String? ?? uid,
-            ownerZone: c['ownerZone'] as String? ?? '',
-          ),
+          base.ownerUid.isEmpty ? base.copyWith(ownerUid: uid) : base,
         );
       }
     });
@@ -3771,6 +3903,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 isObelisco: isObeliscoSidebar,
                 localUid: _localPlayer.datos.uid,
                 playerColors: _playerColors,
+                efectosCelda: _sidebarCoord != null
+                    ? _boardState.getEfectosCelda(_sidebarCoord!)
+                    : const [],
                 onMoveSelected: _estoyEliminado ? (_) {} : _onMoveSelected,
                 movedInstanceIds: _cartasQueSeMovieron,
                 onUndoSelected: _estoyEliminado ? (_) {} : _undoMoveSelected,
