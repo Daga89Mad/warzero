@@ -722,8 +722,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // en juego y los obeliscos o continentes que caen ahí (p. ej. col 19-20) se
       // salen del tablero. Requiere que el endpoint /warzero/mapa devuelva
       // filas/columnas (WarZeroService.MapaTerrenoAsync + WarZeroExtensions).
-      final filas = (data['filas'] as num?)?.toInt();
-      final columnas = (data['columnas'] as num?)?.toInt();
+      var filas = (data['filas'] as num?)?.toInt();
+      var columnas = (data['columnas'] as num?)?.toInt();
+
+      // Robustez: si el doc del mapa NO trae filas/columnas (o vienen a 0), las
+      // inferimos de las coordenadas del propio terreno (máx. letra de fila y
+      // máx. número de columna). Así un mapa 12×20 se dibuja completo aunque el
+      // documento no declare sus dimensiones, en vez de quedarse con el preset.
+      if (filas == null || columnas == null || filas <= 0 || columnas <= 0) {
+        final d = _dimsDesdeCoords(terreno.keys);
+        if (filas == null || filas <= 0) filas = d.rows > 0 ? d.rows : null;
+        if (columnas == null || columnas <= 0) {
+          columnas = d.cols > 0 ? d.cols : null;
+        }
+      }
 
       // Imagen de fondo del mapa (ruta de asset o URL). Si viene vacía, se deja
       // null para que BoardWidget use la imagen por defecto.
@@ -735,9 +747,61 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           cfg = cfg.withGrid(filas: filas, columnas: columnas);
         }
         _config = cfg.withTerrain(terreno);
+        // IMPORTANTE: el AccionController se creó con el _config del preset. Si
+        // no le propagamos la rejilla real, calcularObjetivosValidos usa un grid
+        // equivocado y, p. ej., el "escudo lejano" (rango = cualquiera) marca
+        // celdas de un tablero distinto al que se ve → no deja seleccionar.
+        _accionController.actualizarConfig(_config);
         if (imagen != null && imagen.isNotEmpty) _imagenMapa = imagen;
       });
     } catch (_) {}
+  }
+
+  /// Dimensiones (filas, columnas) mínimas que contienen todas las [coords]
+  /// tipo "A1".."T20": fila = letra inicial (A→1), columna = número. Devuelve
+  /// (0,0) si no hay coordenadas válidas. Se usa para dibujar/expandir la
+  /// rejilla al tamaño REAL del mapa aunque el documento no declare filas y
+  /// columnas.
+  static ({int rows, int cols}) _dimsDesdeCoords(Iterable<String> coords) {
+    int rows = 0, cols = 0;
+    for (final c in coords) {
+      if (c.isEmpty) continue;
+      final code = c.codeUnitAt(0);
+      if (code < 65 || code > 90) continue; // debe empezar por A..Z
+      final r = code - 64; // 'A' → 1
+      final col = int.tryParse(c.substring(1));
+      if (col == null || col <= 0) continue;
+      if (r > rows) rows = r;
+      if (col > cols) cols = col;
+    }
+    return (rows: rows, cols: cols);
+  }
+
+  /// Expande (nunca encoge) la rejilla de [_config] para que contenga todas las
+  /// coordenadas reales del juego —obeliscos y cartas del tablero— y propaga la
+  /// nueva config al AccionController. Red de seguridad para mapas cuyo grid no
+  /// llegó a aplicarse (obeliscos/celdas en columnas/filas fuera del preset):
+  /// sin esto, el cuartel puede caer fuera del tablero y "no aparece ninguna
+  /// casilla" al desplegar.
+  void _ajustarGridAContenido(
+      Map<String, dynamic> data, Map<String, String> obeliscos) {
+    final coords = <String>{}
+      ..addAll(obeliscos.values.where((c) => c.isNotEmpty));
+    final tablero = data['tablero'];
+    if (tablero is Map) {
+      coords.addAll(tablero.keys.map((k) => k.toString()));
+    }
+    if (coords.isEmpty) return;
+    final d = _dimsDesdeCoords(coords);
+    if (d.rows > _config.rows || d.cols > _config.cols) {
+      setState(() {
+        _config = _config.withGrid(
+          filas: d.rows > _config.rows ? d.rows : _config.rows,
+          columnas: d.cols > _config.cols ? d.cols : _config.cols,
+        );
+        _accionController.actualizarConfig(_config);
+      });
+    }
   }
 
   Future<void> _loadGame() async {
@@ -944,6 +1008,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _juegoTerminado = juegoTerminado;
           _ganadorUid = lobby!.ganadorUid;
         });
+
+        // Red de seguridad de rejilla: garantiza que el tablero contiene todas
+        // las coordenadas reales (obeliscos + cartas). Si el grid del mapa no se
+        // aplicó (doc sin filas/columnas) y el cuartel cae en una columna/fila
+        // fuera del preset, sin esto "no aparece ninguna casilla" al desplegar.
+        _ajustarGridAContenido(data, obeliscosMap);
 
         // ── 5. Restaurar tablero ──────────────────────────────────
         // `serverStartBoard` = tablero autoritativo (inicio del turno en curso).

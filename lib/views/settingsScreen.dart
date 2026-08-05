@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:warzero/services/settings_controller.dart';
 import '../services/settings_controller.dart';
+import 'diagnostico_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -74,6 +75,31 @@ class SettingsScreen extends StatelessWidget {
                         seleccionado: i == settingsController.temaIndex,
                         onTap: () => settingsController.setTemaIndex(i),
                       ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // ── Diagnóstico ──────────────────────────────────
+              _Seccion(
+                titulo: 'DIAGNÓSTICO',
+                color: tema.primario,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Herramientas para depurar red y notificaciones push.',
+                      style: TextStyle(color: tema.textoTenue, fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const DiagnosticoScreen()),
+                      ),
+                      icon: const Icon(Icons.bug_report),
+                      label: const Text('Abrir diagnóstico'),
+                    ),
                   ],
                 ),
               ),

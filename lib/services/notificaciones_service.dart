@@ -20,7 +20,22 @@
 //   1. Registrar el handler de background ANTES de runApp (top-level).
 //   2. Llamar a NotificacionesService.instance.iniciar() tras Firebase.initializeApp().
 //   3. (Opcional) asignar NotificacionesService.instance.onAbrirPartida.
+//
+// NOTA iOS (importante): en iOS el token FCM NO se puede obtener hasta que el
+// dispositivo ha terminado de registrarse en APNs. Ese registro es asíncrono y
+// justo al arrancar `getAPNSToken()` puede devolver null durante un instante;
+// si en ese momento se llama a `getToken()`, el plugin lanza "apns-token-not-set"
+// y, sin reintento, el token nunca se registra (síntoma: en Firestore el token
+// no se actualiza). Por eso aquí:
+//   • Se reintenta obtener el token APNs con backoff antes de pedir el FCM.
+//   • Si aun así falla, se re-programa el registro unos segundos después.
+//   • Se registran en log el APNs y el FCM para poder diagnosticar.
+// Si tras los reintentos el APNs sigue null, el problema NO es de carrera sino
+// de configuración del build: falta la capability "Push Notifications" / el
+// entitlement `aps-environment`, el provisioning no incluye push, o la clave
+// APNs (.p8) no está subida en Firebase.
 
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -64,6 +79,12 @@ class NotificacionesService {
   String? _uidActual;
   String? _ultimoToken;
 
+  // Control de reintentos del registro (para cubrir la carrera de arranque en
+  // iOS con el token APNs, o un fallo transitorio de red al registrar).
+  static const int _maxReintentos = 5;
+  int _reintentos = 0;
+  Timer? _timerReintento;
+
   /// La app decide cómo abrir una partida al pulsar una notificación. Recibe el
   /// lobbyId. Se invoca tanto para el mensaje que abrió la app (app terminada)
   /// como para pulsaciones con la app en segundo plano.
@@ -85,6 +106,9 @@ class NotificacionesService {
       _uidActual = FirebaseAuth.instance.currentUser?.uid;
       if (_uidActual != null) {
         await _registrarTokenActual(_uidActual!);
+      } else {
+        debugPrint('[WZ][push] sin usuario logueado aún; se registrará al '
+            'restaurarse la sesión (authStateChanges).');
       }
       FirebaseAuth.instance.authStateChanges().listen(_onAuthCambio);
 
@@ -162,8 +186,11 @@ class NotificacionesService {
     // Usuario PULSA la notificación con la app en segundo plano (no terminada).
     FirebaseMessaging.onMessageOpenedApp.listen(_abrirDesdeMensaje);
 
-    // Renovación del token → re-registrar.
+    // Renovación del token → re-registrar. Este listener es clave en iOS: si el
+    // token APNs no estaba listo al arrancar, cuando por fin se resuelve, FCM
+    // emite un token nuevo por aquí y lo registramos.
     _fm.onTokenRefresh.listen((token) {
+      debugPrint('[WZ][push] onTokenRefresh → $token');
       _ultimoToken = token;
       final uid = _uidActual;
       if (uid != null) {
@@ -218,6 +245,9 @@ class NotificacionesService {
     }
 
     _uidActual = nuevoUid;
+    // Nuevo usuario → reiniciar el contador de reintentos y registrar.
+    _reintentos = 0;
+    _timerReintento?.cancel();
     if (nuevoUid != null) {
       await _registrarTokenActual(nuevoUid);
     }
@@ -225,25 +255,84 @@ class NotificacionesService {
 
   Future<void> _registrarTokenActual(String uid) async {
     try {
-      // En iOS conviene asegurar el token APNs antes de pedir el de FCM.
+      // En iOS hay que asegurar el token APNs ANTES de pedir el de FCM. Puede
+      // no estar listo justo al arrancar → reintentar con backoff.
       if (!kIsWeb && Platform.isIOS) {
-        await _fm.getAPNSToken();
+        final apns = await _obtenerApnsTokenConReintentos();
+        if (apns == null || apns.isEmpty) {
+          debugPrint(
+              '[WZ][push] APNs token NULL tras reintentos. iOS no se ha '
+              'registrado en APNs → no habrá token FCM. Revisa en Xcode la '
+              'capability "Push Notifications" y el entitlement aps-environment, '
+              'el provisioning con push, y la clave APNs (.p8) en Firebase. '
+              'Reintentando en segundo plano…');
+          _programarReintento(uid);
+          return;
+        }
+        debugPrint('[WZ][push] APNs token OK: $apns');
       }
+
       final token = await _fm.getToken();
       if (token == null || token.isEmpty) {
-        debugPrint('[WZ][push] token FCM nulo');
+        debugPrint('[WZ][push] token FCM nulo (reprogramando reintento)');
+        _programarReintento(uid);
         return;
       }
+
       _ultimoToken = token;
+      debugPrint('[WZ][push] FCM token=$token'); // ← para pruebas de consola
       await _api.registrarFcmToken(
         uid: uid,
         token: token,
         platform: _plataforma(),
       );
       debugPrint('[WZ][push] token registrado para uid=$uid');
+
+      // Éxito: limpiar reintentos pendientes.
+      _reintentos = 0;
+      _timerReintento?.cancel();
     } catch (e) {
       debugPrint('[WZ][push] registrar token falló: $e');
+      _programarReintento(uid);
     }
+  }
+
+  /// Pide el token APNs varias veces con backoff creciente. Devuelve el token o
+  /// null si sigue sin estar disponible tras los intentos.
+  Future<String?> _obtenerApnsTokenConReintentos({int intentos = 5}) async {
+    for (var i = 0; i < intentos; i++) {
+      try {
+        final apns = await _fm.getAPNSToken();
+        if (apns != null && apns.isNotEmpty) return apns;
+      } catch (e) {
+        debugPrint('[WZ][push] getAPNSToken lanzó (intento ${i + 1}): $e');
+      }
+      debugPrint('[WZ][push] APNs aún no listo (intento ${i + 1}/$intentos)…');
+      await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
+    }
+    return null;
+  }
+
+  /// Reprograma un intento de registro más adelante (fallo transitorio o token
+  /// APNs que aún no estaba listo). Limitado a [_maxReintentos] para no insistir
+  /// indefinidamente si el problema es de configuración.
+  void _programarReintento(String uid) {
+    if (_reintentos >= _maxReintentos) {
+      debugPrint('[WZ][push] agotados los reintentos de registro para uid=$uid. '
+          'Si es iOS, casi seguro falta config de APNs (capability/entitlement '
+          'o clave APNs en Firebase).');
+      return;
+    }
+    _reintentos++;
+    final segundos = 3 * _reintentos;
+    _timerReintento?.cancel();
+    _timerReintento = Timer(Duration(seconds: segundos), () {
+      // El usuario podría haber cambiado entretanto.
+      if (_uidActual == uid) {
+        debugPrint('[WZ][push] reintento $_reintentos de registro (uid=$uid)…');
+        _registrarTokenActual(uid);
+      }
+    });
   }
 
   String _plataforma() {

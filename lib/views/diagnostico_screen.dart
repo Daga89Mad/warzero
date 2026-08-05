@@ -18,10 +18,14 @@
 // directamente para no arrastrar dependencias.
 
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 class DiagnosticoScreen extends StatefulWidget {
   /// ID de una partida existente para probar lecturas reales. Si es null, usa
@@ -107,6 +111,102 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
     final u = FirebaseAuth.instance.currentUser;
     _add('ℹ️ Info',
         'uid: ${u?.uid ?? 'NULL'} · lobbyId: ${_lobbyId ?? '(ninguno)'}');
+  }
+
+  // ── DIAGNÓSTICO DE NOTIFICACIONES (push / FCM) ────────────────────────────
+  // Muestra EN PANTALLA (sin necesitar la consola del dispositivo) todo lo que
+  // hace falta para saber por qué no llegan las notificaciones:
+  //   • Permiso del sistema.
+  //   • Token APNs (solo iOS): si sale NULL tras reintentos, el build no está
+  //     registrado en APNs (falta capability/entitlement o clave APNs). Mientras
+  //     sea NULL no habrá token FCM y no llegará nada.
+  //   • Token FCM: se copia al portapapeles para pegarlo en la prueba de la
+  //     consola de Firebase (Cloud Messaging → Enviar mensaje de prueba).
+  //   • Estado en Firestore: cuántos tokens hay, de qué plataforma, cuándo se
+  //     actualizaron y si el token actual está guardado.
+  Future<void> _diagnosticarNotificaciones() async {
+    if (_ocupado) return;
+    setState(() => _ocupado = true);
+    try {
+      final fm = FirebaseMessaging.instance;
+
+      // 1) Permiso del sistema.
+      final settings =
+          await fm.requestPermission(alert: true, badge: true, sound: true);
+      final st = settings.authorizationStatus;
+      final permisoOk = st == AuthorizationStatus.authorized ||
+          st == AuthorizationStatus.provisional;
+      _add(permisoOk ? '✅ Permiso push' : '❌ Permiso push',
+          'authorizationStatus: $st',
+          error: !permisoOk);
+
+      // 2) Token APNs (solo iOS) con reintentos.
+      if (!kIsWeb && Platform.isIOS) {
+        String? apns;
+        for (var i = 0; i < 5; i++) {
+          try {
+            apns = await fm.getAPNSToken();
+          } catch (_) {}
+          if (apns != null && apns.isNotEmpty) break;
+          await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
+        }
+        if (apns == null || apns.isEmpty) {
+          _add(
+              '❌ APNs token',
+              'NULL tras reintentos → iOS NO está registrado en APNs. Falta '
+                  'config del build: capability "Push Notifications" + entitlement '
+                  'aps-environment, provisioning con push, o la clave APNs (.p8) en '
+                  'Firebase. Mientras esto sea NULL, NO habrá token FCM ni llegará '
+                  'ninguna notificación.',
+              error: true);
+          return; // sin APNs, getToken fallará en iOS
+        }
+        _add('✅ APNs token', apns);
+      }
+
+      // 3) Token FCM.
+      String? fcm;
+      try {
+        fcm = await fm.getToken();
+      } catch (e) {
+        _add('❌ FCM getToken', '${e.runtimeType}: $e', error: true);
+      }
+      if (fcm == null || fcm.isEmpty) {
+        _add('❌ FCM token', 'NULL. El dispositivo no obtiene token FCM.',
+            error: true);
+      } else {
+        await Clipboard.setData(ClipboardData(text: fcm));
+        _add('✅ FCM token (copiado al portapapeles)', fcm);
+      }
+
+      // 4) Estado en Firestore (Jugadores/{uid}.fcmTokens + fcmTokensMeta).
+      try {
+        final snap = await _db.collection('Jugadores').doc(_miUid).get();
+        final data = snap.data() ?? {};
+        final tokens = (data['fcmTokens'] as List?) ?? const [];
+        final meta = (data['fcmTokensMeta'] as Map?) ?? const {};
+        final buf = StringBuffer('total tokens: ${tokens.length}\n');
+        for (final t in tokens) {
+          final m = (meta[t] as Map?) ?? const {};
+          final plat = m['platform'] ?? '?';
+          final act = m['actualizado'];
+          final actStr = act is Timestamp ? act.toDate().toString() : '$act';
+          final tt = '$t';
+          final corto = tt.length > 18 ? '${tt.substring(0, 18)}…' : tt;
+          buf.writeln('· [$plat] $corto  act=$actStr');
+        }
+        final coincide = fcm != null && tokens.contains(fcm);
+        _add(
+            coincide ? '✅ Firestore tokens' : '⚠️ Firestore tokens',
+            '${buf.toString().trim()}\n\nEl token actual '
+            '${coincide ? "SÍ" : "NO"} está guardado en Firestore.',
+            error: !coincide);
+      } catch (e) {
+        _add('❌ Firestore tokens', '${e.runtimeType}: $e', error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
   }
 
   // ★★ TEST DE FUGA DE LISTENERS — simula tu ciclo entrar/salir de la partida.
@@ -927,6 +1027,9 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
               runSpacing: 6,
               children: [
                 _btn('Info', _infoRed),
+                _btn('🔔 Diagnóstico NOTIFICACIONES',
+                    _diagnosticarNotificaciones,
+                    destacado: true),
                 // Botón destacado: la prueba que da el veredicto.
                 _btn('★ TEST GOOGLE PLAY / SSL', _pruebaServiciosGoogle,
                     destacado: true),
