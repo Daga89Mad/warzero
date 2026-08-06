@@ -1027,14 +1027,23 @@ class _MiniCell extends StatelessWidget {
               ),
             // Fichas de cartas en el centro (puntos coloreados por jugador).
             // En los cuarteles NO se muestran: la guarnición no debe revelarse.
+            // FittedBox(scaleDown): en mapas grandes (8 jugadores) las celdas son
+            // muy pequeñas y la fila de puntos + "+N" se salía a lo ancho
+            // (overflow). Aquí se reduce para que SIEMPRE quepa dentro de la celda.
             if (tieneCartas && !isObelisco)
-              Center(
-                child: _CardDots(
-                  cartas: cartas,
-                  localUid: localUid,
-                  playerColors: playerColors,
-                  maxDots: 4,
-                  dotSize: (size * 0.13).clamp(3.0, 7.0),
+              Positioned.fill(
+                child: Padding(
+                  padding: const EdgeInsets.all(1.5),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: _CardDots(
+                      cartas: cartas,
+                      localUid: localUid,
+                      playerColors: playerColors,
+                      maxDots: 4,
+                      dotSize: (size * 0.13).clamp(3.0, 7.0),
+                    ),
+                  ),
                 ),
               ),
           ],

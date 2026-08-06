@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
 import '../services/settings_controller.dart';
 import '../widgets/card_detail_overlay.dart';
+import '../widgets/cell_widget.dart' show ZeroChip;
 
 /// Resultado de un intento de compra de carta especial.
 class CompraResult {
@@ -39,6 +40,14 @@ class CuartelScreen extends StatefulWidget {
   /// Ejecuta la compra. Devuelve el resultado (incluye energías restantes).
   final Future<CompraResult> Function(CartaModel carta) onComprar;
 
+  /// Nº de cartas ya robadas en el cuartel esta partida (define el precio del
+  /// robo: 100 · 2^n → 100, 200, 400…).
+  final int robosCompradosIniciales;
+
+  /// Ejecuta un "robar carta". Devuelve el resultado (incluye energías
+  /// restantes). Si es null, la opción de robar no se muestra.
+  final Future<CompraResult> Function()? onRobarCarta;
+
   const CuartelScreen({
     super.key,
     required this.ejercitoId,
@@ -46,6 +55,8 @@ class CuartelScreen extends StatefulWidget {
     required this.puedeComprar,
     required this.compradasIniciales,
     required this.onComprar,
+    this.robosCompradosIniciales = 0,
+    this.onRobarCarta,
   });
 
   @override
@@ -56,17 +67,23 @@ class _CuartelScreenState extends State<CuartelScreen> {
   late int _energias;
   late Set<String> _compradas;
   String? _comprandoId; // id en curso (evita doble compra)
+  late int _robosComprados; // nº de robos ya hechos (precio creciente)
+  bool _robando = false;
 
   // Colores semánticos que se mantienen fijos en cualquier tema.
   static const _energy = Color(0xFF2EA6FF); // Zero / energía
   static const _verde = Color(0xFF4ABB58); // comprado / disponible
   static const _rojo = Color(0xFF9A5050); // sin energía / error
 
+  /// Precio del PRÓXIMO robo: 100 · 2^robosComprados (100, 200, 400…).
+  int get _precioRobo => 100 * (1 << _robosComprados);
+
   @override
   void initState() {
     super.initState();
     _energias = widget.energiasIniciales;
     _compradas = {...widget.compradasIniciales};
+    _robosComprados = widget.robosCompradosIniciales;
   }
 
   Future<void> _comprar(CartaModel carta) async {
@@ -78,6 +95,26 @@ class _CuartelScreenState extends State<CuartelScreen> {
       _comprandoId = null;
       _energias = res.energiasRestantes;
       if (res.ok) _compradas.add(carta.id);
+    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(res.mensaje),
+        backgroundColor:
+            res.ok ? const Color(0xFF1E5631) : const Color(0xFF6B2020),
+        duration: const Duration(seconds: 2),
+      ));
+  }
+
+  Future<void> _robar() async {
+    if (_robando || widget.onRobarCarta == null) return;
+    setState(() => _robando = true);
+    final res = await widget.onRobarCarta!();
+    if (!mounted) return;
+    setState(() {
+      _robando = false;
+      _energias = res.energiasRestantes;
+      if (res.ok) _robosComprados += 1; // el precio se duplica para el próximo
     });
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -108,11 +145,7 @@ class _CuartelScreenState extends State<CuartelScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             child: Row(children: [
-              const Text('Ø',
-                  style: TextStyle(
-                      color: _energy,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold)),
+              const ZeroChip(size: 15),
               const SizedBox(width: 4),
               Text('$_energias',
                   style: TextStyle(
@@ -136,7 +169,100 @@ class _CuartelScreenState extends State<CuartelScreen> {
                 style: TextStyle(color: war.primario, fontSize: 12),
               ),
             ),
+          // ── ROBAR CARTA: disponible para todos los ejércitos, precio x2 ──
+          if (widget.onRobarCarta != null) _buildRobarTile(),
           Expanded(child: _buildLista()),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRobarTile() {
+    final war = context.war;
+    final sinEnergia = _energias < _precioRobo;
+    final habilitado =
+        widget.puedeComprar && !sinEnergia && !_robando && _comprandoId == null;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(colors: [
+          _energy.withOpacity(0.14),
+          _energy.withOpacity(0.04),
+        ]),
+        border: Border.all(color: _energy.withOpacity(0.45)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      padding: const EdgeInsets.all(10),
+      child: Row(
+        children: [
+          Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: war.fondo,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: _energy.withOpacity(0.35)),
+            ),
+            alignment: Alignment.center,
+            child: const Icon(Icons.style, color: _energy, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('ROBAR CARTA',
+                    style: TextStyle(
+                        color: war.texto,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 1,
+                        fontSize: 14)),
+                const SizedBox(height: 2),
+                Text(
+                  'Añade una carta al azar de tu mazo a la mano. '
+                  'El precio se duplica cada vez.',
+                  style: TextStyle(color: war.textoTenue, fontSize: 10),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 80,
+            child: ElevatedButton(
+              onPressed: habilitado ? _robar : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF12507A),
+                disabledBackgroundColor: war.fondo,
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(6)),
+              ),
+              child: _robando
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : Column(mainAxisSize: MainAxisSize.min, children: [
+                      Row(mainAxisSize: MainAxisSize.min, children: [
+                        const ZeroChip(size: 13),
+                        const SizedBox(width: 4),
+                        Text('$_precioRobo',
+                            style: TextStyle(
+                                color: sinEnergia ? _rojo : Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold)),
+                      ]),
+                      Text(sinEnergia ? 'Sin energía' : 'Robar',
+                          style: TextStyle(
+                              color: sinEnergia ? _rojo : Colors.white70,
+                              fontSize: 9)),
+                    ]),
+            ),
+          ),
         ],
       ),
     );
@@ -311,11 +437,8 @@ class _CuartelScreenState extends State<CuartelScreen> {
                     strokeWidth: 2, color: Colors.white))
             : Column(mainAxisSize: MainAxisSize.min, children: [
                 Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Text('Ø ',
-                      style: TextStyle(
-                          color: _energy,
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold)),
+                  const ZeroChip(size: 13),
+                  const SizedBox(width: 4),
                   Text('${carta.coste}',
                       style: TextStyle(
                           color: sinEnergia ? _rojo : Colors.white,

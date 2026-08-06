@@ -16,6 +16,7 @@ import 'informe_batalla_screen.dart';
 import 'revision_turno_screen.dart';
 import '../models/lobby_model.dart';
 import '../widgets/board_widget.dart';
+import '../widgets/card_detail_overlay.dart';
 import '../widgets/cell_sidebar.dart';
 import '../widgets/cell_widget.dart' show ownerColor;
 import '../widgets/hand_widget.dart';
@@ -206,6 +207,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Se usan para desmarcarlas en el servidor si el jugador deshace o sale a
   /// mitad de turno (bug QAS #2). Se limpia al empezar cada turno.
   final Set<String> _especialesCompradasEsteTurno = {};
+
+  /// Nº de cartas robadas en el CUARTEL esta partida. Define el precio del
+  /// próximo robo (100 · 2^n → 100, 200, 400…). Es permanente: se persiste en
+  /// statsPartida.{uid}.robosComprados para que el precio no se reinicie al
+  /// reentrar a la partida.
+  int _robosComprados = 0;
+
+  /// Precio del PRÓXIMO robo de carta en el cuartel.
+  int get _precioRoboActual => 100 * (1 << _robosComprados);
 
   // ── Sidebar ───────────────────────────────────────────────
   String? _sidebarCoord;
@@ -429,6 +439,64 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// Best-effort: ¿ya intentamos cargar el perfil real del jugador local?
+  bool _perfilLocalCargado = false;
+
+  /// Actualiza el alias del jugador local con el REAL del lobby. El alias
+  /// inicial es un placeholder ("Jugador"); sin esto el banner inferior mostraba
+  /// "JUGADOR" en lugar del alias de la cuenta. No hace setState (se llama desde
+  /// dentro de uno).
+  void _sincronizarAliasLocalDesdeLobby(LobbyModel? lobby) {
+    if (lobby == null) return;
+    for (final j in lobby.jugadores) {
+      if (j.uid == widget.localPlayerUid) {
+        if (j.alias.isNotEmpty && j.alias != _localPlayer.datos.alias) {
+          _localPlayer = _localPlayer.copyWith(
+            datos: JugadorDatos(
+              uid: _localPlayer.datos.uid,
+              alias: j.alias,
+              dinero: _localPlayer.datos.dinero,
+              imagenPerfil: _localPlayer.datos.imagenPerfil,
+              nivel: _localPlayer.datos.nivel,
+              experiencia: _localPlayer.datos.experiencia,
+            ),
+          );
+        }
+        return;
+      }
+    }
+  }
+
+  /// Carga (best-effort, sin bloquear) el alias e imagen de perfil reales del
+  /// jugador local desde el servidor, para el avatar del HUD inferior. Si falla
+  /// (p. ej. arranque en frío), se puede reintentar en la siguiente carga.
+  Future<void> _cargarPerfilLocal() async {
+    if (_perfilLocalCargado || widget.lobbyId == null) return;
+    _perfilLocalCargado = true;
+    try {
+      final data = await _api.obtenerColeccion(widget.localPlayerUid);
+      final jug = data?['jugador'];
+      if (jug is Map && mounted) {
+        final alias = (jug['alias'] as String?)?.trim() ?? '';
+        final img = (jug['imagenPerfil'] as String?)?.trim() ?? '';
+        setState(() {
+          _localPlayer = _localPlayer.copyWith(
+            datos: JugadorDatos(
+              uid: _localPlayer.datos.uid,
+              alias: alias.isNotEmpty ? alias : _localPlayer.datos.alias,
+              dinero: _localPlayer.datos.dinero,
+              imagenPerfil: img,
+              nivel: _localPlayer.datos.nivel,
+              experiencia: _localPlayer.datos.experiencia,
+            ),
+          );
+        });
+      }
+    } catch (_) {
+      _perfilLocalCargado = false; // permitir reintento
+    }
+  }
+
   /// Paleta de 8 colores distintos para cuarteles/jugadores. El color por coord
   /// (_obeliscoColor) solo conocía las 4 posiciones clásicas y devolvía gris
   /// para el resto; en mapas de 8 hay que dar un color propio a cada jugador.
@@ -625,6 +693,124 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           mazoRestante: _mazoRestante.map((c) => c.id).toList(),
         )
         .catchError((_) => null); // fire-and-forget
+  }
+
+  /// ¿Puede el jugador volver a repartir ahora? Solo en el PRIMER turno, en su
+  /// turno y SIN haber jugado nada (para no dejar cartas desplegadas sin
+  /// consolidar fuera de la mano). Un sacrificio no lo impide (no deja cartas en
+  /// el tablero), pero un despliegue sí (haría _hand ≠ _handInicial en tamaño).
+  bool get _puedeVolverARepartir =>
+      _boardState.turnoActual == 1 &&
+      !_yoCerreElTurno &&
+      !_estoyEliminado &&
+      !_hayCambiosPendientes &&
+      _energiaGastadaDespliegue == 0 &&
+      _hand.length == _handInicial.length;
+
+  /// Descarta la mano del primer turno y reparte una nueva, barajando la mano
+  /// actual junto al mazo restante. Solo disponible en el primer turno.
+  void _volverARepartir() {
+    if (_boardState.turnoActual != 1 || _yoCerreElTurno || _estoyEliminado) {
+      return;
+    }
+    if (!_puedeVolverARepartir) {
+      _toast('Deshaz tus jugadas de este turno para volver a repartir.',
+          error: true);
+      return;
+    }
+    final pool = <CartaModel>[..._hand, ..._mazoRestante]
+      ..shuffle(math.Random());
+    final nuevaMano = pool.take(_initialHandSize).toList();
+    final nuevoMazo = pool.skip(_initialHandSize).toList();
+    setState(() {
+      _hand = nuevaMano;
+      _mazoRestante = nuevoMazo;
+      _handInicial = List.from(nuevaMano);
+      _selectedHandIndex = null;
+    });
+    _saveHandAndDeck();
+    _toast('Se ha repartido tu mano de nuevo.');
+  }
+
+  /// Muestra un panel deslizante con el MAZO del jugador: el pool completo del
+  /// que se roba 1 carta al azar cada turno (con repetición; el pool no se
+  /// agota). Se abre al pulsar "MAZO DISPONIBLE" en el HUD inferior.
+  void _mostrarMazoDisponible() {
+    // El pool real de robo por turno es el mazo completo (server: mazoPool),
+    // NO _mazoRestante (que es solo el sobrante tras la mano inicial).
+    final mazo = List<CartaModel>.from(_mazoCompleto);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0A1220),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.style, size: 16, color: Color(0xFFC8A860)),
+                  const SizedBox(width: 8),
+                  const Text('MAZO DISPONIBLE',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 12,
+                          letterSpacing: 2,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFE0D8C0))),
+                  const SizedBox(width: 8),
+                  Text('${mazo.length} carta${mazo.length == 1 ? '' : 's'}',
+                      style: const TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 10,
+                          color: Color(0xFF6A7A8A))),
+                ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Tu mazo completo. Cada turno recibes 1 carta al azar de aquí '
+                '(puede repetirse).',
+                style: TextStyle(fontSize: 9, color: Color(0xFF6A7A8A)),
+              ),
+              const SizedBox(height: 12),
+              if (mazo.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(
+                    child: Text('No quedan cartas en el mazo.',
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 11,
+                            color: Color(0xFF506070))),
+                  ),
+                )
+              else
+                SizedBox(
+                  height: 150,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: mazo.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (_, i) => _MazoCard(
+                      carta: mazo[i],
+                      onTap: () => showCardDetail(
+                        ctx,
+                        mazo[i],
+                        resolveEvolucion: _resolveEvolucion,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   // ── Reparto de fin de turno (autoritativo del servidor, bug QAS #2) ───────
@@ -911,6 +1097,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               ..clear()
               ..addAll(compradas.map((e) => e.toString()));
           }
+          // Robos de cuartel ya realizados (precio creciente del robo).
+          _robosComprados = (myS['robosComprados'] as num?)?.toInt() ?? 0;
         } else {
           // Primera vez: el servidor ya asigna energías en POST /warzero/entrar,
           // pero por robustez las fijamos también vía API (increment sobre campo
@@ -990,6 +1178,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
         setState(() {
           _currentLobby = lobby;
+          _sincronizarAliasLocalDesdeLobby(lobby);
           _lastCombateLog = loadedCombateLog;
           _lastMovimientosLog = loadedMovLog;
           _lastFarmeoLog = loadedFarmeoLog; // ← nuevo
@@ -1140,6 +1329,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // guarda se deja en turnoActual - 2 y se llama a _maybeMostrarInforme.
         _informeMostradoTurno = lobby.turnoActual - 2;
         _cargaCompletada = true;
+
+        // Cargar alias e imagen de perfil reales para el avatar del HUD
+        // inferior (best-effort, no bloquea).
+        _cargarPerfilLocal();
 
         if (lobby.modoTurno == ModoTurno.rapida && lobby.cerradoPor.isEmpty) {
           _startTimer();
@@ -1357,6 +1550,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         if (streamColors.isNotEmpty) _playerColors = streamColors;
         if (streamObeliscos.isNotEmpty) _obeliscosPorJugador = streamObeliscos;
         _currentLobby = lobby;
+        _sincronizarAliasLocalDesdeLobby(lobby);
         _hostUid = lobby.hostUid;
         _jugadoresEliminados = nuevosEliminados;
         _estoyEliminado = ahoraEliminado;
@@ -1860,6 +2054,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         puedeComprar: puedeComprar,
         compradasIniciales: _especialesCompradas,
         onComprar: _comprarEspecial,
+        robosCompradosIniciales: _robosComprados,
+        onRobarCarta: _robarCartaCuartel,
       ),
     ));
   }
@@ -2177,6 +2373,78 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return CompraResult(
       ok: true,
       mensaje: '${carta.nombre} comprada y desplegada en tu cuartel.',
+      energiasRestantes: _localPlayer.puntos,
+    );
+  }
+
+  /// Roba una carta al azar del mazo del jugador y la añade a la mano, a cambio
+  /// de un precio creciente (100 · 2^robosComprados). El gasto y la carta son
+  /// PERMANENTES (no se revierten al salir a mitad de turno): por eso se
+  /// consolidan en el snapshot de inicio de turno (_puntosInicial y
+  /// _handInicial) y el contador se persiste en el servidor. Usado por el
+  /// botón "ROBAR CARTA" del cuartel.
+  Future<CompraResult> _robarCartaCuartel() async {
+    CompraResult fallo(String m) => CompraResult(
+        ok: false, mensaje: m, energiasRestantes: _localPlayer.puntos);
+
+    if (_yoCerreElTurno) return fallo('Ya cerraste el turno. No puedes robar.');
+    if (_estoyEliminado) return fallo('Estás eliminado.');
+
+    final precio = _precioRoboActual;
+    if (_localPlayer.puntos < precio) {
+      return fallo('Energía insuficiente: necesitas $precio.');
+    }
+
+    // Elegir una carta al azar del mazo del jugador (sin evoluciones/especiales).
+    final pool =
+        _mazoCompleto.where((c) => !c.esEvolucion && !c.esEspecial).toList();
+    if (pool.isEmpty) return fallo('No hay cartas disponibles para robar.');
+    final carta = pool[math.Random().nextInt(pool.length)];
+
+    setState(() {
+      _hand = [..._hand, carta];
+      // La carta robada forma parte de la baseline revertible del turno (para
+      // que sobreviva a "salir sin cerrar", igual que las cartas desplegadas).
+      _handInicial = [..._handInicial, carta];
+      _localPlayer.puntos -= precio;
+      // Gasto permanente: se consolida en el snapshot de inicio de turno para
+      // que NO se reembolse al deshacer / salir.
+      _puntosInicial -= precio;
+      _robosComprados += 1;
+    });
+
+    if (widget.lobbyId != null) {
+      try {
+        await _api.actualizarStats(
+          lobbyId: widget.lobbyId!,
+          uid: widget.localPlayerUid,
+          energiesDelta: -precio,
+          robosDelta: 1,
+          // Persistir la mano REVERTIBLE (incluye desplegadas + la robada),
+          // nunca _hand (que puede estar vaciada por despliegues sin consolidar).
+          mano: _handInicial.map((c) => c.id).toList(),
+          mazoRestante: _mazoRestante.map((c) => c.id).toList(),
+        );
+      } catch (_) {
+        // Revertir en caso de fallo de persistencia.
+        if (mounted) {
+          setState(() {
+            final idx = _hand.lastIndexWhere((c) => c.id == carta.id);
+            if (idx != -1) _hand = [..._hand]..removeAt(idx);
+            final idxI = _handInicial.lastIndexWhere((c) => c.id == carta.id);
+            if (idxI != -1) _handInicial = [..._handInicial]..removeAt(idxI);
+            _localPlayer.puntos += precio;
+            _puntosInicial += precio;
+            _robosComprados -= 1;
+          });
+        }
+        return fallo('Error al robar. Inténtalo de nuevo.');
+      }
+    }
+
+    return CompraResult(
+      ok: true,
+      mensaje: 'Has robado ${carta.nombre}.',
       energiasRestantes: _localPlayer.puntos,
     );
   }
@@ -2893,11 +3161,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     if (widget.lobbyId != null) {
       try {
+        // IMPORTANTE: persistir la mano REVERTIBLE (_handInicial), no _hand.
+        // _hand ya está vaciada por las cartas desplegadas este turno (que aún
+        // NO se han consolidado en el tablero: este solo se guarda al cerrar el
+        // turno). Si persistiéramos _hand, el servidor perdería esas cartas
+        // desplegadas: al salir a mitad de turno el tablero revierte (nunca se
+        // guardó) y la mano quedaría sin ellas → cartas desaparecidas.
+        // _handInicial = mano de inicio de turno menos las sacrificadas (ya se
+        // le quitó la carta arriba) e incluye las desplegadas revertibles, que
+        // es justo lo que el jugador debe recuperar si abandona sin cerrar.
         await _api.actualizarStats(
           lobbyId: widget.lobbyId!,
           uid: widget.localPlayerUid,
           energiesDelta: recompensa,
-          mano: _hand.map((c) => c.id).toList(),
+          mano: _handInicial.map((c) => c.id).toList(),
           mazoRestante: _mazoRestante.map((c) => c.id).toList(),
         );
       } catch (_) {
@@ -3870,6 +4147,55 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       !_estoyEliminado,
                   onDeshacer: _pedirDeshacer,
                 ),
+                // ── Volver a repartir (SOLO primer turno) ──
+                if (_boardState.turnoActual == 1 &&
+                    !_yoCerreElTurno &&
+                    !_estoyEliminado)
+                  Container(
+                    color: const Color(0xF202050D),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    child: Center(
+                      child: GestureDetector(
+                        onTap: _volverARepartir,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 14, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFC8A860).withOpacity(
+                                _puedeVolverARepartir ? 0.15 : 0.05),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: const Color(0xFFC8A860).withOpacity(
+                                  _puedeVolverARepartir ? 0.5 : 0.2),
+                              width: 1,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.refresh,
+                                  size: 14,
+                                  color: const Color(0xFFC8A860).withOpacity(
+                                      _puedeVolverARepartir ? 1 : 0.4)),
+                              const SizedBox(width: 8),
+                              Text(
+                                'VOLVER A REPARTIR',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontFamily: 'Cinzel',
+                                  letterSpacing: 1.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: const Color(0xFFC8A860).withOpacity(
+                                      _puedeVolverARepartir ? 1 : 0.4),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 _PhaseBanner(
                   handSelected: _selectedHandIndex != null,
                   inMoveMode: _inMoveMode,
@@ -3929,6 +4255,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     player: _localPlayer,
                     isMyTurn: !_yoCerreElTurno,
                     isSending: _isSendingTurn,
+                    colorOverride: _colorDeUid(_localPlayer.datos.uid,
+                        zonaFallback: _localPlayer.zona),
+                    imagenPerfil: _localPlayer.datos.imagenPerfil,
+                    // El pool de robo real es el mazo completo (8), no el
+                    // sobrante tras la mano inicial.
+                    mazoCount: _mazoCompleto.length,
+                    onVerMazo: _mostrarMazoDisponible,
                     endTurnLabel: _isSendingTurn
                         ? 'ENVIANDO'
                         : _yoCerreElTurno
@@ -4294,4 +4627,79 @@ class _CartaPropiaRef {
     required this.indice,
     required this.carta,
   });
+}
+
+// ─────────────────────────────────────────────────────────────
+// TARJETA DEL MAZO DISPONIBLE (slider del HUD inferior)
+// ─────────────────────────────────────────────────────────────
+class _MazoCard extends StatelessWidget {
+  final CartaModel carta;
+  final VoidCallback onTap;
+  const _MazoCard({required this.carta, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 96,
+        decoration: BoxDecoration(
+          color: const Color(0xFF0C1A2A),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF78591E).withOpacity(0.45)),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: carta.imagen.trim().isNotEmpty
+                  ? Image.network(
+                      carta.imagen,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const ColoredBox(
+                        color: Color(0xFF081019),
+                        child: Icon(Icons.shield_outlined,
+                            size: 26, color: Color(0xFF2A3A4A)),
+                      ),
+                    )
+                  : const ColoredBox(
+                      color: Color(0xFF081019),
+                      child: Icon(Icons.shield_outlined,
+                          size: 26, color: Color(0xFF2A3A4A)),
+                    ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    carta.nombre,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontFamily: 'Cinzel',
+                      color: Color(0xFFE0D8C0),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '⚔${carta.fuerza}  🛡${carta.defensa}  Ø${carta.coste}',
+                    style: const TextStyle(
+                      fontSize: 8,
+                      fontFamily: 'Cinzel',
+                      color: Color(0xFF6A7A8A),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

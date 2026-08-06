@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart'; // kEjercitos
+import '../services/permisos.dart';
+import '../services/warzero_api.dart';
 import 'seleccionar_carta_screen.dart';
 
 /// Pantalla para crear o editar una carta.
@@ -23,8 +25,15 @@ class CrearCartaScreen extends StatefulWidget {
 class _CrearCartaScreenState extends State<CrearCartaScreen> {
   final _formKey = GlobalKey<FormState>();
   final _db = FirebaseFirestore.instance;
+  final _api = WarZeroApi();
 
   bool get _editMode => widget.cartaEditar != null;
+
+  /// El botón "enviar a todos los usuarios" solo aparece al editar una carta ya
+  /// existente (necesita su id) y solo para cuentas con permisos de editor.
+  bool get _puedeRepartir => _editMode && esEditor();
+
+  bool _enviandoATodos = false;
 
   late final TextEditingController _nombreCtrl;
   late final TextEditingController _descripcionCtrl;
@@ -172,6 +181,67 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
       );
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Reparte esta carta a la colección de TODOS los usuarios (solo editores).
+  /// Pide confirmación, llama al backend y muestra el resultado.
+  Future<void> _enviarATodos() async {
+    final carta = widget.cartaEditar;
+    if (carta == null || _enviandoATodos) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0C1828),
+        title: const Text('Enviar a todos los usuarios',
+            style: TextStyle(color: Color(0xFFE0C060), fontFamily: 'Cinzel')),
+        content: Text(
+          'La carta "${carta.nombre}" se añadirá a la colección de TODOS los '
+          'usuarios que aún no la tengan. Esta acción no se puede deshacer.',
+          style: const TextStyle(color: Color(0xFFB0C0D0)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(false),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF90A0B0))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(true),
+            child: const Text('Enviar',
+                style: TextStyle(color: Color(0xFF4ABB58))),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _enviandoATodos = true);
+    try {
+      final res = await _api.enviarCartaATodos(carta.id);
+      if (!mounted) return;
+      final otorgadas = (res['otorgadas'] as num?)?.toInt() ?? 0;
+      final yaTenian = (res['yaTenian'] as num?)?.toInt() ?? 0;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Carta enviada. Nuevos: $otorgadas · Ya la tenían: $yaTenian',
+              style: const TextStyle(fontFamily: 'Cinzel')),
+          backgroundColor: const Color(0xFF1A2A0A),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo enviar: $e',
+              style: const TextStyle(fontFamily: 'Cinzel')),
+          backgroundColor: const Color(0xFF2A0A0A),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _enviandoATodos = false);
     }
   }
 
@@ -701,6 +771,55 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
                       ),
               ),
             ),
+
+            // ── BOTÓN ENVIAR A TODOS LOS USUARIOS (solo editores) ──
+            if (_puedeRepartir) ...[
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: _enviandoATodos ? null : _enviarATodos,
+                child: Container(
+                  width: double.infinity,
+                  height: 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [
+                      const Color(0xFF3A78C8).withOpacity(0.22),
+                      const Color(0xFF3A78C8).withOpacity(0.06),
+                    ]),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFF3A78C8).withOpacity(0.6),
+                      width: 1,
+                    ),
+                  ),
+                  child: _enviandoATodos
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Color(0xFF6AA8E8)),
+                        )
+                      : const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.groups_outlined,
+                                size: 16, color: Color(0xFF6AA8E8)),
+                            SizedBox(width: 10),
+                            Text(
+                              'ENVIAR A TODOS LOS USUARIOS',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontFamily: 'Cinzel',
+                                letterSpacing: 2,
+                                color: Color(0xFF6AA8E8),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

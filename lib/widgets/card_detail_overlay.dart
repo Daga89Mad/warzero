@@ -3,6 +3,7 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
+import 'cell_widget.dart' show ZeroChip;
 
 /// Muestra la carta en grande al centro de la pantalla.
 ///
@@ -307,12 +308,16 @@ class _CardDetailPageState extends State<_CardDetailPage>
                 ],
 
                 // ── CARTA ─────────────────────────────────────
-                _FlippingCard(
-                  controller: _flipCtrl,
-                  front: widget.carta,
-                  back: _evolucion,
-                  cardWidth: sz.width,
-                  cardHeight: sz.height,
+                // Envuelta en _PinchZoomCard: se puede ampliar con dos dedos
+                // (pellizco) y, al soltar, vuelve animada a su tamaño original.
+                _PinchZoomCard(
+                  child: _FlippingCard(
+                    controller: _flipCtrl,
+                    front: widget.carta,
+                    back: _evolucion,
+                    cardWidth: sz.width,
+                    cardHeight: sz.height,
+                  ),
                 ),
 
                 // ── CHIP DE VENENO (defensa reducida) ──
@@ -543,15 +548,25 @@ class _SacrificarButton extends StatelessWidget {
             BoxShadow(color: accent.withOpacity(0.20), blurRadius: 12),
           ],
         ),
-        child: Text(
-          busy ? 'SACRIFICANDO…' : 'SACRIFICAR  —  +$recompensaØ',
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.bold,
-            color: accent,
-            fontFamily: 'Cinzel',
-            letterSpacing: 1,
-          ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              busy ? 'SACRIFICANDO…' : 'SACRIFICAR  —  +$recompensa',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: accent,
+                fontFamily: 'Cinzel',
+                letterSpacing: 1,
+              ),
+            ),
+            if (!busy) ...[
+              const SizedBox(width: 6),
+              const ZeroChip(size: 15),
+            ],
+          ],
         ),
       ),
     );
@@ -584,6 +599,7 @@ class _HabilidadButton extends StatelessWidget {
     final color = enabled ? accent : const Color(0xFF506070);
 
     final String label;
+    bool mostrarCoste = false;
     if (busy) {
       label = 'LANZANDO…';
     } else if (enfriamientoRestante > 0) {
@@ -591,7 +607,8 @@ class _HabilidadButton extends StatelessWidget {
     } else if (energiasDisponibles < coste) {
       label = 'ENERGÍAS INSUFICIENTES  ($energiasDisponibles / $coste)';
     } else {
-      label = 'LANZAR HABILIDAD  —  $costeØ';
+      label = 'LANZAR HABILIDAD  —  $coste';
+      mostrarCoste = true;
     }
 
     return GestureDetector(
@@ -634,6 +651,10 @@ class _HabilidadButton extends StatelessWidget {
                 letterSpacing: 1.4,
               ),
             ),
+            if (mostrarCoste) ...[
+              const SizedBox(width: 6),
+              const ZeroChip(size: 15),
+            ],
           ],
         ),
       ),
@@ -825,11 +846,14 @@ class _EvolveButton extends StatelessWidget {
   Widget build(BuildContext context) {
     const accent = Color(0xFFC060E0);
     final color = enabled ? accent : const Color(0xFF506070);
+    // El coste se muestra aparte con ZeroChip (disco amarillo, Ø negro) para que
+    // no se pegue al número (antes "3Ø" parecía "30").
+    final mostrarCoste = enabled && !busy;
     final label = !enabled
         ? 'ENERGÍAS INSUFICIENTES  ($energiasDisponibles / $cost)'
         : busy
             ? 'EVOLUCIONANDO…'
-            : 'EVOLUCIONAR  —  ${cost}Ø';
+            : 'EVOLUCIONAR  —  $cost';
 
     return GestureDetector(
       onTap: enabled && !busy ? onTap : null,
@@ -871,6 +895,10 @@ class _EvolveButton extends StatelessWidget {
                 letterSpacing: 1.4,
               ),
             ),
+            if (mostrarCoste) ...[
+              const SizedBox(width: 6),
+              const ZeroChip(size: 15),
+            ],
           ],
         ),
       ),
@@ -1328,6 +1356,108 @@ class _ImagePlaceholder extends StatelessWidget {
       color: const Color(0xFF080E16),
       child: const Center(
         child: Icon(Icons.shield_outlined, size: 56, color: Color(0xFF2A3A4A)),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ZOOM POR PELLIZCO (pinch-to-zoom con retorno al soltar)
+// ─────────────────────────────────────────────────────────────
+/// Permite ampliar [child] con dos dedos (gesto de pellizco). Mientras se
+/// mantienen los dedos sobre la carta, esta escala en tiempo real siguiendo el
+/// pellizco (y se desplaza con el punto focal). Al soltar los dedos, vuelve
+/// animada a su tamaño y posición originales.
+///
+/// Solo reacciona a gestos de 2+ dedos, de modo que un toque simple sigue sin
+/// hacer nada (no interfiere con el cierre del overlay al tocar fuera).
+class _PinchZoomCard extends StatefulWidget {
+  final Widget child;
+
+  /// Escala máxima alcanzable con el pellizco.
+  final double maxScale;
+
+  const _PinchZoomCard({
+    required this.child,
+    this.maxScale = 3.0,
+  });
+
+  @override
+  State<_PinchZoomCard> createState() => _PinchZoomCardState();
+}
+
+class _PinchZoomCardState extends State<_PinchZoomCard>
+    with SingleTickerProviderStateMixin {
+  double _scale = 1.0;
+  double _baseScale = 1.0;
+  Offset _offset = Offset.zero;
+  Offset _baseOffset = Offset.zero;
+  Offset _startFocal = Offset.zero;
+
+  late final AnimationController _resetCtrl;
+  Animation<double>? _scaleAnim;
+  Animation<Offset>? _offsetAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _resetCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 240),
+    )..addListener(() {
+        setState(() {
+          if (_scaleAnim != null) _scale = _scaleAnim!.value;
+          if (_offsetAnim != null) _offset = _offsetAnim!.value;
+        });
+      });
+  }
+
+  @override
+  void dispose() {
+    _resetCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onScaleStart(ScaleStartDetails d) {
+    _resetCtrl.stop();
+    _baseScale = _scale;
+    _baseOffset = _offset;
+    _startFocal = d.localFocalPoint;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails d) {
+    // Solo pellizco real: ignoramos arrastres de un solo dedo.
+    if (d.pointerCount < 2) return;
+    setState(() {
+      _scale = (_baseScale * d.scale).clamp(1.0, widget.maxScale);
+      _offset = _baseOffset + (d.localFocalPoint - _startFocal);
+    });
+  }
+
+  void _onScaleEnd(ScaleEndDetails d) {
+    // Al soltar los dedos → volver al tamaño y posición originales.
+    if (_scale == 1.0 && _offset == Offset.zero) return;
+    _scaleAnim = Tween<double>(begin: _scale, end: 1.0).animate(
+      CurvedAnimation(parent: _resetCtrl, curve: Curves.easeOut),
+    );
+    _offsetAnim = Tween<Offset>(begin: _offset, end: Offset.zero).animate(
+      CurvedAnimation(parent: _resetCtrl, curve: Curves.easeOut),
+    );
+    _resetCtrl.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onScaleStart: _onScaleStart,
+      onScaleUpdate: _onScaleUpdate,
+      onScaleEnd: _onScaleEnd,
+      child: Transform(
+        alignment: Alignment.center,
+        transform: Matrix4.identity()
+          ..translate(_offset.dx, _offset.dy)
+          ..scale(_scale),
+        child: widget.child,
       ),
     );
   }

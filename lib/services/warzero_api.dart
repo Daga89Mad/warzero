@@ -387,6 +387,50 @@ class WarZeroApi {
     throw Exception('seleccionarSkin HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// [Solo editores] Reparte una carta a la colección de TODOS los usuarios.
+  /// El servidor crea la entrada Jugadores/{uid}/Coleccion/{cartaId} para quien
+  /// no la tuviera (sin tocar la cantidad de quien ya la posee). Devuelve el
+  /// resumen {ok, jugadores, otorgadas, yaTenian}.
+  Future<Map<String, dynamic>> enviarCartaATodos(String cartaId) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/carta/repartir-todos'),
+        headers: _headers,
+        body: jsonEncode({'cartaId': cartaId}),
+      ),
+      etiqueta: 'carta/repartir-todos',
+      intentos: 2,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST carta/repartir-todos status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw Exception('enviarCartaATodos HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// [Solo editores] Reparte una skin a TODOS los usuarios: la añade a las
+  /// skins desbloqueadas de la carta asociada en la colección de cada jugador
+  /// (creando la entrada de la carta si no la tuvieran). Devuelve el resumen
+  /// {ok, skinId, cartaId, jugadores, otorgadas}.
+  Future<Map<String, dynamic>> enviarSkinATodos(String skinId) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/skin/repartir-todos'),
+        headers: _headers,
+        body: jsonEncode({'skinId': skinId}),
+      ),
+      etiqueta: 'skin/repartir-todos',
+      intentos: 2,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST skin/repartir-todos status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw Exception('enviarSkinATodos HTTP ${res.statusCode}: ${res.body}');
+  }
+
   /// Actualiza los stats de partida del jugador (energías, mano/mazo, compras)
   /// vía API, sin escribir en Firestore desde el cliente. Todos los campos son
   /// opcionales; solo se aplican los que se envían. `energiesDelta` se aplica
@@ -396,6 +440,7 @@ class WarZeroApi {
     required String uid,
     int? energiesDelta,
     String? especialComprada,
+    int? robosDelta,
     List<String>? mano,
     List<String>? mazoRestante,
   }) async {
@@ -408,6 +453,7 @@ class WarZeroApi {
           'uid': uid,
           if (energiesDelta != null) 'energiesDelta': energiesDelta,
           if (especialComprada != null) 'especialComprada': especialComprada,
+          if (robosDelta != null) 'robosDelta': robosDelta,
           if (mano != null) 'mano': mano,
           if (mazoRestante != null) 'mazoRestante': mazoRestante,
         }),

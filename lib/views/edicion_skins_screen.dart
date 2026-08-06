@@ -3,6 +3,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
+import '../services/permisos.dart';
+import '../services/warzero_api.dart';
 
 /// Rarezas disponibles (id interno → etiqueta visible), de menor a mayor.
 const List<({String id, String label, Color color})> kRarezas = [
@@ -292,12 +294,18 @@ class _EditorSkin extends StatefulWidget {
 class _EditorSkinState extends State<_EditorSkin> {
   static const _accent = Color(0xFF30B0A0);
   final _col = FirebaseFirestore.instance.collection('Skins');
+  final _api = WarZeroApi();
   final _urlCtrl = TextEditingController();
   final _searchCtrl = TextEditingController();
 
   String? _cartaId;
   String _rareza = 'comun';
   bool _saving = false;
+  bool _enviandoATodos = false;
+
+  /// El botón "enviar a todos" solo aparece al editar una skin ya existente
+  /// (necesita su docId) y solo para cuentas con permisos de editor.
+  bool get _puedeRepartir => widget.skin != null && esEditor();
 
   @override
   void initState() {
@@ -394,6 +402,53 @@ class _EditorSkinState extends State<_EditorSkin> {
         setState(() => _saving = false);
         _toast('No se pudo eliminar: $e', error: true);
       }
+    }
+  }
+
+  /// Reparte esta skin a TODOS los usuarios (solo editores). La skin se añade a
+  /// las desbloqueadas de la carta asociada en la colección de cada jugador.
+  Future<void> _enviarATodos() async {
+    final skin = widget.skin;
+    if (skin == null || _enviandoATodos) return;
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0C1828),
+        title: const Text('Enviar skin a todos',
+            style: TextStyle(color: Color(0xFF30B0A0), fontFamily: 'Cinzel')),
+        content: const Text(
+          'Esta skin se desbloqueará para TODOS los usuarios en la carta '
+          'asociada. Esta acción no se puede deshacer.',
+          style: TextStyle(color: Color(0xFFB0C0D0)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(false),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF90A0B0))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dctx).pop(true),
+            child: const Text('Enviar',
+                style: TextStyle(color: Color(0xFF30B0A0))),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _enviandoATodos = true);
+    try {
+      final res = await _api.enviarSkinATodos(skin.docId);
+      if (!mounted) return;
+      final otorgadas = (res['otorgadas'] as num?)?.toInt() ?? 0;
+      _toast('Skin enviada a $otorgadas usuario(s).');
+    } catch (e) {
+      if (!mounted) return;
+      _toast('No se pudo enviar: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _enviandoATodos = false);
     }
   }
 
@@ -592,6 +647,53 @@ class _EditorSkinState extends State<_EditorSkin> {
                 ),
             ],
           ),
+
+          // ── ENVIAR A TODOS LOS USUARIOS (solo editores) ──
+          if (_puedeRepartir) ...[
+            const SizedBox(height: 28),
+            GestureDetector(
+              onTap: _enviandoATodos ? null : _enviarATodos,
+              child: Container(
+                height: 48,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [
+                    const Color(0xFF3A78C8).withOpacity(0.22),
+                    const Color(0xFF3A78C8).withOpacity(0.06),
+                  ]),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                      color: const Color(0xFF3A78C8).withOpacity(0.6),
+                      width: 1),
+                ),
+                child: _enviandoATodos
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Color(0xFF6AA8E8)),
+                      )
+                    : const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.groups_outlined,
+                              size: 16, color: Color(0xFF6AA8E8)),
+                          SizedBox(width: 10),
+                          Text(
+                            'ENVIAR A TODOS LOS USUARIOS',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontFamily: 'Cinzel',
+                              letterSpacing: 2,
+                              color: Color(0xFF6AA8E8),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+          ],
         ],
       ),
       bottomNavigationBar: SafeArea(

@@ -365,6 +365,19 @@ class BottomHudBar extends StatelessWidget {
   /// Si es true, el botón fin de turno muestra un spinner "ENVIANDO…".
   final bool isSending;
 
+  /// Color asignado al jugador en la partida (obelisco/zona). Si es null, se usa
+  /// el color de zona por defecto.
+  final Color? colorOverride;
+
+  /// URL de la imagen de perfil. Si está vacía, se muestra la inicial del alias.
+  final String imagenPerfil;
+
+  /// Nº de cartas que quedan en el mazo (las que le pueden ir tocando).
+  final int mazoCount;
+
+  /// Al pulsar "MAZO DISPONIBLE" se abre el slider con las cartas del mazo.
+  final VoidCallback? onVerMazo;
+
   const BottomHudBar({
     super.key,
     required this.player,
@@ -372,6 +385,10 @@ class BottomHudBar extends StatelessWidget {
     this.onEndTurn,
     this.endTurnLabel = 'FIN\nTURNO',
     this.isSending = false,
+    this.colorOverride,
+    this.imagenPerfil = '',
+    this.mazoCount = 0,
+    this.onVerMazo,
   });
 
   @override
@@ -383,6 +400,10 @@ class BottomHudBar extends StatelessWidget {
       onEndTurn: onEndTurn,
       endTurnLabel: endTurnLabel,
       isSending: isSending,
+      colorOverride: colorOverride,
+      imagenPerfil: imagenPerfil,
+      mazoCount: mazoCount,
+      onVerMazo: onVerMazo,
       borderSide:
           const Border(top: BorderSide(color: Color(0x3C283C20), width: 1)),
     );
@@ -401,6 +422,18 @@ class _HudBar extends StatelessWidget {
   final bool isSending;
   final VoidCallback? onBack;
 
+  /// (Solo HUD local) color asignado en la partida; si null → color de zona.
+  final Color? colorOverride;
+
+  /// (Solo HUD local) imagen de perfil; si vacía → inicial del alias.
+  final String imagenPerfil;
+
+  /// (Solo HUD local) nº de cartas del mazo disponible.
+  final int mazoCount;
+
+  /// (Solo HUD local) abre el slider del mazo disponible.
+  final VoidCallback? onVerMazo;
+
   const _HudBar({
     required this.player,
     required this.isEnemy,
@@ -411,6 +444,10 @@ class _HudBar extends StatelessWidget {
     this.endTurnLabel = 'FIN\nTURNO',
     this.isSending = false,
     this.onBack,
+    this.colorOverride,
+    this.imagenPerfil = '',
+    this.mazoCount = 0,
+    this.onVerMazo,
   });
 
   Color get _zoneColor {
@@ -430,7 +467,9 @@ class _HudBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = _zoneColor;
+    // HUD local: color asignado en la partida; enemigo: color de zona.
+    final color =
+        (!isEnemy && colorOverride != null) ? colorOverride! : _zoneColor;
     const maxVida = 20;
 
     return Container(
@@ -460,26 +499,26 @@ class _HudBar extends StatelessWidget {
             ),
             const SizedBox(width: 8),
           ],
-          // ── Avatar ──
+          // ── Avatar: imagen de perfil (HUD local) o inicial del alias ──
           Container(
             width: 36,
             height: 36,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color.withOpacity(0.12),
               border: Border.all(color: color.withOpacity(0.5), width: 1.5),
             ),
-            child: Center(
-              child: Text(
-                player.alias.isNotEmpty ? player.alias[0].toUpperCase() : '?',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                  fontFamily: 'Cinzel',
-                ),
-              ),
-            ),
+            child: (!isEnemy && imagenPerfil.trim().isNotEmpty)
+                ? Image.network(
+                    imagenPerfil,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _AvatarInicial(
+                      alias: player.alias,
+                      color: color,
+                    ),
+                  )
+                : _AvatarInicial(alias: player.alias, color: color),
           ),
           const SizedBox(width: 10),
 
@@ -493,10 +532,12 @@ class _HudBar extends StatelessWidget {
                   children: [
                     Text(
                       player.alias.toUpperCase(),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 10,
                         letterSpacing: 2,
-                        color: Color(0xFFC8A860),
+                        color: isEnemy ? const Color(0xFFC8A860) : color,
+                        fontWeight:
+                            isEnemy ? FontWeight.normal : FontWeight.bold,
                         fontFamily: 'Cinzel',
                       ),
                     ),
@@ -535,34 +576,79 @@ class _HudBar extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(2),
-                        child: LinearProgressIndicator(
-                          value: player.vida / maxVida,
-                          backgroundColor: Colors.white.withOpacity(0.06),
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            isEnemy
-                                ? const Color(0xFFC04040)
-                                : const Color(0xFF50C860),
+                // HUD local: "MAZO DISPONIBLE" pulsable (abre el slider del
+                // mazo). HUD enemigo: se mantiene la barra clásica.
+                if (!isEnemy)
+                  GestureDetector(
+                    onTap: onVerMazo,
+                    behavior: HitTestBehavior.opaque,
+                    child: Row(
+                      children: [
+                        Icon(Icons.style, size: 12, color: color),
+                        const SizedBox(width: 5),
+                        Text(
+                          'MAZO DISPONIBLE',
+                          style: TextStyle(
+                            fontSize: 8,
+                            letterSpacing: 1,
+                            color: color,
+                            fontFamily: 'Cinzel',
+                            fontWeight: FontWeight.bold,
                           ),
-                          minHeight: 4,
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(
+                                color: color.withOpacity(0.4), width: 0.5),
+                          ),
+                          child: Text(
+                            '$mazoCount',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: color,
+                              fontFamily: 'Cinzel',
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(Icons.expand_less,
+                            size: 14, color: color.withOpacity(0.7)),
+                      ],
+                    ),
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: player.vida / maxVida,
+                            backgroundColor: Colors.white.withOpacity(0.06),
+                            valueColor: const AlwaysStoppedAnimation<Color>(
+                              Color(0xFFC04040),
+                            ),
+                            minHeight: 4,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      '${player.vida}/$maxVida',
-                      style: const TextStyle(
-                        fontSize: 9,
-                        color: Color(0xFF506070),
-                        fontFamily: 'Cinzel',
+                      const SizedBox(width: 8),
+                      Text(
+                        '${player.vida}/$maxVida',
+                        style: const TextStyle(
+                          fontSize: 9,
+                          color: Color(0xFF506070),
+                          fontFamily: 'Cinzel',
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -588,6 +674,29 @@ class _HudBar extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+// ── Avatar con la inicial del alias (fallback sin imagen de perfil) ──
+class _AvatarInicial extends StatelessWidget {
+  final String alias;
+  final Color color;
+
+  const _AvatarInicial({required this.alias, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Text(
+        alias.isNotEmpty ? alias[0].toUpperCase() : '?',
+        style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.bold,
+          color: color,
+          fontFamily: 'Cinzel',
+        ),
       ),
     );
   }
