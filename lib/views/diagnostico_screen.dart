@@ -127,104 +127,141 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
   Future<void> _diagnosticarNotificaciones() async {
     if (_ocupado) return;
     setState(() => _ocupado = true);
-    // Feedback INMEDIATO (antes de cualquier await): así, aunque algo falle
-    // después, siempre ves al menos esta línea y sabes que el botón funciona.
-    _add('🔔 Diagnóstico push', 'Iniciando…');
+    // NO usamos el log de la lista (en pantallas estrechas queda aplastado y no
+    // se ve). Acumulamos el informe y lo mostramos en un diálogo al final.
+    final rep = StringBuffer();
+    void ln([String s = '']) => rep.writeln(s);
+    String? fcm;
     try {
       final fm = FirebaseMessaging.instance;
+      ln('== DIAGNÓSTICO PUSH ==');
 
-      // 1) Permiso del sistema (aislado: si falla, seguimos igual).
+      // 1) Permiso del sistema.
       try {
         final settings =
             await fm.requestPermission(alert: true, badge: true, sound: true);
-        final st = settings.authorizationStatus;
-        final ok = st == AuthorizationStatus.authorized ||
-            st == AuthorizationStatus.provisional;
-        _add(ok ? '✅ Permiso push' : '❌ Permiso push',
-            'authorizationStatus: $st',
-            error: !ok);
+        ln('Permiso: ${settings.authorizationStatus}');
       } catch (e) {
-        _add('❌ Permiso push (excepción)', '${e.runtimeType}: $e', error: true);
+        ln('Permiso: ERROR ${e.runtimeType}: $e');
       }
 
-      // 2) Token APNs (solo iOS) con reintentos, mostrando cada intento.
+      // 2) Token APNs (solo iOS) con reintentos.
       if (!kIsWeb && Platform.isIOS) {
         String? apns;
         for (var i = 0; i < 5; i++) {
           try {
             apns = await fm.getAPNSToken();
           } catch (e) {
-            _add('⚠️ getAPNSToken lanzó',
-                '(intento ${i + 1}) ${e.runtimeType}: $e',
-                error: true);
+            ln('getAPNSToken intento ${i + 1}: ERROR ${e.runtimeType}: $e');
           }
           if (apns != null && apns.isNotEmpty) break;
-          _add('… APNs', 'aún null (intento ${i + 1}/5)…');
           await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
         }
         if (apns == null || apns.isEmpty) {
-          _add(
-              '❌ APNs token',
-              'NULL tras reintentos → iOS NO está registrado en APNs. Falta '
-                  'config del build: capability "Push Notifications" + entitlement '
-                  'aps-environment, provisioning con push, o la clave APNs (.p8) en '
-                  'Firebase. Mientras sea NULL, NO habrá token FCM ni llegarán avisos.',
-              error: true);
-          return; // sin APNs, getToken fallará en iOS
+          ln('APNs token: NULL tras 5 intentos');
+          ln();
+          ln('=> iOS NO está registrado en APNs. Falta config del build: '
+              'capability "Push Notifications", entitlement aps-environment, '
+              'provisioning con push, o la clave APNs (.p8) en Firebase. Sin '
+              'APNs no hay token FCM y no llegan avisos.');
+          await _mostrarReporte(rep.toString(), null);
+          return;
         }
-        _add('✅ APNs token', apns);
+        ln('APNs token: OK');
+        ln(apns);
       }
 
       // 3) Token FCM.
-      String? fcm;
       try {
         fcm = await fm.getToken();
       } catch (e) {
-        _add('❌ FCM getToken', '${e.runtimeType}: $e', error: true);
+        ln('getToken: ERROR ${e.runtimeType}: $e');
       }
       if (fcm == null || fcm.isEmpty) {
-        _add('❌ FCM token', 'NULL. El dispositivo no obtiene token FCM.',
-            error: true);
+        ln('FCM token: NULL (el dispositivo no obtiene token)');
       } else {
+        ln('FCM token:');
+        ln(fcm);
         try {
           await Clipboard.setData(ClipboardData(text: fcm));
+          ln('(copiado al portapapeles)');
         } catch (_) {}
-        _add('✅ FCM token (copiado al portapapeles)', fcm);
       }
 
-      // 4) Estado en Firestore (Jugadores/{uid}.fcmTokens + fcmTokensMeta).
+      // 4) Estado en Firestore.
       try {
         final snap = await _db.collection('Jugadores').doc(_miUid).get();
         final data = snap.data() ?? {};
         final tokens = (data['fcmTokens'] as List?) ?? const [];
         final meta = (data['fcmTokensMeta'] as Map?) ?? const {};
-        final buf = StringBuffer('total tokens: ${tokens.length}\n');
+        ln();
+        ln('Firestore: ${tokens.length} token(s)');
         for (final t in tokens) {
           final m = (meta[t] as Map?) ?? const {};
-          final plat = m['platform'] ?? '?';
           final act = m['actualizado'];
           final actStr = act is Timestamp ? act.toDate().toString() : '$act';
-          final tt = '$t';
-          final corto = tt.length > 18 ? '${tt.substring(0, 18)}…' : tt;
-          buf.writeln('· [$plat] $corto  act=$actStr');
+          ln('- [${m['platform'] ?? '?'}] act=$actStr');
         }
         final coincide = fcm != null && tokens.contains(fcm);
-        _add(
-            coincide ? '✅ Firestore tokens' : '⚠️ Firestore tokens',
-            '${buf.toString().trim()}\n\nEl token actual '
-            '${coincide ? "SÍ" : "NO"} está guardado en Firestore.',
-            error: !coincide);
+        ln('Token actual guardado en Firestore: ${coincide ? "SI" : "NO"}');
       } catch (e) {
-        _add('❌ Firestore tokens', '${e.runtimeType}: $e', error: true);
+        ln('Firestore: ERROR ${e.runtimeType}: $e');
       }
 
-      _add('🔔 Diagnóstico push', 'Fin.');
+      await _mostrarReporte(rep.toString(), fcm);
     } catch (e) {
-      // Red de seguridad: cualquier error no previsto se muestra en pantalla.
-      _add('❌ Diagnóstico push (error)', '${e.runtimeType}: $e', error: true);
+      ln();
+      ln('ERROR GENERAL ${e.runtimeType}: $e');
+      await _mostrarReporte(rep.toString(), fcm);
     } finally {
       if (mounted) setState(() => _ocupado = false);
     }
+  }
+
+  /// Muestra el informe de diagnóstico en un diálogo (independiente de la lista
+  /// del log, que en pantallas estrechas puede quedar sin espacio). Permite
+  /// copiar el token o el informe completo.
+  Future<void> _mostrarReporte(String texto, String? fcm) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F1824),
+        title: const Text('Diagnóstico push',
+            style: TextStyle(
+                color: Color(0xFFC8A860), fontFamily: 'Cinzel', fontSize: 16)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              texto,
+              style: const TextStyle(
+                  color: Color(0xFFB8C4D0),
+                  fontFamily: 'monospace',
+                  fontSize: 12),
+            ),
+          ),
+        ),
+        actions: [
+          if (fcm != null && fcm.isNotEmpty)
+            TextButton(
+              onPressed: () => Clipboard.setData(ClipboardData(text: fcm)),
+              child: const Text('Copiar token',
+                  style: TextStyle(color: Color(0xFF40B0FF))),
+            ),
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: texto)),
+            child: const Text('Copiar todo',
+                style: TextStyle(color: Color(0xFFC8A860))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cerrar',
+                style: TextStyle(color: Color(0xFF8090A0))),
+          ),
+        ],
+      ),
+    );
   }
 
   // ★★ TEST DE FUGA DE LISTENERS — simula tu ciclo entrar/salir de la partida.
