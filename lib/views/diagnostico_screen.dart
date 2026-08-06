@@ -127,27 +127,39 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
   Future<void> _diagnosticarNotificaciones() async {
     if (_ocupado) return;
     setState(() => _ocupado = true);
+    // Feedback INMEDIATO (antes de cualquier await): así, aunque algo falle
+    // después, siempre ves al menos esta línea y sabes que el botón funciona.
+    _add('🔔 Diagnóstico push', 'Iniciando…');
     try {
       final fm = FirebaseMessaging.instance;
 
-      // 1) Permiso del sistema.
-      final settings =
-          await fm.requestPermission(alert: true, badge: true, sound: true);
-      final st = settings.authorizationStatus;
-      final permisoOk = st == AuthorizationStatus.authorized ||
-          st == AuthorizationStatus.provisional;
-      _add(permisoOk ? '✅ Permiso push' : '❌ Permiso push',
-          'authorizationStatus: $st',
-          error: !permisoOk);
+      // 1) Permiso del sistema (aislado: si falla, seguimos igual).
+      try {
+        final settings =
+            await fm.requestPermission(alert: true, badge: true, sound: true);
+        final st = settings.authorizationStatus;
+        final ok = st == AuthorizationStatus.authorized ||
+            st == AuthorizationStatus.provisional;
+        _add(ok ? '✅ Permiso push' : '❌ Permiso push',
+            'authorizationStatus: $st',
+            error: !ok);
+      } catch (e) {
+        _add('❌ Permiso push (excepción)', '${e.runtimeType}: $e', error: true);
+      }
 
-      // 2) Token APNs (solo iOS) con reintentos.
+      // 2) Token APNs (solo iOS) con reintentos, mostrando cada intento.
       if (!kIsWeb && Platform.isIOS) {
         String? apns;
         for (var i = 0; i < 5; i++) {
           try {
             apns = await fm.getAPNSToken();
-          } catch (_) {}
+          } catch (e) {
+            _add('⚠️ getAPNSToken lanzó',
+                '(intento ${i + 1}) ${e.runtimeType}: $e',
+                error: true);
+          }
           if (apns != null && apns.isNotEmpty) break;
+          _add('… APNs', 'aún null (intento ${i + 1}/5)…');
           await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
         }
         if (apns == null || apns.isEmpty) {
@@ -156,8 +168,7 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
               'NULL tras reintentos → iOS NO está registrado en APNs. Falta '
                   'config del build: capability "Push Notifications" + entitlement '
                   'aps-environment, provisioning con push, o la clave APNs (.p8) en '
-                  'Firebase. Mientras esto sea NULL, NO habrá token FCM ni llegará '
-                  'ninguna notificación.',
+                  'Firebase. Mientras sea NULL, NO habrá token FCM ni llegarán avisos.',
               error: true);
           return; // sin APNs, getToken fallará en iOS
         }
@@ -175,7 +186,9 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
         _add('❌ FCM token', 'NULL. El dispositivo no obtiene token FCM.',
             error: true);
       } else {
-        await Clipboard.setData(ClipboardData(text: fcm));
+        try {
+          await Clipboard.setData(ClipboardData(text: fcm));
+        } catch (_) {}
         _add('✅ FCM token (copiado al portapapeles)', fcm);
       }
 
@@ -204,6 +217,11 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
       } catch (e) {
         _add('❌ Firestore tokens', '${e.runtimeType}: $e', error: true);
       }
+
+      _add('🔔 Diagnóstico push', 'Fin.');
+    } catch (e) {
+      // Red de seguridad: cualquier error no previsto se muestra en pantalla.
+      _add('❌ Diagnóstico push (error)', '${e.runtimeType}: $e', error: true);
     } finally {
       if (mounted) setState(() => _ocupado = false);
     }
