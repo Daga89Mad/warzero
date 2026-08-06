@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:warzero/services/settings_controller.dart';
+import 'package:warzero/services/permisos.dart';
 import 'package:warzero/views/loginBody.dart';
 import 'package:warzero/views/settingsScreen.dart';
 import 'package:warzero/views/lobby_screen.dart';
@@ -33,15 +34,9 @@ class MenuScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final war = context.war;
     final user = FirebaseAuth.instance.currentUser;
-    // Solo estos correos pueden ver/usar la edición de cartas.
-    const editores = {
-      'qa85@daga.com',
-      'dagahh89@gmail.com',
-      'qa104@daga.com',
-      'qa106@daga.com'
-    };
-    final puedeEditar =
-        editores.contains((user?.email ?? '').trim().toLowerCase());
+    // Solo las cuentas de editor/QA (fuente única: services/permisos.dart)
+    // pueden ver/usar la edición de contenido y el diagnóstico.
+    final puedeEditar = esEditor(user);
     final alias =
         user?.displayName ?? user?.email?.split('@').first ?? 'Comandante';
 

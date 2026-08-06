@@ -162,10 +162,29 @@ class LobbyService {
   }
 
   // ── Iniciar partida (solo host) ───────────────────────────
+  /// El botón "Iniciar batalla" solo está activo cuando TODOS los jugadores
+  /// presentes han elegido ejército (canStart = todosListos), así que aquí nunca
+  /// hay humanos sin ejército: solo huecos vacíos.
+  ///   • Si faltan jugadores → marca `rellenarBots` para que el servidor
+  ///     (orquestador) rellene los huecos con bots; al quedar llena y todos
+  ///     listos, arranca sola y envía la notificación push.
+  ///   • Si la sala ya está completa → arranca directamente.
+  /// La navegación al juego la dispara el stream cuando `estado` = `en_curso`.
   Future<void> iniciarPartida(String lobbyId) async {
-    await _db.collection('Partidas').doc(lobbyId).update({
-      'estado': 'en_curso',
-    });
+    final doc = await _db.collection('Partidas').doc(lobbyId).get();
+    if (!doc.exists) return;
+    final lobby = LobbyModel.fromFirestore(doc);
+    final huecos = lobby.maxJugadores - lobby.jugadores.length;
+
+    if (huecos > 0) {
+      await _db.collection('Partidas').doc(lobbyId).update({
+        'rellenarBots': true,
+      });
+    } else {
+      await _db.collection('Partidas').doc(lobbyId).update({
+        'estado': 'en_curso',
+      });
+    }
   }
 
   /// Garantiza que el campo `participantes` contiene a todos los jugadores

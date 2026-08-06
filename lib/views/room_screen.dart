@@ -69,8 +69,10 @@ class _RoomScreenState extends State<RoomScreen> {
   }
 
   Future<void> _iniciarPartida(LobbyModel lobby) async {
+    // NO navegamos aquí: iniciarPartida puede diferir el arranque (pide al
+    // servidor que rellene los huecos con bots). La navegación al juego la
+    // dispara el propio stream cuando `estado` pasa a `en_curso` (ver build).
     await _service.iniciarPartida(widget.lobbyId);
-    _goToGame(lobby);
   }
 
   /// Salida EXPLÍCITA de la sala (botón de salir de la cabecera). El botón

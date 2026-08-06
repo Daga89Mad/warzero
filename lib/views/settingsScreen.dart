@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:warzero/services/settings_controller.dart';
 import '../services/settings_controller.dart';
 import 'diagnostico_screen.dart';
+import '../services/permisos.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -78,31 +79,34 @@ class SettingsScreen extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: 24),
-
-              // ── Diagnóstico ──────────────────────────────────
-              _Seccion(
-                titulo: 'DIAGNÓSTICO',
-                color: tema.primario,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Herramientas para depurar red y notificaciones push.',
-                      style: TextStyle(color: tema.textoTenue, fontSize: 12),
-                    ),
-                    const SizedBox(height: 10),
-                    ElevatedButton.icon(
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const DiagnosticoScreen()),
+              // ── Diagnóstico (solo cuentas de editor/QA) ──────
+              // Se OCULTA por completo si el usuario no tiene permisos de editor
+              // (mismo criterio que la edición de contenido: ver permisos.dart).
+              if (esEditor()) ...[
+                const SizedBox(height: 24),
+                _Seccion(
+                  titulo: 'DIAGNÓSTICO',
+                  color: tema.primario,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Herramientas para depurar red y notificaciones push.',
+                        style: TextStyle(color: tema.textoTenue, fontSize: 12),
                       ),
-                      icon: const Icon(Icons.bug_report),
-                      label: const Text('Abrir diagnóstico'),
-                    ),
-                  ],
+                      const SizedBox(height: 10),
+                      ElevatedButton.icon(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const DiagnosticoScreen()),
+                        ),
+                        icon: const Icon(Icons.bug_report),
+                        label: const Text('Abrir diagnóstico'),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         );
