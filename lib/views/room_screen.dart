@@ -701,7 +701,10 @@ class _RoomFooter extends StatelessWidget {
     final me = lobby.jugadores.firstWhere((j) => j.uid == localUid,
         orElse: () => LobbyJugador(uid: localUid, alias: 'Jugador'));
     final mismoEjercito = selectedEjercito ?? me.ejercitoId;
-    final canStart = isHost && lobby.todosListos && lobby.jugadores.length >= 2;
+    // El host puede iniciar aunque falten jugadores: los huecos los rellenan
+    // los bots (el servidor marca `rellenarBots`). Basta con que él (y cualquier
+    // humano presente) haya elegido ejército.
+    final canStart = isHost && lobby.todosListos && lobby.jugadores.isNotEmpty;
     final hasEjercito = mismoEjercito != null;
 
     return Container(

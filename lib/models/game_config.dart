@@ -171,13 +171,38 @@ class GameConfig {
   /// El terreno se conserva tal cual: las coordenadas que caigan fuera de la
   /// nueva rejilla simplemente no se pintan (y `terrainAt` sigue devolviendo
   /// `land` para las nuevas celdas sin definir).
-  GameConfig withGrid({int? filas, int? columnas}) => GameConfig(
-        playerCount: playerCount,
-        rowLabels: filas != null ? generarRowLabels(filas) : rowLabels,
-        colLabels: columnas != null ? generarColLabels(columnas) : colLabels,
-        zones: zones,
-        terrainMap: terrainMap,
-      );
+  ///
+  /// IMPORTANTE (fix bug 8 jugadores): la rejilla NUNCA se encoge por debajo del
+  /// preset del nº de jugadores. Los cuarteles se colocan según ese preset
+  /// (`Coords.ObeliscosFallback` en el backend / `forPlayerCount` aquí), de modo
+  /// que en 8 jugadores caen en los bordes extremos (fila `L`, columna `18`). Si
+  /// un mapa NO declara `filas`/`columnas` y su terreno pintado no llega hasta
+  /// esos bordes, las dimensiones inferidas encogerían la rejilla y el cuartel
+  /// quedaría FUERA del tablero: se podría desplegar en él (solo compara la
+  /// coord del obelisco) pero NO mover desde él (el BFS de movimiento llama a
+  /// `_coordToPos`, que con `rowLabels.indexOf('L') == -1` devuelve null y deja
+  /// el alcance vacío). Por eso aquí tomamos el MÁXIMO entre lo solicitado y el
+  /// preset: la rejilla solo puede crecer, nunca reducirse por debajo de lo que
+  /// el nº de jugadores necesita.
+  GameConfig withGrid({int? filas, int? columnas}) {
+    final preset = forPlayerCount(playerCount);
+
+    final solicitadasFilas = filas ?? rows;
+    final solicitadasColumnas = columnas ?? cols;
+
+    final finalFilas =
+        solicitadasFilas > preset.rows ? solicitadasFilas : preset.rows;
+    final finalColumnas =
+        solicitadasColumnas > preset.cols ? solicitadasColumnas : preset.cols;
+
+    return GameConfig(
+      playerCount: playerCount,
+      rowLabels: generarRowLabels(finalFilas),
+      colLabels: generarColLabels(finalColumnas),
+      zones: zones,
+      terrainMap: terrainMap,
+    );
+  }
 
   // ─────────────────────────────────────────────────────────
   // Presets

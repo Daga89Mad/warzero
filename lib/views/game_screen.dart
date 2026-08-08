@@ -143,6 +143,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Estado `alianzas` de la partida (para la pantalla y los avisos).
   Map<String, dynamic> _alianzas = {};
 
+  /// uids aliados del jugador local (incluye su propio uid). Se recalcula en
+  /// [_revisarAlianzas] y se pasa al tablero para que una casilla compartida
+  /// SOLO con aliados se pinte como pila amistosa y no como combate.
+  Set<String> _aliadosLocal = {};
+
   /// Claves de propuestas/avisos ya mostrados (para no repetir en cada sondeo).
   final Set<String> _alianzaVistos = {};
 
@@ -969,6 +974,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// llegó a aplicarse (obeliscos/celdas en columnas/filas fuera del preset):
   /// sin esto, el cuartel puede caer fuera del tablero y "no aparece ninguna
   /// casilla" al desplegar.
+  /// Expande (nunca encoge) la rejilla de [_config] para que contenga [coords]
+  /// y propaga la nueva config al AccionController. Red de seguridad usada tanto
+  /// al recibir estado por el stream (obeliscos que llegan tarde en partidas de
+  /// 8 jugadores) como al iniciar un movimiento (garantiza que la celda de
+  /// ORIGEN está en la rejilla; si no lo está, el BFS no encuentra la casilla y
+  /// no se pintan las casillas verdes de destino). Devuelve true si expandió.
+  bool _expandirGridSiHaceFalta(Iterable<String> coords) {
+    final d = _dimsDesdeCoords(coords);
+    if (d.rows > _config.rows || d.cols > _config.cols) {
+      setState(() {
+        _config = _config.withGrid(
+          filas: d.rows > _config.rows ? d.rows : _config.rows,
+          columnas: d.cols > _config.cols ? d.cols : _config.cols,
+        );
+        _accionController.actualizarConfig(_config);
+      });
+      return true;
+    }
+    return false;
+  }
+
   void _ajustarGridAContenido(
       Map<String, dynamic> data, Map<String, String> obeliscos) {
     final coords = <String>{}
@@ -1558,6 +1584,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         if (juegoTerminado) _ganadorUid = lobby.ganadorUid;
       });
 
+      // Red de seguridad de rejilla EN TIEMPO REAL (bug 8 jugadores): si algún
+      // obelisco llega o cambia por el stream —en partidas de 8 jugadores los
+      // cuarteles se asignan de forma escalonada y caen en los bordes del
+      // tablero (fila L / columna 18)— re-expandimos la rejilla para que los
+      // contenga. En _loadGame ya se hacía (via _ajustarGridAContenido), pero
+      // aquí faltaba: un cuartel que no estaba en _config al cargar quedaba
+      // FUERA de la rejilla y luego no se podía mover desde él (el BFS no
+      // encuentra la casilla de origen y no aparecen los recuadros verdes),
+      // aunque sí se pudiera desplegar en él.
+      if (streamObeliscos.isNotEmpty) {
+        _ajustarGridAContenido(data, streamObeliscos);
+      }
+
       // Mostrar diálogo de eliminación si acaba de ocurrir
       if (!yaEliminadoAntes && ahoraEliminado) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1907,6 +1946,43 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // LÓGICA DE INTERACCIÓN
   // ─────────────────────────────────────────────────────────
 
+  /// Celdas donde se puede desplegar la carta seleccionada de la mano, para
+  /// resaltarlas en verde. Debe coincidir EXACTAMENTE con la validación de
+  /// [_tryPlaceFromHand]:
+  ///   • Cartas normales → solo el cuartel.
+  ///   • Cartas estáticas → cualquier celda (que no sea el cuartel) donde el
+  ///     jugador ya tenía una carta al inicio del turno, que no se haya movido
+  ///     este turno, con terreno compatible y sin escudo rival.
+  Set<String> get _deployCoords {
+    final idx = _selectedHandIndex;
+    if (idx == null || idx >= _hand.length) return const {};
+    final carta = _hand[idx];
+    final miUid = _localPlayer.datos.uid;
+
+    if (!carta.esEstatica) {
+      final o = _obeliscoLocal;
+      if (o == null) return const {};
+      if (_boardState.celdaProtegidaPorRival(o, miUid)) return const {};
+      return {o};
+    }
+
+    final res = <String>{};
+    for (final entry in _boardStateInicial.celdas.entries) {
+      final coord = entry.key;
+      if (coord == _obeliscoLocal) continue;
+      final propias =
+          entry.value.cartas.where((c) => c.ownerUid == miUid).toList();
+      if (propias.isEmpty) continue;
+      if (propias.any((c) => _cartasMovidasEsteTurno.contains(c.instanceId))) {
+        continue;
+      }
+      if (!_config.canLand(coord, carta.tipo)) continue;
+      if (_boardState.celdaProtegidaPorRival(coord, miUid)) continue;
+      res.add(coord);
+    }
+    return res;
+  }
+
   void _onCellTap(String coord, int ri, int ci) {
     // ── Modo acción: selección de objetivos ────────────────
     if (_inActionMode) {
@@ -2097,6 +2173,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     final est = EstadoAlianzas.fromMap(_alianzas);
     final miUid = widget.localPlayerUid;
+
+    // Conjunto de aliados del jugador local (él mismo + su aliado activo, si lo
+    // hay). El tablero lo usa para NO pintar como combate una casilla que solo
+    // comparto con mi aliado. Se actualiza vía setState porque afecta al render.
+    final aliadoActivo = est.aliadoDe(miUid);
+    final nuevosAliados = <String>{
+      miUid,
+      if (aliadoActivo != null && aliadoActivo.isNotEmpty) aliadoActivo,
+    };
+    final aliadosCambiaron = nuevosAliados.length != _aliadosLocal.length ||
+        !nuevosAliados.containsAll(_aliadosLocal);
+    if (aliadosCambiaron) {
+      setState(() => _aliadosLocal = nuevosAliados);
+    }
 
     // Propuesta entrante para mí no vista aún → diálogo aceptar/rechazar.
     final prop = est.propuestaEntrantePara(miUid);
@@ -2549,6 +2639,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// [_onMoveSelected] para poder reutilizarlo tras confirmar un aviso.
   void _entrarModoMovimiento(CeldaState celda, List<int> validIndices) {
     if (validIndices.isEmpty || _sidebarCoord == null) return;
+
+    // Red de seguridad (bug 8 jugadores): garantiza que la rejilla contiene la
+    // celda de ORIGEN antes de calcular el alcance. En partidas grandes el
+    // cuartel puede quedar fuera de _config (grid encogido por el terreno del
+    // mapa, o no re-expandido cuando el obelisco llegó por el stream). Si el
+    // origen no está en la rejilla, _coordToPos(from) devuelve null, el BFS sale
+    // vacío y NO se pintan las casillas verdes de destino. Al expandir aquí, el
+    // movimiento desde el cuartel vuelve a funcionar siempre.
+    _expandirGridSiHaceFalta([_sidebarCoord!]);
+
     final minMov = validIndices
         .map((i) => celda.cartas[i].movimientoEfectivo)
         .reduce((a, b) => a < b ? a : b);
@@ -4211,6 +4311,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     selectedCellCoord: selectedCoord,
                     highlightEmpty: _selectedHandIndex != null,
                     movableCoords: _highlightCoords,
+                    deployCoords: _deployCoords,
                     obeliscoLocal: _obeliscoLocal,
                     obeliscoCoords: _obeliscosPorJugador.values.toSet(),
                     obeliscoColores: {
@@ -4219,6 +4320,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     },
                     playerColors: _playerColors,
                     localPlayerUid: widget.localPlayerUid,
+                    aliadosLocal: _aliadosLocal,
                     fantasmasAccion: _fantasmasAccion,
                     fantasmasRevision:
                         _yoCerreElTurno ? _revisionFantasmas : const [],

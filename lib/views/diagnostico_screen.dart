@@ -18,6 +18,7 @@
 // directamente para no arrastrar dependencias.
 
 import 'dart:async';
+import 'dart:convert' show JsonEncoder;
 import 'dart:io' show Platform;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,6 +27,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+
+import '../models/carta_model.dart';
+import '../models/lobby_model.dart' show kEjercitos;
+import '../services/mazo_service.dart';
 
 class DiagnosticoScreen extends StatefulWidget {
   /// ID de una partida existente para probar lecturas reales. Si es null, usa
@@ -221,6 +226,217 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
   /// Muestra el informe de diagnóstico en un diálogo (independiente de la lista
   /// del log, que en pantallas estrechas puede quedar sin espacio). Permite
   /// copiar el token o el informe completo.
+  // ── EXPORTAR CARTAS POR EJÉRCITO (JSON) ───────────────────────────────────
+  // Vuelca TODO el catálogo de cartas agrupado por ejército, con sus atributos,
+  // como JSON. Sirve para pasarlo luego a un Excel y equilibrar los valores de
+  // los ejércitos. El diálogo permite SELECCIONAR el texto en pantalla o
+  // copiarlo entero con un botón.
+  String _nombreEjercito(int id) {
+    for (final e in kEjercitos) {
+      if (e.id == id) return e.nombre;
+    }
+    return 'Ejército $id';
+  }
+
+  String _nombreTipo(int t) {
+    switch (t) {
+      case 1:
+        return 'Terrestre';
+      case 2:
+        return 'Volador';
+      case 3:
+        return 'Marino';
+      default:
+        return 'Otro';
+    }
+  }
+
+  Map<String, dynamic> _cartaAJson(CartaModel c) => {
+        'id': c.id,
+        'nombre': c.nombre,
+        'fuerza': c.fuerza,
+        'defensa': c.defensa,
+        'coste': c.coste,
+        'movimiento': c.movimiento,
+        'tipo': c.tipo,
+        'tipoNombre': _nombreTipo(c.tipo),
+        'condicion': c.condicion.name,
+        'idHabilidad': c.idHabilidad,
+        'costeHabilidad': c.costeHabilidad,
+        'enfriamientoHabilidad': c.enfriamientoHabilidad,
+        'evolucion': c.evolucion,
+        'idEvolucion': c.idEvolucion,
+        'porDefecto': c.porDefecto,
+        'descripcion': c.descripcion,
+      };
+
+  Future<void> _exportarCartasJson() async {
+    if (_ocupado) return;
+    setState(() => _ocupado = true);
+    final sw = Stopwatch()..start();
+    try {
+      _add('🃏 Export cartas', 'Leyendo el catálogo de Cartas…');
+      final cartas = await MazoService().fetchTodasLasCartas();
+
+      // Agrupar por ejército.
+      final porEjercito = <int, List<CartaModel>>{};
+      for (final c in cartas) {
+        porEjercito.putIfAbsent(c.ejercito, () => <CartaModel>[]).add(c);
+      }
+      final ids = porEjercito.keys.toList()..sort();
+
+      final ejercitosJson = <Map<String, dynamic>>[];
+      for (final id in ids) {
+        final lista = porEjercito[id]!
+          ..sort((a, b) =>
+              a.nombre.toLowerCase().compareTo(b.nombre.toLowerCase()));
+        ejercitosJson.add({
+          'id': id,
+          'nombre': _nombreEjercito(id),
+          'totalCartas': lista.length,
+          'cartas': lista.map(_cartaAJson).toList(),
+        });
+      }
+
+      final root = <String, dynamic>{
+        'generadoEn': DateTime.now().toIso8601String(),
+        'totalCartas': cartas.length,
+        'totalEjercitos': ids.length,
+        'ejercitos': ejercitosJson,
+      };
+      final texto = const JsonEncoder.withIndent('  ').convert(root);
+      sw.stop();
+      _add(
+          '✅ Export cartas',
+          '${cartas.length} cartas · ${ids.length} ejércitos · '
+              '${sw.elapsedMilliseconds} ms. Abriendo diálogo: selecciona el texto '
+              'o pulsa "Copiar todo".');
+      await _mostrarTextoLargo('Cartas por ejército (JSON)', texto);
+    } catch (e) {
+      sw.stop();
+      _add('❌ Export cartas', '${e.runtimeType}: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+  }
+
+  // ── VICTORIAS / PARTIDAS POR EJÉRCITO ─────────────────────────────────────
+  // Agrega, sobre TODAS las partidas finalizadas, cuántas veces se jugó cada
+  // ejército y cuántas ganó. Fuente: Partidas con estado 'finalizada'; cada una
+  // guarda jugadores[].ejercitoId y ganadorUid. Cada participación de un jugador
+  // cuenta como una "partida jugada" de su ejército (si dos jugadores usan el
+  // mismo ejército en una partida, suma 2).
+  String _pad(String s, int n) => s.length >= n ? '$s ' : s.padRight(n);
+
+  Future<void> _statsPorEjercito() async {
+    if (_ocupado) return;
+    setState(() => _ocupado = true);
+    final sw = Stopwatch()..start();
+    try {
+      _add('📊 Stats ejércitos', 'Leyendo partidas finalizadas…');
+      final snap = await _db
+          .collection('Partidas')
+          .where('estado', isEqualTo: 'finalizada')
+          .get();
+
+      final jugadas = <int, int>{}; // ejercitoId → participaciones
+      final victorias = <int, int>{}; // ejercitoId → victorias
+      int totalPartidas = 0;
+      int sinGanador = 0;
+
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final jugs = (data['jugadores'] as List?) ?? const [];
+        if (jugs.isEmpty) continue;
+        totalPartidas++;
+        final ganador = (data['ganadorUid'] as String?) ?? '';
+        if (ganador.isEmpty) sinGanador++;
+        for (final j in jugs) {
+          if (j is! Map) continue;
+          final ej = (j['ejercitoId'] as num?)?.toInt() ?? 0;
+          if (ej == 0) continue;
+          jugadas[ej] = (jugadas[ej] ?? 0) + 1;
+          final uid = (j['uid'] as String?) ?? '';
+          if (uid.isNotEmpty && uid == ganador) {
+            victorias[ej] = (victorias[ej] ?? 0) + 1;
+          }
+        }
+      }
+      sw.stop();
+
+      // Ejércitos conocidos (1..4) + cualquiera que aparezca en los datos.
+      final ids = <int>{...jugadas.keys, ...victorias.keys, 1, 2, 3, 4}.toList()
+        ..sort();
+
+      final b = StringBuffer();
+      b.writeln('VICTORIAS / PARTIDAS POR EJÉRCITO');
+      b.writeln('Partidas finalizadas: $totalPartidas'
+          '${sinGanador > 0 ? '  ·  sin ganador: $sinGanador' : ''}');
+      b.writeln('');
+      b.writeln('${_pad("Ejército", 12)}${_pad("Jugadas", 9)}'
+          '${_pad("Victorias", 11)}Winrate');
+      b.writeln('${"-" * 40}');
+      for (final id in ids) {
+        final pj = jugadas[id] ?? 0;
+        final v = victorias[id] ?? 0;
+        final wr = pj > 0 ? (v * 100.0 / pj) : 0.0;
+        b.writeln('${_pad(_nombreEjercito(id), 12)}${_pad('$pj', 9)}'
+            '${_pad('$v', 11)}${wr.toStringAsFixed(1)}%');
+      }
+
+      final texto = b.toString();
+      _add(
+          '✅ Stats ejércitos',
+          '$totalPartidas partidas finalizadas · ${sw.elapsedMilliseconds} ms. '
+              'Abriendo informe (copiable).');
+      await _mostrarTextoLargo('Victorias / partidas por ejército', texto);
+    } catch (e) {
+      sw.stop();
+      _add('❌ Stats ejércitos', '${e.runtimeType}: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+  }
+
+  /// Diálogo genérico para mostrar un texto largo (JSON): seleccionable en
+  /// pantalla + botón "Copiar todo".
+  Future<void> _mostrarTextoLargo(String titulo, String texto) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F1824),
+        title: Text(titulo,
+            style: const TextStyle(
+                color: Color(0xFFC8A860), fontFamily: 'Cinzel', fontSize: 16)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              texto,
+              style: const TextStyle(
+                  color: Color(0xFFB8C4D0),
+                  fontFamily: 'monospace',
+                  fontSize: 11),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: texto)),
+            child: const Text('Copiar todo',
+                style: TextStyle(color: Color(0xFFC8A860))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cerrar',
+                style: TextStyle(color: Color(0xFF8090A0))),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _mostrarReporte(String texto, String? fcm) async {
     if (!mounted) return;
     await showDialog<void>(
@@ -1081,35 +1297,13 @@ class _DiagnosticoScreenState extends State<DiagnosticoScreen> {
               spacing: 6,
               runSpacing: 6,
               children: [
-                _btn('Info', _infoRed),
                 _btn('🔔 Diagnóstico NOTIFICACIONES',
                     _diagnosticarNotificaciones,
                     destacado: true),
-                // Botón destacado: la prueba que da el veredicto.
-                _btn('★ TEST GOOGLE PLAY / SSL', _pruebaServiciosGoogle,
+                _btn('🃏 EXPORTAR CARTAS (JSON)', _exportarCartasJson,
                     destacado: true),
-                _btn('🧪 ESCRIBIR EN PARTIDAS', _pruebaEscrituraEnPartidas,
+                _btn('📊 VICTORIAS / PARTIDAS POR EJÉRCITO', _statsPorEjercito,
                     destacado: true),
-                _btn('🔬 ¿LLEGA AL SERVIDOR?', _pruebaLlegaAlServidor,
-                    destacado: true),
-                _btn(
-                    '🎯 ESCRIBIR EN PARTIDA REAL', _pruebaEscribirEnPartidaReal,
-                    destacado: true),
-                _btn('📋 Cargar mis partidas', _cargarMisPartidas,
-                    destacado: true),
-                _btn('🔬 Diagnosticar PARTIDA', _diagnosticarPartida,
-                    destacado: true),
-                _btn('🧪 Test FUGA listeners', _testFugaListeners,
-                    destacado: true),
-                _btn('1· Escribir pequeño', _pruebaEscrituraPequena),
-                _btn('2· Leer SERVIDOR prueba', _pruebaLecturaServidorPrueba),
-                _btn('3· Leer CACHÉ prueba', _pruebaLecturaCachePrueba),
-                _btn('4· Leer DEFECTO prueba', _pruebaLecturaDefectoPrueba),
-                _btn('5· Leer SERVIDOR PARTIDA', _pruebaLecturaPartidaServidor),
-                _btn('6· Leer CACHÉ PARTIDA', _pruebaLecturaPartidaCache),
-                _btn('7· TAMAÑO partida', _pruebaTamanoPartida),
-                _btn('8· Escribir GRANDE', _pruebaEscrituraGrande),
-                _btn('Borrar prueba', _limpiar),
                 _btn('Limpiar log', () async => setState(_log.clear)),
               ],
             ),

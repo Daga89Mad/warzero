@@ -25,14 +25,28 @@ const String kImagenTableroPorDefecto = 'assets/images/map_background.png';
 /// Acepta URL http(s) (Image.network) o ruta de asset (Image.asset), y cae a
 /// [kImagenTableroPorDefecto] si la referencia está vacía o falla la carga.
 /// Se reutiliza en el preview del editor de mapas.
+/// Pinta la imagen de fondo del tablero a partir de la referencia del mapa.
+/// Acepta URL http(s) (Image.network) o ruta de asset (Image.asset), y cae a
+/// [kImagenTableroPorDefecto] si la referencia está vacía o falla la carga.
+/// Se reutiliza en el preview del editor de mapas.
 class BoardBackgroundImage extends StatelessWidget {
   final String? imagen;
   final BoxFit fit;
+
+  /// Calidad de muestreo al escalar la imagen.
+  ///
+  /// `medium` activa el filtrado trilineal (mipmaps), que es lo que elimina el
+  /// "borroso" del lado lejano del tablero cuando la imagen se ve muy reducida
+  /// por el zoom bajo (40 % en mapas de 8) + la perspectiva 3D. El valor por
+  /// defecto de Flutter, `low`, usa bilineal sin mipmaps y produce ese
+  /// aliasing/emborronamiento al minificar mucho.
+  final FilterQuality filterQuality;
 
   const BoardBackgroundImage({
     super.key,
     required this.imagen,
     this.fit = BoxFit.fill,
+    this.filterQuality = FilterQuality.medium,
   });
 
   @override
@@ -45,6 +59,7 @@ class BoardBackgroundImage extends StatelessWidget {
       return Image.network(
         ref,
         fit: fit,
+        filterQuality: filterQuality,
         // Si la URL falla (404, sin red…) no dejamos el tablero en blanco.
         errorBuilder: (_, __, ___) => _asset(kImagenTableroPorDefecto),
       );
@@ -55,6 +70,7 @@ class BoardBackgroundImage extends StatelessWidget {
   Widget _asset(String path) => Image.asset(
         path,
         fit: fit,
+        filterQuality: filterQuality,
         errorBuilder: (_, __, ___) => Container(color: const Color(0xFF0A1828)),
       );
 }
@@ -66,6 +82,11 @@ class BoardWidget extends StatefulWidget {
   final bool highlightEmpty;
   final Set<String> movableCoords;
   final String? obeliscoLocal;
+
+  /// Celdas donde el jugador puede desplegar la carta seleccionada de la
+  /// mano (el cuartel para cartas normales; las celdas asentadas para las
+  /// estáticas). Se resaltan en verde mientras haya carta seleccionada.
+  final Set<String> deployCoords;
 
   /// Coordenadas de TODOS los obeliscos (de cualquier jugador), del servidor.
   final Set<String> obeliscoCoords;
@@ -79,6 +100,11 @@ class BoardWidget extends StatefulWidget {
 
   /// uid del jugador local (para el +80 de defensa del cuartel en el preview).
   final String? localPlayerUid;
+
+  /// uids aliados del jugador local (incluye su propio uid). Sirve para
+  /// que una casilla compartida SOLO con aliados se pinte como pila
+  /// amistosa y no como combate.
+  final Set<String> aliadosLocal;
 
   /// Imagen de fondo del tablero para ESTE mapa. Puede ser:
   ///   - una URL http(s)  → se carga con Image.network
@@ -114,10 +140,12 @@ class BoardWidget extends StatefulWidget {
     required this.highlightEmpty,
     this.movableCoords = const {},
     this.obeliscoLocal,
+    this.deployCoords = const {},
     this.obeliscoCoords = const {},
     this.obeliscoColores = const {},
     this.playerColors = const {},
     this.localPlayerUid,
+    this.aliadosLocal = const {},
     this.imagenMapa,
     this.onBackgroundTap,
     this.fantasmasAccion = const {},
@@ -283,10 +311,12 @@ class _BoardWidgetState extends State<BoardWidget>
                     highlightEmpty: widget.highlightEmpty,
                     movableCoords: widget.movableCoords,
                     obeliscoLocal: widget.obeliscoLocal,
+                    deployCoords: widget.deployCoords,
                     obeliscoCoords: widget.obeliscoCoords,
                     obeliscoColores: widget.obeliscoColores,
                     playerColors: widget.playerColors,
                     localPlayerUid: widget.localPlayerUid,
+                    aliadosLocal: widget.aliadosLocal,
                     imagenMapa: widget.imagenMapa,
                     fantasmasAccion: widget.fantasmasAccion,
                     fantasmasRevision: widget.fantasmasRevision,
@@ -421,10 +451,20 @@ class _PerspectiveBoard extends StatelessWidget {
   final bool highlightEmpty;
   final Set<String> movableCoords;
   final String? obeliscoLocal;
+
+  /// Celdas donde el jugador puede desplegar la carta seleccionada de la
+  /// mano (el cuartel para cartas normales; las celdas asentadas para las
+  /// estáticas). Se resaltan en verde mientras haya carta seleccionada.
+  final Set<String> deployCoords;
   final Set<String> obeliscoCoords;
   final Map<String, Color> obeliscoColores;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
+
+  /// uids aliados del jugador local (incluye su propio uid). Sirve para
+  /// que una casilla compartida SOLO con aliados se pinte como pila
+  /// amistosa y no como combate.
+  final Set<String> aliadosLocal;
   final String? imagenMapa;
   final Map<String, List<CartaModel>> fantasmasAccion;
   final List<RevisionFantasma> fantasmasRevision;
@@ -438,10 +478,12 @@ class _PerspectiveBoard extends StatelessWidget {
     required this.highlightEmpty,
     this.movableCoords = const {},
     this.obeliscoLocal,
+    this.deployCoords = const {},
     this.obeliscoCoords = const {},
     this.obeliscoColores = const {},
     this.playerColors = const {},
     this.localPlayerUid,
+    this.aliadosLocal = const {},
     this.imagenMapa,
     this.fantasmasAccion = const {},
     this.fantasmasRevision = const [],
@@ -464,10 +506,12 @@ class _PerspectiveBoard extends StatelessWidget {
           highlightEmpty: highlightEmpty,
           movableCoords: movableCoords,
           obeliscoLocal: obeliscoLocal,
+          deployCoords: deployCoords,
           obeliscoCoords: obeliscoCoords,
           obeliscoColores: obeliscoColores,
           playerColors: playerColors,
           localPlayerUid: localPlayerUid,
+          aliadosLocal: aliadosLocal,
           imagenMapa: imagenMapa,
           fantasmasAccion: fantasmasAccion,
           fantasmasRevision: fantasmasRevision,
@@ -828,10 +872,20 @@ class _GridContent extends StatelessWidget {
   final bool highlightEmpty;
   final Set<String> movableCoords;
   final String? obeliscoLocal;
+
+  /// Celdas donde el jugador puede desplegar la carta seleccionada de la
+  /// mano (el cuartel para cartas normales; las celdas asentadas para las
+  /// estáticas). Se resaltan en verde mientras haya carta seleccionada.
+  final Set<String> deployCoords;
   final Set<String> obeliscoCoords;
   final Map<String, Color> obeliscoColores;
   final Map<String, Color> playerColors;
   final String? localPlayerUid;
+
+  /// uids aliados del jugador local (incluye su propio uid). Sirve para
+  /// que una casilla compartida SOLO con aliados se pinte como pila
+  /// amistosa y no como combate.
+  final Set<String> aliadosLocal;
   final String? imagenMapa;
   final Map<String, List<CartaModel>> fantasmasAccion;
   final List<RevisionFantasma> fantasmasRevision;
@@ -845,10 +899,12 @@ class _GridContent extends StatelessWidget {
     required this.highlightEmpty,
     this.movableCoords = const {},
     this.obeliscoLocal,
+    this.deployCoords = const {},
     this.obeliscoCoords = const {},
     this.obeliscoColores = const {},
     this.playerColors = const {},
     this.localPlayerUid,
+    this.aliadosLocal = const {},
     this.imagenMapa,
     this.fantasmasAccion = const {},
     this.fantasmasRevision = const [],
@@ -877,7 +933,8 @@ class _GridContent extends StatelessWidget {
                     config: config,
                     celda: celda,
                     isSelected: coord == selectedCoord,
-                    isHighlighted: highlightEmpty && coord == obeliscoLocal,
+                    isHighlighted:
+                        highlightEmpty && deployCoords.contains(coord),
                     isMovable: movableCoords.contains(coord),
                     isObelisco: coord == obeliscoLocal,
                     obeliscoCoords: obeliscoCoords,
@@ -894,6 +951,7 @@ class _GridContent extends StatelessWidget {
                     escudosCelda: boardState.escudosCelda(coord),
                     playerColors: playerColors,
                     localPlayerUid: localPlayerUid,
+                    aliadosLocal: aliadosLocal,
                     fantasmas: fantasmasAccion[coord] ?? const [],
                     onTap: () => onCellTap(coord, ri, ci),
                   );

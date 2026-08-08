@@ -52,6 +52,12 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
   static const _minPartidas = 1;
   static const _maxPartidas = 20;
 
+  /// Límites del control de espera (segundos) antes de entrar en salas
+  /// proactivas. 0 = entra de inmediato; se ajusta en pasos de 15 s.
+  static const _minEspera = 0;
+  static const _maxEspera = 600; // 10 min
+  static const _stepEspera = 15;
+
   /// Cada cuánto se refresca el contador "en juego" (campo `partidasActivas`).
   static const _refrescoContadores = Duration(seconds: 20);
 
@@ -109,6 +115,7 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
             'ejercitoId': ejercitoId,
             'dificultad': 'medio',
             'estilo': 'equilibrado',
+            'esperaSegundos': 0,
           });
           faltan++;
         }
@@ -183,6 +190,21 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
     } catch (e) {
       if (mounted) setState(() => bot.maxPartidas = anterior); // revertir
       _toast('No se pudo actualizar partidas: $e', error: true);
+    }
+  }
+
+  /// Cambia la espera (segundos) que debe llevar una sala en espera antes de que
+  /// este bot entre por relleno proactivo, con clamp, y lo persiste.
+  Future<void> _setEspera(_BotResumen bot, int nuevo) async {
+    final valor = nuevo.clamp(_minEspera, _maxEspera);
+    if (valor == bot.esperaSegundos) return;
+    final anterior = bot.esperaSegundos;
+    setState(() => bot.esperaSegundos = valor);
+    try {
+      await _col.doc(bot.id).update({'esperaSegundos': valor});
+    } catch (e) {
+      if (mounted) setState(() => bot.esperaSegundos = anterior); // revertir
+      _toast('No se pudo actualizar la espera: $e', error: true);
     }
   }
 
@@ -551,10 +573,14 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                           accent: _accent,
                           minPartidas: _minPartidas,
                           maxPartidas: _maxPartidas,
+                          minEspera: _minEspera,
+                          maxEspera: _maxEspera,
+                          stepEspera: _stepEspera,
                           nombreEjercito: _nombreEjercito(_bots[i].ejercitoId),
                           iconoEjercito: _iconoEjercito(_bots[i].ejercitoId),
                           onChanged: (v) => _toggle(_bots[i], v),
                           onPartidas: (v) => _setMaxPartidas(_bots[i], v),
+                          onEspera: (v) => _setEspera(_bots[i], v),
                           onEjercito: () => _elegirEjercito(_bots[i]),
                           onDificultad: (v) => _setDificultad(_bots[i], v),
                           onEstilo: (v) => _setEstilo(_bots[i], v),
@@ -779,6 +805,10 @@ class _BotResumen {
   int maxPartidas;
   int ejercitoId;
 
+  /// Segundos que debe llevar una sala en espera antes de que este bot entre
+  /// por relleno proactivo. 0 = de inmediato.
+  int esperaSegundos;
+
   /// Perfil de juego: dificultad ('medio'|'alto') y estilo
   /// ('equilibrado'|'defensivo'|'agresivo').
   String dificultad;
@@ -795,6 +825,7 @@ class _BotResumen {
     required this.activo,
     required this.maxPartidas,
     required this.ejercitoId,
+    required this.esperaSegundos,
     required this.dificultad,
     required this.estilo,
     required this.partidasActivas,
@@ -816,6 +847,7 @@ class _BotResumen {
       activo: (data['activo'] as bool?) ?? false,
       maxPartidas: mp < 1 ? 1 : mp,
       ejercitoId: (data['ejercitoId'] as num?)?.toInt() ?? 0,
+      esperaSegundos: (data['esperaSegundos'] as num?)?.toInt() ?? 0,
       dificultad: kDificultades.contains(dif) ? dif! : 'medio',
       estilo: kEstilos.contains(est) ? est! : 'equilibrado',
       partidasActivas: (data['partidasActivas'] as num?)?.toInt() ?? 0,
@@ -828,10 +860,14 @@ class _BotTile extends StatelessWidget {
   final Color accent;
   final int minPartidas;
   final int maxPartidas;
+  final int minEspera;
+  final int maxEspera;
+  final int stepEspera;
   final String nombreEjercito;
   final String iconoEjercito;
   final ValueChanged<bool> onChanged;
   final ValueChanged<int> onPartidas;
+  final ValueChanged<int> onEspera;
   final VoidCallback onEjercito;
   final ValueChanged<String> onDificultad;
   final ValueChanged<String> onEstilo;
@@ -842,10 +878,14 @@ class _BotTile extends StatelessWidget {
     required this.accent,
     required this.minPartidas,
     required this.maxPartidas,
+    required this.minEspera,
+    required this.maxEspera,
+    required this.stepEspera,
     required this.nombreEjercito,
     required this.iconoEjercito,
     required this.onChanged,
     required this.onPartidas,
+    required this.onEspera,
     required this.onEjercito,
     required this.onDificultad,
     required this.onEstilo,
@@ -1067,6 +1107,17 @@ class _BotTile extends StatelessWidget {
                       ? () => onPartidas(bot.maxPartidas + 1)
                       : null,
                 ),
+                const SizedBox(height: 6),
+                _StepperEspera(
+                  segundos: bot.esperaSegundos,
+                  accent: accent,
+                  onMenos: bot.esperaSegundos > minEspera
+                      ? () => onEspera(bot.esperaSegundos - stepEspera)
+                      : null,
+                  onMas: bot.esperaSegundos < maxEspera
+                      ? () => onEspera(bot.esperaSegundos + stepEspera)
+                      : null,
+                ),
               ],
             ),
           ),
@@ -1121,6 +1172,63 @@ class _StepperPartidas extends StatelessWidget {
               fontFamily: 'Cinzel',
               fontWeight: FontWeight.bold,
               fontSize: 13,
+            ),
+          ),
+        ),
+        _StepBtn(icon: Icons.add, accent: accent, onTap: onMas),
+      ],
+    );
+  }
+}
+
+/// Control compacto "− Ns +" para la espera antes de entrar en salas proactivas.
+class _StepperEspera extends StatelessWidget {
+  final int segundos;
+  final Color accent;
+  final VoidCallback? onMenos;
+  final VoidCallback? onMas;
+
+  const _StepperEspera({
+    required this.segundos,
+    required this.accent,
+    required this.onMenos,
+    required this.onMas,
+  });
+
+  String get _texto {
+    if (segundos <= 0) return 'Ya';
+    if (segundos < 60) return '${segundos}s';
+    final m = segundos ~/ 60;
+    final s = segundos % 60;
+    return s == 0 ? '${m}m' : '${m}m ${s}s';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'Espera sala',
+          style: TextStyle(
+            color: Color(0xFF6A727C),
+            fontFamily: 'Cinzel',
+            fontSize: 9,
+            letterSpacing: 0.5,
+          ),
+        ),
+        const SizedBox(width: 8),
+        _StepBtn(icon: Icons.remove, accent: accent, onTap: onMenos),
+        Container(
+          constraints: const BoxConstraints(minWidth: 44),
+          alignment: Alignment.center,
+          child: Text(
+            _texto,
+            style: TextStyle(
+              color: accent,
+              fontFamily: 'Cinzel',
+              fontWeight: FontWeight.bold,
+              fontSize: 12,
             ),
           ),
         ),

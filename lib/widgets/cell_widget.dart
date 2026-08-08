@@ -105,6 +105,10 @@ class CellWidget extends StatelessWidget {
   /// de combate que necesiten distinguir al defensor del cuartel).
   final String? localPlayerUid;
 
+  /// uids aliados del jugador local (incluye su propio uid). Una casilla
+  /// compartida SOLO con aliados se pinta como pila amistosa, no como combate.
+  final Set<String> aliadosLocal;
+
   /// Cartas de acción declaradas por el jugador local sobre esta celda,
   /// pendientes de resolverse al cerrar turno. Es un marcador puramente
   /// visual (solo lo ve quien las lanzó): no participa en el combate ni
@@ -146,6 +150,7 @@ class CellWidget extends StatelessWidget {
     this.obeliscoCoords = const {},
     this.obeliscoColores = const {},
     this.localPlayerUid,
+    this.aliadosLocal = const {},
     this.fantasmas = const [],
     required this.onTap,
   });
@@ -280,6 +285,7 @@ class CellWidget extends StatelessWidget {
                   playerColors: playerColors,
                   venenosCelda: venenosCelda,
                   escudosCelda: escudosCelda,
+                  aliadosLocal: aliadosLocal,
                 ),
               ),
 
@@ -699,12 +705,17 @@ class _CardStack extends StatelessWidget {
   final Map<String, Color> playerColors;
   final List<({String origen, int magnitud})> venenosCelda;
   final List<({String origen, int magnitud})> escudosCelda;
+
+  /// uids aliados del jugador local (incluye su propio uid). Si TODOS los
+  /// dueños de la casilla están aquí, se trata como pila amistosa (sin combate).
+  final Set<String> aliadosLocal;
   const _CardStack({
     required this.celda,
     this.isEnemyObelisco = false,
     this.playerColors = const {},
     this.venenosCelda = const [],
     this.escudosCelda = const [],
+    this.aliadosLocal = const {},
   });
 
   Color _colorFor(CartaEnCelda c) {
@@ -781,7 +792,18 @@ class _CardStack extends StatelessWidget {
     //   poderNeto(X) = Σfuerza(X) − ΣdefensaEfectiva(enemigos de X)
     // Nota: el +80 de defensa del cuartel se aplica en la resolución del
     // servidor; este preview usa la fórmula base (válida fuera de obeliscos).
-    if (celda.hayCombate) {
+    //
+    // Una casilla solo es COMBATE si contiene cartas de bandos MUTUAMENTE
+    // hostiles. Con alianzas, tus cartas y las de tu aliado comparten casilla
+    // SIN combatir; `hayCombate` (que solo mira "≥2 dueños distintos") no lo
+    // sabe, así que sin esta comprobación la casilla compartida con el aliado
+    // se pintaba como combate y las cartas apiladas junto al aliado parecían no
+    // haberse movido. Si TODOS los dueños de la casilla son aliados del jugador
+    // local (o él mismo), se pinta como pila amistosa.
+    final duenos = celda.cartas.map((c) => c.ownerUid).toSet();
+    final soloAliados =
+        aliadosLocal.isNotEmpty && duenos.every(aliadosLocal.contains);
+    if (celda.hayCombate && !soloAliados) {
       // Construir grupos: uid → (fuerza, defensa efectiva, numCartas, color)
       final grupos =
           <String, ({int fuerza, int defensa, int numCartas, Color color})>{};
