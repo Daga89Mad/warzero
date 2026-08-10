@@ -1016,6 +1016,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// Ejército mayoritario entre [cartas] (el id que más se repite), o null si
+  /// la lista está vacía. Se usa para que el cuartel siga el ejército del mazo
+  /// que realmente se juega, aunque el lobby tenga otro `ejercitoId`.
+  int? _ejercitoDominante(List<CartaModel> cartas) {
+    if (cartas.isEmpty) return null;
+    final conteo = <int, int>{};
+    for (final c in cartas) {
+      conteo[c.ejercito] = (conteo[c.ejercito] ?? 0) + 1;
+    }
+    return conteo.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
+  }
+
   Future<void> _loadGame() async {
     try {
       // ── 1. Entrar a la partida vía API (init atómica energías + obelisco) ──
@@ -1078,7 +1090,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _mazoCompleto =
           mazoCartas.where((c) => !c.esEvolucion && !c.esEspecial).toList();
 
-      debugPrint('[WZ][ejercito] seleccionado=$ejercitoId '
+      // FIX (cuartel de otro ejército): el `ejercitoId` del lobby puede NO
+      // coincidir con el ejército del mazo que realmente se juega. Ocurre si el
+      // jugador quedó asignado a un ejército (p. ej. Demonios) del que NO tiene
+      // mazo: el servidor, al no encontrar mazo de ese ejército, cae a su mazo
+      // principal (p. ej. Humanos) y, al vaciarse el filtro, lo PRESERVA
+      // (MazoDelJugadorAsync → Construir(false)). Resultado: se juega Humanos
+      // pero el cuartel, que usaba el id del lobby, mostraba especiales de
+      // Demonios. La fuente de verdad para el cuartel debe ser el ejército de
+      // las cartas que de verdad despliegas, así que lo derivamos del mazo.
+      final ejercitoDeMazo = _ejercitoDominante(_mazoCompleto);
+      if (ejercitoDeMazo != null &&
+          ejercitoDeMazo != 0 &&
+          ejercitoDeMazo != _miEjercitoId) {
+        debugPrint('[WZ][ejercito] lobby=$_miEjercitoId difiere del mazo real '
+            '=$ejercitoDeMazo → el cuartel usa el del mazo');
+        _miEjercitoId = ejercitoDeMazo;
+      }
+
+      debugPrint('[WZ][ejercito] seleccionado=$_miEjercitoId '
           'cartasMazo=${_mazoCompleto.length} '
           'ejercitosEnMazo=${_mazoCompleto.map((c) => c.ejercito).toSet()}');
 
@@ -1432,6 +1462,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Timer? _pollTimer;
   bool _polling = false;
 
+  /// Intervalo con el que está armado ahora mismo el sondeo. Se usa para
+  /// re-armar el timer cuando cambia el modo de turno (al conocer que la
+  /// partida es diaria/12h pasamos de un sondeo rápido a uno mucho más lento).
+  Duration? _pollIntervaloActual;
+
+  /// Cadencia del sondeo del estado según el modo de turno. En `rápida` los
+  /// turnos duran segundos y conviene ver pronto el movimiento del rival; en
+  /// `diario`/`turno12h` el turno tarda HORAS en resolverse, así que sondear a
+  /// menudo solo malgasta lecturas de Firestore.
+  Duration _intervaloPoll() {
+    switch (_modoTurno) {
+      case ModoTurno.diario:
+      case ModoTurno.turno12h:
+        return const Duration(seconds: 45);
+      case ModoTurno.rapida:
+        return const Duration(seconds: 8);
+    }
+  }
+
   /// Abre el informe de batalla del último turno resuelto, si aún no se mostró.
   /// Es idempotente: usa `_informeMostradoTurno` como guarda, así puede llamarse
   /// en cada snapshot sin abrir el informe dos veces. Independiente del avance
@@ -1727,9 +1776,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _iniciarPolling() {
     if (widget.lobbyId == null) return;
     _pollTimer?.cancel();
+    _pollIntervaloActual = _intervaloPoll();
     _pollEstado(); // primera lectura inmediata
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 4),
+      _pollIntervaloActual!,
       (_) => _pollEstado(),
     );
   }
@@ -1748,6 +1798,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (lobby.estado == LobbyEstado.finalizada) {
         _pollTimer?.cancel();
         _pollTimer = null;
+      } else if (_pollTimer != null &&
+          _intervaloPoll() != _pollIntervaloActual) {
+        // Al procesar el estado se ha actualizado `_modoTurno`; si eso cambia la
+        // cadencia (p. ej. descubrimos que la partida es diaria y pasamos de 8 s
+        // a 45 s), re-armamos el sondeo con el nuevo intervalo. La llamada
+        // inmediata a `_pollEstado` dentro de `_iniciarPolling` es un no-op
+        // porque `_polling` sigue en true durante esta iteración.
+        _iniciarPolling();
       }
     } catch (e) {
       debugPrint('[WZ][poll] obtenerEstado falló (seguimos): $e');
@@ -1793,9 +1851,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         state == AppLifecycleState.detached) {
       // La app pasa a segundo plano o se cierra: revertir energía revertible.
       _revertirCambiosPorSalidaSiProcede();
+      // Detener el sondeo mientras la app no está visible: no tiene sentido
+      // gastar lecturas de Firestore si el jugador no está mirando. Al volver
+      // (resumed) se reanuda con una lectura inmediata para ponerse al día.
+      _pollTimer?.cancel();
+      _pollTimer = null;
     } else if (state == AppLifecycleState.resumed) {
       // Al volver, permitir una nueva reversión si el jugador vuelve a gastar.
       _revirtiendoPorSalida = false;
+      // Reanudar el sondeo (se detuvo al pasar a segundo plano) si la partida
+      // sigue viva. `_iniciarPolling` hace una primera lectura inmediata.
+      if (!_juegoTerminado && widget.lobbyId != null && _pollTimer == null) {
+        _iniciarPolling();
+      }
       // Si al pausar quedó una reversión pendiente de reembolsar (el reembolso
       // fire-and-forget no llegó porque el SO suspendió el proceso), reintentarlo
       // ahora que hay red.

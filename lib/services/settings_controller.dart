@@ -171,13 +171,14 @@ const List<WarZeroTheme> kWarZeroThemes = [
   ),
 ];
 
-/// Controlador global de ajustes (tema + escala de texto), persistido con
-/// shared_preferences. Instancia única `settingsController` accesible desde
-/// main.dart y la pantalla de ajustes. Sin paquete de estado: ChangeNotifier
-/// + AnimatedBuilder en la raíz.
+/// Controlador global de ajustes (tema + escala de texto + vista de tablero),
+/// persistido con shared_preferences. Instancia única `settingsController`
+/// accesible desde main.dart, la pantalla de ajustes y el BoardWidget. Sin
+/// paquete de estado: ChangeNotifier + AnimatedBuilder en la raíz.
 class SettingsController extends ChangeNotifier {
   static const _kTema = 'wz_tema_id';
   static const _kEscala = 'wz_text_scale';
+  static const _kTablero3D = 'wz_tablero_3d';
 
   static const double escalaMin = 0.85;
   static const double escalaMax = 1.50;
@@ -185,8 +186,12 @@ class SettingsController extends ChangeNotifier {
   int _temaIndex = 0;
   double _escala = 1.0;
 
+  /// Vista del tablero: true = perspectiva 3D (por defecto), false = cenital.
+  bool _tablero3D = true;
+
   int get temaIndex => _temaIndex;
   double get escala => _escala;
+  bool get tablero3D => _tablero3D;
   WarZeroTheme get tema =>
       kWarZeroThemes[_temaIndex.clamp(0, kWarZeroThemes.length - 1)];
 
@@ -197,9 +202,11 @@ class SettingsController extends ChangeNotifier {
       final idx = kWarZeroThemes.indexWhere((t) => t.id == id);
       _temaIndex = idx >= 0 ? idx : 0;
       _escala = (p.getDouble(_kEscala) ?? 1.0).clamp(escalaMin, escalaMax);
+      _tablero3D = p.getBool(_kTablero3D) ?? true;
     } catch (_) {
       _temaIndex = 0;
       _escala = 1.0;
+      _tablero3D = true;
     }
     notifyListeners();
   }
@@ -222,6 +229,16 @@ class SettingsController extends ChangeNotifier {
     try {
       final p = await SharedPreferences.getInstance();
       await p.setDouble(_kEscala, v);
+    } catch (_) {}
+  }
+
+  Future<void> setTablero3D(bool v) async {
+    if (v == _tablero3D) return;
+    _tablero3D = v;
+    notifyListeners();
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setBool(_kTablero3D, v);
     } catch (_) {}
   }
 }

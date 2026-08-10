@@ -534,6 +534,11 @@ class _EditorMapaState extends State<_EditorMapa> {
   bool _loading = true;
   bool _saving = false;
 
+  /// Copia cruda del documento cargado. Al guardar se parte de aquí para no
+  /// perder campos que el editor no gestione, pero los mapas conocidos
+  /// (terreno / islaCentral / continentes) se sobrescriben por completo.
+  Map<String, dynamic> _docRaw = {};
+
   int _jugadores = 4;
 
   /// Tamaño de la rejilla del mapa. Se inicializa desde el preset del número de
@@ -555,6 +560,11 @@ class _EditorMapaState extends State<_EditorMapa> {
 
   _Pincel _pincel = _Pincel.sea;
   int _continenteSel = 0;
+
+  /// Tamaño (px) de cada celda en la rejilla. Controlado por el slider de zoom:
+  /// con celdas más grandes es mucho más fácil tocar/pintar. La rejilla hace
+  /// scroll horizontal y vertical (con la página) cuando no cabe en pantalla.
+  double _cellSize = 40;
 
   @override
   void initState() {
@@ -592,6 +602,7 @@ class _EditorMapaState extends State<_EditorMapa> {
       if (widget.docId != null) {
         final doc = await _col.doc(widget.docId!).get();
         final d = doc.data() ?? const <String, dynamic>{};
+        _docRaw = Map<String, dynamic>.from(d);
 
         _nombreCtrl.text = (d['nombre'] ?? doc.id).toString();
         _imagenCtrl.text = (d['imagen'] ?? '').toString();
@@ -720,6 +731,9 @@ class _EditorMapaState extends State<_EditorMapa> {
     setState(() => _saving = true);
 
     final data = <String, dynamic>{
+      // Conservamos cualquier campo que el editor no gestione…
+      ..._docRaw,
+      // …pero a continuación sobrescribimos por completo los conocidos.
       'nombre': nombre,
       'jugadores': _jugadores,
       'filas': _filas,
@@ -740,7 +754,14 @@ class _EditorMapaState extends State<_EditorMapa> {
     try {
       final id =
           widget.docId ?? 'mapa_${DateTime.now().millisecondsSinceEpoch}';
-      await _col.doc(id).set(data, SetOptions(merge: true));
+      // Sobrescritura COMPLETA (sin merge). Con merge:true, los mapas anidados
+      // (terreno, continentes) se fusionaban clave a clave: una celda que se
+      // repintaba a TIERRA se elimina de `_terreno`, pero su clave anterior
+      // (p. ej. "sea") NO se borraba del documento, así que al recargar seguía
+      // apareciendo el terreno viejo. Con un set completo las celdas borradas
+      // desaparecen de verdad. `data` ya incluye ..._docRaw, de modo que no se
+      // pierde ningún otro campo del documento.
+      await _col.doc(id).set(data);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -794,10 +815,10 @@ class _EditorMapaState extends State<_EditorMapa> {
 
   // ── Colores de la rejilla ─────────────────────────────────
   static const _colorTerreno = <String, Color>{
-    'land': Color(0xFF2A3A2A),
-    'sea': Color(0xFF1B4A78),
-    'deepSea': Color(0xFF0E2A50),
-    'amphibious': Color(0xFF2A6A6A),
+    'land': Color(0xFF7A4E26), // marrón tierra
+    'sea': Color(0xFF1E73C0), // azul mar
+    'deepSea': Color(0xFF123A78), // azul profundo (mar prof.)
+    'amphibious': Color(0xFF35A046), // verde anfibio
   };
 
   /// Paleta cíclica para distinguir continentes en la rejilla.
@@ -987,7 +1008,7 @@ class _EditorMapaState extends State<_EditorMapa> {
               runSpacing: 8,
               children: [
                 _chip(
-                    label: '🟩 TIERRA',
+                    label: '🟫 TIERRA',
                     selected: _pincel == _Pincel.land,
                     onTap: () => setState(() => _pincel = _Pincel.land)),
                 _chip(
@@ -995,11 +1016,11 @@ class _EditorMapaState extends State<_EditorMapa> {
                     selected: _pincel == _Pincel.sea,
                     onTap: () => setState(() => _pincel = _Pincel.sea)),
                 _chip(
-                    label: '🟪 MAR PROF.',
+                    label: '🔵 MAR PROF.',
                     selected: _pincel == _Pincel.deepSea,
                     onTap: () => setState(() => _pincel = _Pincel.deepSea)),
                 _chip(
-                    label: '🟨 ANFIBIO',
+                    label: '🟩 ANFIBIO',
                     selected: _pincel == _Pincel.amphibious,
                     onTap: () => setState(() => _pincel = _Pincel.amphibious)),
                 _chip(
@@ -1059,8 +1080,53 @@ class _EditorMapaState extends State<_EditorMapa> {
               ],
             ),
             const SizedBox(height: 6),
+            // Control de ZOOM: agranda/achica las celdas para poder tocarlas
+            // con comodidad. Si la rejilla no cabe, se desplaza en horizontal
+            // (dentro del propio widget) y en vertical (con la página).
+            Row(
+              children: [
+                const Icon(Icons.zoom_out, size: 16, color: _accent),
+                Expanded(
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      activeTrackColor: _accent,
+                      inactiveTrackColor: const Color(0xFF203040),
+                      thumbColor: _accent,
+                      overlayColor: _accent.withOpacity(0.15),
+                      thumbShape:
+                          const RoundSliderThumbShape(enabledThumbRadius: 8),
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 14),
+                    ),
+                    child: Slider(
+                      min: 24,
+                      max: 72,
+                      value: _cellSize,
+                      onChanged: (v) => setState(() => _cellSize = v),
+                    ),
+                  ),
+                ),
+                const Icon(Icons.zoom_in, size: 18, color: _accent),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 30,
+                  child: Text(
+                    '${_cellSize.round()}',
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontFamily: 'Cinzel',
+                      color: _accent,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
             _Rejilla(
               config: cfg,
+              cellSize: _cellSize,
               terreno: _terreno,
               islaCentral: _islaCentral,
               continenteDe: _continenteDe,
@@ -1453,6 +1519,10 @@ class _ContinenteCard extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _Rejilla extends StatelessWidget {
   final GameConfig config;
+
+  /// Tamaño en px de cada celda (controlado por el zoom del editor).
+  final double cellSize;
+
   final Map<String, String> terreno;
   final Set<String> islaCentral;
   final Set<String> obeliscos;
@@ -1468,6 +1538,7 @@ class _Rejilla extends StatelessWidget {
 
   const _Rejilla({
     required this.config,
+    required this.cellSize,
     required this.terreno,
     required this.islaCentral,
     required this.obeliscos,
@@ -1484,10 +1555,12 @@ class _Rejilla extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, box) {
         // Reservamos una columna estrecha para las etiquetas de fila.
-        const etiqueta = 18.0;
-        final celda = ((box.maxWidth - etiqueta) / config.cols)
-            .clamp(14.0, 44.0)
-            .toDouble();
+        const etiqueta = 22.0;
+        // El tamaño de celda lo fija el usuario con el slider de zoom. Ya no se
+        // ajusta al ancho de pantalla (que era lo que dejaba las celdas
+        // diminutas): con celdas grandes la rejilla se desplaza en horizontal
+        // aquí y en vertical con la página, así es cómodo tocar cada una.
+        final celda = cellSize;
 
         final gridW = celda * config.cols;
         final gridH = celda * config.rows;
@@ -1619,10 +1692,26 @@ class _Celda extends StatelessWidget {
     // En preview las celdas son translúcidas: se ve la imagen del tablero
     // debajo y el terreno queda como una capa de color encima. En modo rejilla
     // el color es sólido, que es más cómodo para pintar.
-    final fondo = preview
-        // `land` sin definir no se tiñe: deja ver la imagen tal cual.
-        ? (terreno == 'land' ? Colors.transparent : base.withOpacity(0.45))
-        : base;
+    //
+    // Opacidades por tipo para que TODAS las casuísticas se distingan bien:
+    // mar / mar prof. / anfibio se pintan con fuerza, y la tierra recibe un
+    // tinte marrón suave (evidente pero sin tapar del todo el arte del mapa).
+    double opacidadPreview() {
+      switch (terreno) {
+        case 'sea':
+          return 0.60;
+        case 'deepSea':
+          return 0.66;
+        case 'amphibious':
+          return 0.60;
+        case 'land':
+          return 0.28;
+        default:
+          return 0.50;
+      }
+    }
+
+    final fondo = preview ? base.withOpacity(opacidadPreview()) : base;
 
     return GestureDetector(
       onTap: onTap,
@@ -1633,8 +1722,8 @@ class _Celda extends StatelessWidget {
           color: fondo,
           border: Border.all(
             color: colCont ??
-                (preview ? const Color(0x40FFFFFF) : const Color(0xFF203040)),
-            width: colCont != null ? 1.4 : 0.5,
+                (preview ? const Color(0x66FFFFFF) : const Color(0xFF203040)),
+            width: colCont != null ? 1.4 : (preview ? 0.8 : 0.5),
           ),
         ),
         child: Stack(

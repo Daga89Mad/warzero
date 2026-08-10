@@ -5,6 +5,7 @@ import '../models/game_config.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
 import 'cell_widget.dart';
+import '../services/settings_controller.dart';
 
 /// Silueta fantasma de una carta que se movió este turno: recorre el camino de
 /// su celda de ORIGEN a su celda de DESTINO (animación de revisión post-cierre).
@@ -493,32 +494,46 @@ class _PerspectiveBoard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Transform(
-      alignment: Alignment.topCenter,
-      transform: Matrix4.identity()
-        ..setEntry(3, 2, 0.0010)
-        ..rotateX(-0.58),
-      child: _RockFrame(
-        child: _GridContent(
-          config: config,
-          boardState: boardState,
-          selectedCoord: selectedCoord,
-          highlightEmpty: highlightEmpty,
-          movableCoords: movableCoords,
-          obeliscoLocal: obeliscoLocal,
-          deployCoords: deployCoords,
-          obeliscoCoords: obeliscoCoords,
-          obeliscoColores: obeliscoColores,
-          playerColors: playerColors,
-          localPlayerUid: localPlayerUid,
-          aliadosLocal: aliadosLocal,
-          imagenMapa: imagenMapa,
-          fantasmasAccion: fantasmasAccion,
-          fantasmasRevision: fantasmasRevision,
-          accionesRevision: accionesRevision,
-          onCellTap: onCellTap,
-        ),
+    // El contenido real del tablero (marco de roca + rejilla + fichas).
+    final Widget contenido = _RockFrame(
+      child: _GridContent(
+        config: config,
+        boardState: boardState,
+        selectedCoord: selectedCoord,
+        highlightEmpty: highlightEmpty,
+        movableCoords: movableCoords,
+        obeliscoLocal: obeliscoLocal,
+        deployCoords: deployCoords,
+        obeliscoCoords: obeliscoCoords,
+        obeliscoColores: obeliscoColores,
+        playerColors: playerColors,
+        localPlayerUid: localPlayerUid,
+        aliadosLocal: aliadosLocal,
+        imagenMapa: imagenMapa,
+        fantasmasAccion: fantasmasAccion,
+        fantasmasRevision: fantasmasRevision,
+        accionesRevision: accionesRevision,
+        onCellTap: onCellTap,
       ),
+    );
+
+    // El modo (3D vs plano) se lee del ajuste persistente y se actualiza en
+    // vivo al cambiarlo desde Ajustes (settingsController es un ChangeNotifier).
+    return AnimatedBuilder(
+      animation: settingsController,
+      builder: (context, _) {
+        // Ajuste desactivado -> tablero PLANO (cenital, de frente).
+        if (!settingsController.tablero3D) return contenido;
+
+        // Ajuste activado -> perspectiva 3D original.
+        return Transform(
+          alignment: Alignment.topCenter,
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, 0.0010)
+            ..rotateX(-0.58),
+          child: contenido,
+        );
+      },
     );
   }
 }

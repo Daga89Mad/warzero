@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:warzero/services/settings_controller.dart';
 import '../services/settings_controller.dart';
 import 'diagnostico_screen.dart';
+import 'tutorial_screen.dart';
 import '../services/permisos.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -79,6 +80,70 @@ class SettingsScreen extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(height: 24),
+
+              // ── Tablero ──────────────────────────────────────
+              _Seccion(
+                titulo: 'TABLERO',
+                color: tema.primario,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Vista en perspectiva 3D del tablero. Desactívalo para '
+                      'verlo plano (cenital, de frente).',
+                      style: TextStyle(color: tema.textoTenue, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    CheckboxListTile(
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      dense: true,
+                      value: settingsController.tablero3D,
+                      activeColor: tema.primario,
+                      onChanged: (v) =>
+                          settingsController.setTablero3D(v ?? true),
+                      title: Text(
+                        'Tablero en 3D',
+                        style: TextStyle(
+                          color: tema.texto,
+                          fontFamily: 'Cinzel',
+                          fontSize: 14,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+
+              // ── Tutorial (visible para todos los jugadores) ──
+              _Seccion(
+                titulo: 'TUTORIAL',
+                color: tema.primario,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Aprende lo esencial con una partida guiada: energía Zero, '
+                      'atributos de las cartas, cómo desplegarlas, moverlas, el '
+                      'combate y las cartas de acción.',
+                      style: TextStyle(color: tema.textoTenue, fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const TutorialScreen()),
+                      ),
+                      icon: const Icon(Icons.school),
+                      label: const Text('Ver tutorial'),
+                    ),
+                  ],
+                ),
+              ),
+
               // ── Diagnóstico (solo cuentas de editor/QA) ──────
               // Se OCULTA por completo si el usuario no tiene permisos de editor
               // (mismo criterio que la edición de contenido: ver permisos.dart).

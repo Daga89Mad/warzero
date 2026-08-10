@@ -223,6 +223,7 @@ class _MazoScreenState extends State<MazoScreen> {
       builder: (_) => _DeckBuilderScreen(
         mazo: mazo,
         cartasDisponibles: _cartasDelEjercito,
+        todasLasCartas: _todasLasCartas,
         uid: _uid,
         onSave: _loadData,
       ),
@@ -800,12 +801,20 @@ class _StatChip extends StatelessWidget {
 class _DeckBuilderScreen extends StatefulWidget {
   final _MazoPerfil mazo;
   final List<CartaModel> cartasDisponibles;
+
+  /// Lista COMPLETA de cartas del ejército (incluidas las de evolución, que
+  /// `cartasDisponibles` no contiene). Se usa para resolver, en local, la carta
+  /// a la que evoluciona cada carta base y así poder mostrar la flecha de
+  /// evolución al ampliar la carta.
+  final List<CartaModel> todasLasCartas;
+
   final String uid;
   final VoidCallback onSave;
 
   const _DeckBuilderScreen({
     required this.mazo,
     required this.cartasDisponibles,
+    required this.todasLasCartas,
     required this.uid,
     required this.onSave,
   });
@@ -827,8 +836,43 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
   void initState() {
     super.initState();
     _cantidades = {for (final c in widget.cartasDisponibles) c.id: 0};
+
+    // Saneo: el tope de 8 solo se aplicaba al guardar, así que un mazo antiguo
+    // (o editado fuera del editor) podía tener en Firestore más de 8 ids,
+    // duplicados o ids que ya no existen en el catálogo. Aquí nos quedamos con
+    // las primeras [_maxCartasMazo] cartas VÁLIDAS y DISTINTAS en el orden
+    // guardado, y si el mazo guardado no coincide con eso lo reescribimos para
+    // dejarlo canónico (≤8, sin duplicados ni ids inválidos).
+    final saneados = <String>[];
     for (final id in widget.mazo.cartaIds) {
-      if (_cantidades.containsKey(id)) _cantidades[id] = 1;
+      if (saneados.length >= _maxCartasMazo) break;
+      if (!_cantidades.containsKey(id)) continue; // no está en el catálogo
+      if (_cantidades[id] == 1) continue; // duplicado (ya añadida)
+      _cantidades[id] = 1;
+      saneados.add(id);
+    }
+
+    // Como [saneados] solo filtra/recorta (nunca reordena), una longitud
+    // distinta a la guardada implica que algo se descartó → hay que persistir.
+    if (saneados.length != widget.mazo.cartaIds.length) {
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _persistirSaneo(saneados));
+    }
+  }
+
+  /// Reescribe en Firestore el mazo ya saneado (≤8, sin duplicados ni ids
+  /// inválidos). Silencioso: si falla, el recorte del servidor sigue cubriendo
+  /// la lectura, así que no molestamos al usuario mientras edita.
+  Future<void> _persistirSaneo(List<String> ids) async {
+    try {
+      await _db
+          .collection('Jugadores')
+          .doc(widget.uid)
+          .collection('Mazos')
+          .doc(widget.mazo.id)
+          .update({'cartaIds': ids, 'total': ids.length});
+    } catch (_) {
+      // Silencioso a propósito.
     }
   }
 
@@ -881,6 +925,16 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
       return;
     }
     setState(() => _cantidades[cartaId] = 1);
+  }
+
+  /// Resuelve, en local, la carta a la que evoluciona [idEvolucion] buscándola
+  /// en la lista completa del ejército. Se pasa a `showCardDetail` para que la
+  /// carta ampliada muestre la flecha de evolución (y su cara evolucionada).
+  Future<CartaModel?> _resolverEvolucion(String idEvolucion) async {
+    for (final c in widget.todasLasCartas) {
+      if (c.id == idEvolucion) return c;
+    }
+    return null;
   }
 
   @override
@@ -973,8 +1027,14 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
                   qty: qty,
                   onTap: () => _toggle(carta.id),
                   // Pulsación larga: abrir la carta en grande (misma vista de
-                  // detalle que en la colección / tablero).
-                  onLongPress: () => showCardDetail(context, carta),
+                  // detalle que en la colección / tablero). Se pasa el
+                  // resolvedor de evolución para que salga la flecha que
+                  // permite ver la carta a la que evoluciona.
+                  onLongPress: () => showCardDetail(
+                    context,
+                    carta,
+                    resolveEvolucion: _resolverEvolucion,
+                  ),
                 );
               },
             ),

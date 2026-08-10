@@ -39,6 +39,25 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
     );
   }
 
+  /// Abre SOLO el texto de la página a pantalla completa (sin la imagen), para
+  /// poder leer la historia cómodamente.
+  void _abrirTextoCompleto(BuildContext context, String texto) {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: false,
+        barrierColor: Colors.black,
+        pageBuilder: (_, __, ___) => _TextoCompletoScreen(
+          titulo: widget.historia.titulo,
+          texto: texto,
+          pagina: _index + 1,
+          total: _paginas.length,
+        ),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final war = context.war;
@@ -168,6 +187,20 @@ class _HistoriaDetalleScreenState extends State<HistoriaDetalleScreen> {
                   ),
                 ),
 
+                // ── Botón: leer el texto a pantalla completa ──────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      _FullscreenTextButton(
+                        onTap: () =>
+                            _abrirTextoCompleto(context, pagina.descripcion),
+                      ),
+                    ],
+                  ),
+                ),
+
                 // ── Descripción de la página ──────────────────────
                 Expanded(
                   flex: 2,
@@ -259,6 +292,111 @@ class _ImagenCompletaScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Botón cuadrado de "ampliar a pantalla completa" que se muestra encima del
+/// texto para abrir la descripción a pantalla completa (sin la imagen).
+class _FullscreenTextButton extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _FullscreenTextButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 32,
+        height: 32,
+        decoration: BoxDecoration(
+          color: war.superficie.withOpacity(0.85),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: war.primario.withOpacity(0.5), width: 1),
+        ),
+        child: Icon(Icons.fullscreen, color: war.primario, size: 20),
+      ),
+    );
+  }
+}
+
+/// Visor del texto de una página a pantalla completa (sin la imagen).
+class _TextoCompletoScreen extends StatelessWidget {
+  final String titulo;
+  final String texto;
+  final int pagina;
+  final int total;
+
+  const _TextoCompletoScreen({
+    required this.titulo,
+    required this.texto,
+    required this.pagina,
+    required this.total,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Scaffold(
+      backgroundColor: war.fondo,
+      appBar: AppBar(
+        backgroundColor: war.superficie,
+        iconTheme: IconThemeData(color: war.primario),
+        title: Text(
+          titulo.toUpperCase(),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 14,
+            fontFamily: 'Cinzel',
+            letterSpacing: 2,
+            color: war.primario,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.fullscreen_exit, color: war.primario),
+            tooltip: 'Salir de pantalla completa',
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 4),
+              child: Text(
+                '$pagina / $total',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: war.primario,
+                  fontFamily: 'Cinzel',
+                  letterSpacing: 2,
+                ),
+              ),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+                child: Text(
+                  texto,
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.6,
+                    color: war.texto,
+                    fontFamily: 'Cinzel',
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

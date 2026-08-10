@@ -16,24 +16,48 @@ class LobbyService {
   /// mostrar partidas ("dejó de buscar partidas"). Mismo criterio que en
   /// [misPartidasStream].
   Stream<List<LobbyModel>> lobbiesPublicosStream() {
-    return _db
+    // OPTIMIZACIÓN DE LECTURAS: antes esto era un listener en tiempo real
+    // (`snapshots()`) sobre hasta 50 partidas en espera. Como los bots entran y
+    // salen de salas constantemente, CADA cambio re-leía documentos y en CADA
+    // cliente con el lobby abierto, disparando el consumo de Firestore. Una
+    // lista pública tolera perfectamente algo de latencia, así que la
+    // sondeamos cada 12 s con una lectura acotada.
+    return _sondeoPeriodico(const Duration(seconds: 12), _leerLobbiesPublicos);
+  }
+
+  Future<List<LobbyModel>> _leerLobbiesPublicos() async {
+    final s = await _db
         .collection('Partidas')
         .where('estado', isEqualTo: 'esperando')
         .limit(50)
-        .snapshots()
-        .map((s) {
-      final list = <LobbyModel>[];
-      for (final d in s.docs) {
-        try {
-          final l = LobbyModel.fromFirestore(d);
-          if (!l.esPrivada) list.add(l); // privadas fuera, en cliente
-        } catch (_) {
-          // Ignorar documentos malformados.
-        }
+        .get();
+    final list = <LobbyModel>[];
+    for (final d in s.docs) {
+      try {
+        final l = LobbyModel.fromFirestore(d);
+        if (!l.esPrivada) list.add(l); // privadas fuera, en cliente
+      } catch (_) {
+        // Ignorar documentos malformados.
       }
-      list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
-      return list;
-    });
+    }
+    list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
+    return list;
+  }
+
+  /// Emite el resultado de [leer] inmediatamente y luego lo re-emite cada
+  /// [cada]. Sustituye a los listeners en tiempo real sobre CONSULTAS
+  /// multi-documento (que re-leían en cada cambio de cualquier partida). El
+  /// StreamBuilder cancela la suscripción al salir de pantalla, así que solo
+  /// consume mientras la lista está visible. Reutilizable para varias listas.
+  Stream<List<LobbyModel>> _sondeoPeriodico(
+    Duration cada,
+    Future<List<LobbyModel>> Function() leer,
+  ) async* {
+    // Primera emisión inmediata (sin esperar al primer tick).
+    yield await leer();
+    // Emisiones sucesivas. asyncMap serializa: no se solapan lecturas aunque
+    // una tarde más que el intervalo.
+    yield* Stream.periodic(cada).asyncMap((_) => leer());
   }
 
   // ── Stream de un lobby concreto ───────────────────────────
@@ -142,22 +166,47 @@ class LobbyService {
     await _db.collection('Partidas').doc(lobbyId).delete();
   }
 
+  /// Fija el ejército del jugador [uid] en la sala y lo marca como listo.
+  ///
+  /// IMPORTANTE — por qué es una TRANSACCIÓN y no un get+update:
+  /// El mazo/mano (`mazoPool`, `mano`) se reparte UNA sola vez al arrancar la
+  /// partida con el `ejercitoId` de ese momento y luego se preserva turno a
+  /// turno. Si se pudiera cambiar el ejército después (o si dos escrituras del
+  /// array `jugadores` se pisaran por no ser atómicas), el `ejercitoId` del
+  /// lobby quedaría desincronizado del mazo realmente repartido: se juega un
+  /// ejército pero el cuartel muestra otro (incidencia real: jugador con mazo
+  /// de Humanos y cuartel de Demonios). Para evitarlo:
+  ///   1) Solo se permite elegir/cambiar ejército mientras la sala está en
+  ///      `esperando` (una vez `en_curso` el mazo ya está repartido y fijado).
+  ///   2) Se hace dentro de una transacción, modificando SOLO la entrada de
+  ///      este `uid`, para no perder ni cruzar selecciones de otros jugadores
+  ///      o bots que entren a la vez.
   Future<void> seleccionarEjercito({
     required String lobbyId,
     required String uid,
     required int ejercitoId,
   }) async {
-    final doc = await _db.collection('Partidas').doc(lobbyId).get();
-    if (!doc.exists) return;
+    final ref = _db.collection('Partidas').doc(lobbyId);
+    await _db.runTransaction((tx) async {
+      final doc = await tx.get(ref);
+      if (!doc.exists) return;
 
-    final lobby = LobbyModel.fromFirestore(doc);
-    final jugadores = lobby.jugadores.map((j) {
-      if (j.uid == uid) return j.copyWith(ejercitoId: ejercitoId, listo: true);
-      return j;
-    }).toList();
+      final lobby = LobbyModel.fromFirestore(doc);
 
-    await _db.collection('Partidas').doc(lobbyId).update({
-      'jugadores': jugadores.map((j) => j.toMap()).toList(),
+      // Una vez la partida arrancó (o terminó), el ejército queda fijado: el
+      // mazo ya se repartió con él y cambiarlo ahora lo desincronizaría.
+      if (lobby.estado != LobbyEstado.esperando) return;
+
+      final jugadores = lobby.jugadores.map((j) {
+        if (j.uid == uid) {
+          return j.copyWith(ejercitoId: ejercitoId, listo: true);
+        }
+        return j;
+      }).toList();
+
+      tx.update(ref, {
+        'jugadores': jugadores.map((j) => j.toMap()).toList(),
+      });
     });
   }
 
@@ -227,28 +276,38 @@ class LobbyService {
   /// Un único `arrayContains` no requiere índice compuesto. El estado se filtra
   /// en cliente (excluir finalizadas) para no necesitar un índice combinado.
   Stream<List<LobbyModel>> misPartidasStream(String uid) {
-    return _db
+    // OPTIMIZACIÓN DE LECTURAS: en tiempo real, este listener re-leía la partida
+    // completa cada vez que se escribía en ella (cada resolución de turno, cada
+    // movimiento persistido), incluidas las partidas EN CURSO, que son las que
+    // más cambian. Con la lista sondeada cada 15 s el coste queda acotado y
+    // predecible, sin amplificarse con la actividad de la partida.
+    return _sondeoPeriodico(
+      const Duration(seconds: 15),
+      () => _leerMisPartidas(uid),
+    );
+  }
+
+  Future<List<LobbyModel>> _leerMisPartidas(String uid) async {
+    final s = await _db
         .collection('Partidas')
         .where('participantes', arrayContains: uid)
-        .snapshots()
-        .map((s) {
-      final list = <LobbyModel>[];
-      for (final d in s.docs) {
-        try {
-          final l = LobbyModel.fromFirestore(d);
-          // Mostrar solo partidas activas (esperando o en curso) en las que el
-          // jugador sigue presente.
-          final sigueEnPartida = l.jugadores.any((j) => j.uid == uid);
-          if (l.estado != LobbyEstado.finalizada && sigueEnPartida) {
-            list.add(l);
-          }
-        } catch (_) {
-          // Documento malformado: lo ignoramos para no tumbar la lista entera.
+        .get();
+    final list = <LobbyModel>[];
+    for (final d in s.docs) {
+      try {
+        final l = LobbyModel.fromFirestore(d);
+        // Mostrar solo partidas activas (esperando o en curso) en las que el
+        // jugador sigue presente.
+        final sigueEnPartida = l.jugadores.any((j) => j.uid == uid);
+        if (l.estado != LobbyEstado.finalizada && sigueEnPartida) {
+          list.add(l);
         }
+      } catch (_) {
+        // Documento malformado: lo ignoramos para no tumbar la lista entera.
       }
-      list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
-      return list;
-    });
+    }
+    list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));
+    return list;
   }
 
   // ── Buscar lobby privado por ID ───────────────────────────
