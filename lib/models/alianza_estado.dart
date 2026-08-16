@@ -69,6 +69,15 @@ class EstadoAlianzas {
     return null;
   }
 
+  /// TODAS las propuestas ENTRANTES pendientes para [uid] (bandeja de
+  /// peticiones). Se usa para el badge y para la lista de Aceptar/Rechazar.
+  List<PropuestaAlianza> propuestasEntrantesParaLista(String uid) =>
+      propuestas.where((p) => p.paraUid == uid).toList();
+
+  /// Nº de propuestas entrantes pendientes para [uid] (para el badge del menú).
+  int propuestasPendientesPara(String uid) =>
+      propuestas.where((p) => p.paraUid == uid).length;
+
   /// Propuesta SALIENTE pendiente de [uid] (la primera encontrada), o null.
   PropuestaAlianza? propuestaSalienteDe(String uid) {
     for (final p in propuestas) {

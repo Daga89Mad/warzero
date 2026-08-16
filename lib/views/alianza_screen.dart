@@ -7,6 +7,8 @@ import '../models/alianza_estado.dart';
 
 /// Pantalla de ALIANZA (partidas de 4+ jugadores).
 ///
+/// - BANDEJA: arriba se listan las propuestas RECIBIDAS pendientes con
+///   Aceptar/Rechazar (siempre que no tengas ya una alianza activa).
 /// - Si NO tienes alianza activa: lista de jugadores; eliges uno e indicas
 ///   cuántos turnos dura la alianza → se envía la propuesta.
 /// - Si tienes una propuesta saliente pendiente: se muestra a la espera de
@@ -42,6 +44,7 @@ class _AlianzaScreenState extends State<AlianzaScreen> {
   static const _fondo = Color(0xFF0A1018);
   static const _panel = Color(0xFF0C1828);
   static const _rojo = Color(0xFFE06060);
+  static const _verde = Color(0xFF9AD06A);
 
   late Map<String, dynamic> _alianzas;
   bool _enviando = false;
@@ -94,6 +97,41 @@ class _AlianzaScreenState extends State<AlianzaScreen> {
           error: !r.ok);
     } catch (e) {
       _snack('No se pudo enviar la propuesta: $e', error: true);
+    } finally {
+      if (mounted) setState(() => _enviando = false);
+    }
+  }
+
+  /// Responde una propuesta RECIBIDA (bandeja). Para aceptar pide confirmación,
+  /// para evitar aceptados accidentales.
+  Future<void> _responder(PropuestaAlianza p, bool aceptar) async {
+    if (aceptar) {
+      final ok = await _confirmar(
+        titulo: 'Confirmar alianza',
+        cuerpo: '¿Aliarte con ${_alias(p.deUid)} durante ${p.turnos} turnos? '
+            'Mientras dure, sumáis fuerza y compartís casilla, pero cada uno '
+            'recibe la mitad de PC en las batallas.',
+        confirmar: 'ALIARME',
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => _enviando = true);
+    try {
+      final r = await widget.api.responderAlianza(
+        lobbyId: widget.lobbyId,
+        uid: widget.miUid,
+        proponenteUid: p.deUid,
+        aceptar: aceptar,
+      );
+      _aplicarResultado(r);
+      _snack(
+        r.mensaje.isEmpty
+            ? (aceptar ? 'Alianza aceptada.' : 'Propuesta rechazada.')
+            : r.mensaje,
+        error: !r.ok,
+      );
+    } catch (e) {
+      _snack('No se pudo responder la propuesta: $e', error: true);
     } finally {
       if (mounted) setState(() => _enviando = false);
     }
@@ -248,6 +286,7 @@ class _AlianzaScreenState extends State<AlianzaScreen> {
     final est = _estado;
     final alianza = est.alianzaDe(widget.miUid);
     final saliente = est.propuestaSalienteDe(widget.miUid);
+    final recibidas = est.propuestasEntrantesParaLista(widget.miUid);
 
     return Scaffold(
       backgroundColor: _fondo,
@@ -265,11 +304,20 @@ class _AlianzaScreenState extends State<AlianzaScreen> {
       body: Stack(
         children: [
           SafeArea(
-            child: alianza != null
-                ? _vistaAliado(alianza)
-                : (saliente != null
-                    ? _vistaPropuestaEnviada(saliente)
-                    : _vistaSeleccion()),
+            child: Column(
+              children: [
+                // ── Bandeja de propuestas recibidas (si no tienes alianza) ──
+                if (alianza == null && recibidas.isNotEmpty)
+                  _vistaRecibidas(recibidas),
+                Expanded(
+                  child: alianza != null
+                      ? _vistaAliado(alianza)
+                      : (saliente != null
+                          ? _vistaPropuestaEnviada(saliente)
+                          : _vistaSeleccion()),
+                ),
+              ],
+            ),
           ),
           if (_enviando)
             Container(
@@ -277,6 +325,67 @@ class _AlianzaScreenState extends State<AlianzaScreen> {
               child:
                   const Center(child: CircularProgressIndicator(color: _oro)),
             ),
+        ],
+      ),
+    );
+  }
+
+  // ── Bandeja: propuestas RECIBIDAS con Aceptar/Rechazar ──────────────────
+  Widget _vistaRecibidas(List<PropuestaAlianza> props) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      decoration: BoxDecoration(
+        color: _panel,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _oro.withOpacity(0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.mark_email_unread, color: _oro, size: 18),
+              const SizedBox(width: 8),
+              Text('Propuestas recibidas (${props.length})',
+                  style: const TextStyle(
+                      color: Color(0xFFE0D8C0),
+                      fontFamily: 'Cinzel',
+                      fontSize: 14)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          for (final p in props) _filaRecibida(p),
+        ],
+      ),
+    );
+  }
+
+  Widget _filaRecibida(PropuestaAlianza p) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Container(
+            width: 12,
+            height: 12,
+            decoration:
+                BoxDecoration(shape: BoxShape.circle, color: _color(p.deUid)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text('${_alias(p.deUid)} · ${p.turnos} turnos',
+                style: const TextStyle(color: Color(0xFFE0D8C0), fontSize: 13)),
+          ),
+          TextButton(
+            onPressed: _enviando ? null : () => _responder(p, false),
+            child: const Text('Rechazar', style: TextStyle(color: _rojo)),
+          ),
+          TextButton(
+            onPressed: _enviando ? null : () => _responder(p, true),
+            child: const Text('Aceptar',
+                style: TextStyle(color: _verde, fontWeight: FontWeight.bold)),
+          ),
         ],
       ),
     );
@@ -303,7 +412,7 @@ class _AlianzaScreenState extends State<AlianzaScreen> {
           const SizedBox(height: 6),
           Center(
             child: Text('Turnos restantes: ${a.turnosRestantes}',
-                style: const TextStyle(color: Color(0xFF9AD06A), fontSize: 14)),
+                style: const TextStyle(color: _verde, fontSize: 14)),
           ),
           const SizedBox(height: 20),
           Container(

@@ -201,14 +201,28 @@ class RevisionTurnoScreen extends StatelessWidget {
       final esOrigen = a['origen'] == coord || a['cartaOrigenCoord'] == coord;
 
       final titulo = habilidad.isNotEmpty ? '$etiqueta · $habilidad' : etiqueta;
+      // Celda desde la que se lanzó (origen de la acción o celda de la carta
+      // teletransportada). Sirve para el "desde qué celda" del detalle.
+      final origen = ((a['origen'] as String?)?.isNotEmpty ?? false)
+          ? a['origen'] as String
+          : (a['cartaOrigenCoord'] as String?) ?? '';
       final detalle = StringBuffer('Lanzada por: $quien');
+      if (esObjetivo && origen.isNotEmpty && origen != coord) {
+        detalle.write(' · desde $origen');
+      }
 
       switch (tipo) {
         case 'disparo':
           final destruidas = (a['cartasDestruidas'] as List? ?? const [])
               .map((c) => Map<String, dynamic>.from(c as Map))
-              .map((c) => (c['Nombre'] ?? c['nombre'] ?? 'Carta').toString())
-              .toList();
+              .map((c) {
+            final n = (c['Nombre'] ?? c['nombre'] ?? 'Carta').toString();
+            final o = (c['ownerUid'] ?? '').toString();
+            final q = o == localUid
+                ? 'tuya'
+                : (o.isNotEmpty ? _quien(o).toLowerCase() : '');
+            return q.isEmpty ? n : '$n ($q)';
+          }).toList();
           if (esObjetivo) {
             detalle.write('\nCelda objetivo · ');
             detalle.write(destruidas.isEmpty

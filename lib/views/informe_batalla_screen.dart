@@ -166,7 +166,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
     final opciones = _opciones;
 
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         backgroundColor: war.fondo,
         appBar: AppBar(
@@ -230,6 +230,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                 fontFamily: 'Cinzel', fontSize: 9, letterSpacing: 1.5),
             tabs: const [
               Tab(text: 'COMBATES'),
+              Tab(text: 'ACCIONES'),
               Tab(text: 'ZERO'),
               Tab(text: 'CARTA'),
               Tab(text: 'MOVIMIENTOS'),
@@ -240,6 +241,12 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
           children: [
             _CombatesTab(
               combateLog: _combateActual,
+              accionesLog: _accionesActual,
+              localUid: widget.localUid,
+              alias: _alias,
+              colorZona: _colorZona,
+            ),
+            _AccionesTab(
               accionesLog: _accionesActual,
               localUid: widget.localUid,
               alias: _alias,
@@ -742,6 +749,363 @@ class _DisparoTile extends StatelessWidget {
                           color: war.textoTenue)),
                   const SizedBox(height: 4),
                   ...resto.map((c) {
+                    final nombre =
+                        (c['Nombre'] ?? c['nombre'] ?? 'Carta').toString();
+                    final ownerUid = (c['ownerUid'] ?? '').toString();
+                    final owner = ownerUid == localUid
+                        ? '(tuya)'
+                        : ownerUid.isNotEmpty
+                            ? '(${alias(ownerUid)})'
+                            : '';
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Row(
+                        children: [
+                          const Text('✖',
+                              style: TextStyle(fontSize: 9, color: _cDerrota)),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text('$nombre $owner',
+                                style: TextStyle(
+                                    fontFamily: 'Cinzel',
+                                    fontSize: 9,
+                                    color: war.texto),
+                                overflow: TextOverflow.ellipsis),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB ACCIONES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pestaña que lista TODAS las habilidades/acciones lanzadas este turno
+/// (teletransporte, disparo, veneno, parálisis, escudo, potenciaciones y
+/// acciones fallidas). Por cada una muestra: quién la lanzó y desde qué celda,
+/// la habilidad y su efecto (turnos y magnitud) y las cartas afectadas o
+/// destruidas.
+class _AccionesTab extends StatelessWidget {
+  final List<Map<String, dynamic>> accionesLog;
+  final String localUid;
+  final String Function(String) alias;
+  final Color Function(String?) colorZona;
+
+  const _AccionesTab({
+    required this.accionesLog,
+    required this.localUid,
+    required this.alias,
+    required this.colorZona,
+  });
+
+  static const _tiposAccion = {
+    'teletransporte',
+    'disparo',
+    'veneno',
+    'paralisis',
+    'escudo',
+    'potFuerza',
+    'potDefensa',
+    'potMovimiento',
+    'fallida',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final acciones = accionesLog
+        .where((a) => _tiposAccion.contains(a['tipo']))
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+
+    if (acciones.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.flash_on, size: 40, color: war.borde),
+              const SizedBox(height: 16),
+              Text('Sin habilidades este turno.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 11,
+                      color: war.textoTenue)),
+              const SizedBox(height: 8),
+              Text(
+                  'Nadie lanzó teletransportes, disparos\nni efectos sobre celdas.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 9,
+                      color: war.borde,
+                      height: 1.6)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      padding: const EdgeInsets.all(14),
+      itemCount: acciones.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _AccionTile(
+        data: acciones[i],
+        localUid: localUid,
+        alias: alias,
+        colorZona: colorZona,
+      ),
+    );
+  }
+}
+
+/// Ficha de una acción/habilidad en la pestaña ACCIONES.
+class _AccionTile extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final String localUid;
+  final String Function(String) alias;
+  final Color Function(String?) colorZona;
+
+  const _AccionTile({
+    required this.data,
+    required this.localUid,
+    required this.alias,
+    required this.colorZona,
+  });
+
+  (IconData, Color, String) _meta(String tipo) {
+    switch (tipo) {
+      case 'teletransporte':
+        return (Icons.auto_awesome, const Color(0xFFB98CFF), 'TELETRANSPORTE');
+      case 'disparo':
+        return (Icons.gps_fixed, const Color(0xFF40C0FF), 'DISPARO');
+      case 'veneno':
+        return (Icons.science, const Color(0xFF7ED957), 'VENENO');
+      case 'paralisis':
+        return (Icons.ac_unit, const Color(0xFF66D0FF), 'PARÁLISIS');
+      case 'escudo':
+        return (Icons.shield, const Color(0xFF5AA0FF), 'ESCUDO');
+      case 'potFuerza':
+        return (
+          Icons.local_fire_department,
+          const Color(0xFFFFB040),
+          'POT. FUERZA'
+        );
+      case 'potDefensa':
+        return (Icons.security, const Color(0xFFFFB040), 'POT. DEFENSA');
+      case 'potMovimiento':
+        return (
+          Icons.directions_run,
+          const Color(0xFFFFB040),
+          'POT. MOVIMIENTO'
+        );
+      case 'fallida':
+        return (Icons.block, const Color(0xFF9AA0A6), 'FALLIDA');
+      default:
+        return (Icons.flash_on, const Color(0xFF40C0FF), tipo.toUpperCase());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final tipo = (data['tipo'] as String?) ?? '';
+    final (icon, color, etiqueta) = _meta(tipo);
+    final uid = (data['uid'] as String?) ?? '';
+    final zona = data['zona'] as String?;
+    final esLocal = uid == localUid;
+    final lanzador = esLocal ? 'TÚ' : alias(uid).toUpperCase();
+    final habilidad = (data['habilidadNombre'] as String?) ?? '';
+    // "desde qué celda": preferimos el origen de la acción; si no, la celda de
+    // la carta que se teletransporta.
+    final origen = ((data['origen'] as String?)?.isNotEmpty ?? false)
+        ? data['origen'] as String
+        : (data['cartaOrigenCoord'] as String?) ?? '';
+    final zonaColor = colorZona(zona);
+
+    // Etiqueta de celda del encabezado, líneas de efecto y cartas destruidas.
+    final String celdaLabel;
+    final efecto = <String>[];
+    final destruidas = <Map<String, dynamic>>[];
+
+    switch (tipo) {
+      case 'teletransporte':
+        final desde = (data['cartaOrigenCoord'] as String?) ?? '?';
+        final hasta = (data['destino'] as String?) ?? '?';
+        final carta = (data['cartaNombre'] as String?) ?? 'una carta';
+        celdaLabel = '$desde  →  $hasta';
+        efecto.add('Teletransportó $carta a $hasta');
+        break;
+      case 'disparo':
+        final obj = (data['objetivo'] as String?) ?? '?';
+        celdaLabel = 'CELDA $obj';
+        destruidas.addAll((data['cartasDestruidas'] as List? ?? const [])
+            .map((c) => Map<String, dynamic>.from(c as Map)));
+        efecto.add(destruidas.isEmpty
+            ? 'Impactó sin bajas'
+            : 'Destruyó ${destruidas.length} carta(s)');
+        break;
+      case 'veneno':
+        final obj = (data['objetivo'] as String?) ?? '?';
+        final mag = (data['magnitud'] as num?)?.toInt() ?? 0;
+        final turnos = (data['turnosRestantes'] as num?)?.toInt() ?? 0;
+        celdaLabel = 'CELDA $obj';
+        efecto.add('−$mag defensa a cartas enemigas');
+        if (turnos > 0) efecto.add('Dura $turnos turno(s)');
+        break;
+      case 'paralisis':
+        final obj = (data['objetivo'] as String?) ?? '?';
+        final turnos = (data['turnosRestantes'] as num?)?.toInt() ?? 0;
+        celdaLabel = 'CELDA $obj';
+        efecto.add('Congela cartas enemigas de la celda');
+        if (turnos > 0) efecto.add('Dura $turnos turno(s)');
+        break;
+      case 'escudo':
+        final obj = (data['objetivo'] as String?) ?? '?';
+        final turnos = (data['turnosRestantes'] as num?)?.toInt() ?? 0;
+        celdaLabel = 'CELDA $obj';
+        efecto.add('Protege la celda frente a habilidades');
+        if (turnos > 0) efecto.add('Dura $turnos turno(s)');
+        break;
+      case 'potFuerza':
+      case 'potDefensa':
+      case 'potMovimiento':
+        final obj =
+            (data['objetivo'] as String?) ?? (origen.isNotEmpty ? origen : '?');
+        final turnos = (data['turnosRestantes'] as num?)?.toInt() ?? 0;
+        celdaLabel = 'CELDA $obj';
+        final mag = (data['magnitud'] as num?)?.toInt() ?? 0;
+        if (mag != 0) efecto.add('Magnitud $mag');
+        if (turnos > 0) efecto.add('Dura $turnos turno(s)');
+        break;
+      case 'fallida':
+        final obj = (data['objetivo'] as String?) ??
+            (data['destino'] as String?) ??
+            (origen.isNotEmpty ? origen : '');
+        celdaLabel = obj.isNotEmpty ? 'CELDA $obj' : 'ACCIÓN FALLIDA';
+        efecto.add((data['motivo'] as String?) ?? 'No se pudo resolver');
+        break;
+      default:
+        celdaLabel = 'ACCIÓN';
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: war.superficie,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.35), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Cabecera: celda + tipo ──
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(7)),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 13, color: color),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(celdaLabel,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 10,
+                          letterSpacing: 1.2,
+                          color: color)),
+                ),
+                const SizedBox(width: 6),
+                _Badge(label: etiqueta, color: color),
+              ],
+            ),
+          ),
+          // ── Cuerpo ──
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Quién la lanzó y desde qué celda.
+                Row(
+                  children: [
+                    Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                            shape: BoxShape.circle, color: zonaColor)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        origen.isNotEmpty
+                            ? '$lanzador  ·  desde $origen'
+                            : lanzador,
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 9,
+                            color: zonaColor),
+                      ),
+                    ),
+                  ],
+                ),
+                // Habilidad.
+                if (habilidad.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text('Habilidad: $habilidad',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel', fontSize: 9, color: war.texto)),
+                ],
+                // Efecto (turnos y magnitud).
+                if (efecto.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  ...efecto.map((t) => Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('•',
+                                style: TextStyle(fontSize: 10, color: color)),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(t,
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      height: 1.3,
+                                      color: war.texto)),
+                            ),
+                          ],
+                        ),
+                      )),
+                ],
+                // Cartas destruidas (disparo).
+                if (destruidas.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text('CARTAS DESTRUIDAS',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 8,
+                          letterSpacing: 1,
+                          color: war.textoTenue)),
+                  const SizedBox(height: 4),
+                  ...destruidas.map((c) {
                     final nombre =
                         (c['Nombre'] ?? c['nombre'] ?? 'Carta').toString();
                     final ownerUid = (c['ownerUid'] ?? '').toString();

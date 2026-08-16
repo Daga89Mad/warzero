@@ -47,6 +47,10 @@ class PartidaTopBar extends StatelessWidget {
   final bool puedeDeshacer;
   final VoidCallback onDeshacer;
 
+  /// Nº de propuestas de alianza ENTRANTES pendientes de responder. > 0 pinta
+  /// un badge rojo sobre el botón de menú y sobre el ítem ALIANZA.
+  final int propuestasAlianzaPendientes;
+
   const PartidaTopBar({
     super.key,
     required this.nombrePartida,
@@ -63,6 +67,7 @@ class PartidaTopBar extends StatelessWidget {
     required this.onAlianza,
     required this.puedeDeshacer,
     required this.onDeshacer,
+    this.propuestasAlianzaPendientes = 0,
   });
 
   @override
@@ -140,11 +145,22 @@ class PartidaTopBar extends StatelessWidget {
                 value: '__alianza__',
                 enabled: puedeAlianza,
                 height: 40,
-                child: _FilaAccion(
-                  icon: Icons.handshake,
-                  label: 'ALIANZA',
-                  color: const Color(0xFFC88AD0),
-                  enabled: puedeAlianza,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    _FilaAccion(
+                      icon: Icons.handshake,
+                      label: 'ALIANZA',
+                      color: const Color(0xFFC88AD0),
+                      enabled: puedeAlianza,
+                    ),
+                    if (propuestasAlianzaPendientes > 0)
+                      Positioned(
+                        right: 0,
+                        top: 6,
+                        child: _BadgeDot(count: propuestasAlianzaPendientes),
+                      ),
+                  ],
                 ),
               ),
               PopupMenuItem<String>(
@@ -178,15 +194,28 @@ class PartidaTopBar extends StatelessWidget {
                 ),
               ),
             ],
-            child: Container(
-              width: 34,
-              height: 30,
-              decoration: BoxDecoration(
-                color: const Color(0xFF0A1525),
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: const Color(0x40C8A860), width: 1),
-              ),
-              child: const Icon(Icons.menu, size: 18, color: Color(0xFFC8A860)),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 34,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0A1525),
+                    borderRadius: BorderRadius.circular(6),
+                    border:
+                        Border.all(color: const Color(0x40C8A860), width: 1),
+                  ),
+                  child: const Icon(Icons.menu,
+                      size: 18, color: Color(0xFFC8A860)),
+                ),
+                if (propuestasAlianzaPendientes > 0)
+                  Positioned(
+                    right: -5,
+                    top: -5,
+                    child: _BadgeDot(count: propuestasAlianzaPendientes),
+                  ),
+              ],
             ),
           ),
 
@@ -231,6 +260,36 @@ class PartidaTopBar extends StatelessWidget {
           // Espaciador simétrico al botón de la izquierda para centrar el título.
           const SizedBox(width: 34),
         ],
+      ),
+    );
+  }
+}
+
+// ── Badge rojo con contador (propuestas de alianza pendientes) ──
+class _BadgeDot extends StatelessWidget {
+  final int count;
+  const _BadgeDot({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    final txt = count > 9 ? '9+' : '$count';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      constraints: const BoxConstraints(minWidth: 15, minHeight: 15),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE0403A),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF0A1525), width: 1),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        txt,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 9,
+          height: 1,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }

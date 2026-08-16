@@ -26,6 +26,9 @@ import '../models/game_config.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
 import '../widgets/board_widget.dart';
+import '../models/jugador_model.dart';
+import '../widgets/player_hud.dart';
+import '../widgets/hand_widget.dart';
 
 // ─────────────────────────────────────────────────────────────
 // COLORES DE JUGADOR (fijos).
@@ -685,26 +688,30 @@ class _TutorialScreenState extends State<TutorialScreen>
   @override
   Widget build(BuildContext context) {
     final war = context.war;
+    final resaltarEnergia = _step == _Step.energiaZero;
     return Scaffold(
       backgroundColor: war.fondo,
-      appBar: AppBar(
-        title: const Text('TUTORIAL',
-            style: TextStyle(fontFamily: 'Cinzel', letterSpacing: 2)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).maybePop(),
-            child: Text('SALIR',
-                style: TextStyle(
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 1,
-                    color: war.textoTenue)),
-          ),
-        ],
-      ),
       body: SafeArea(
         child: Column(
           children: [
-            _barraZero(war),
+            // ── Menú superior REAL de la partida (jugadores + salir) ──
+            PartidaTopBar(
+              nombrePartida: 'TUTORIAL',
+              colorAsignado: _cYo,
+              jugadores: _hudJugadores,
+              onSalir: () => Navigator.of(context).maybePop(),
+              // En el tutorial estas acciones se muestran atenuadas (inertes).
+              puedeCuartel: false,
+              onCuartel: () {},
+              puedeInforme: false,
+              onInforme: () {},
+              puedePuntuaciones: false,
+              onPuntuaciones: () {},
+              puedeAlianza: false,
+              onAlianza: () {},
+              puedeDeshacer: false,
+              onDeshacer: () {},
+            ),
             // Tablero REAL (respeta el ajuste 3D/plano de Ajustes).
             Expanded(
               child: BoardWidget(
@@ -730,7 +737,38 @@ class _TutorialScreenState extends State<TutorialScreen>
                 onCellTap: (coord, ri, ci) => _onCellTap(coord),
               ),
             ),
-            _mano4(war),
+            // ── Barra de jugador REAL: inicial + Energía Zero + FIN TURNO ──
+            // En el paso de Energía se resalta con un glow para guiar la vista.
+            Container(
+              decoration: resaltarEnergia
+                  ? BoxDecoration(
+                      border: Border.all(color: _cRayo, width: 2),
+                      boxShadow: [
+                        BoxShadow(
+                            color: _cRayo.withOpacity(0.4), blurRadius: 14),
+                      ],
+                    )
+                  : null,
+              child: BottomHudBar(
+                player: _sesionYo,
+                isMyTurn: true,
+                colorOverride: _cYo,
+                mazoCount: _mano.length,
+                endTurnLabel: 'FIN TURNO',
+                // Inertes en el tutorial: se avanza con el panel de abajo.
+                onEndTurn: null,
+                onVerMazo: null,
+              ),
+            ),
+            // ── Mano inferior REAL ──
+            HandWidget(
+              cartas: _mano.map((c) => c.aModelo()).toList(),
+              selectedIndex: _selHand == null
+                  ? null
+                  : _mano.indexWhere((c) => c.id == _selHand!.id),
+              onCardTap: (i) => _onHandTap(_mano[i]),
+              energiesDisponibles: _zero,
+            ),
             _panelCoach(war),
           ],
         ),
@@ -738,154 +776,22 @@ class _TutorialScreenState extends State<TutorialScreen>
     );
   }
 
-  // ── Barra superior: Energía Zero ────────────────────────────
-  Widget _barraZero(WarColors war) {
-    final resaltar = _step == _Step.energiaZero;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: war.superficie,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: resaltar ? _cRayo : war.borde.withOpacity(0.4),
-          width: resaltar ? 2 : 1,
-        ),
-        boxShadow: resaltar
-            ? [BoxShadow(color: _cRayo.withOpacity(0.4), blurRadius: 14)]
-            : null,
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.bolt, color: _cRayo, size: 22),
-          const SizedBox(width: 6),
-          Text('ENERGÍA ZERO',
-              style: TextStyle(
-                  fontFamily: 'Cinzel',
-                  fontSize: 12,
-                  letterSpacing: 1.5,
-                  color: war.textoTenue)),
-          const Spacer(),
-          Text('$_zero',
-              style: const TextStyle(
-                  fontFamily: 'Cinzel',
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  color: _cRayo)),
-          const SizedBox(width: 3),
-          const Text('Ø',
-              style:
-                  TextStyle(fontFamily: 'Cinzel', fontSize: 16, color: _cRayo)),
-        ],
-      ),
-    );
-  }
+  /// Sesión del jugador local para la barra inferior real (inicial + Zero).
+  PlayerSession get _sesionYo => PlayerSession(
+        datos: const JugadorDatos(
+            uid: 'yo', alias: 'TÚ', dinero: 0, imagenPerfil: ''),
+        zona: 'south',
+        colorIndex: 3,
+        puntos: _zero,
+      );
 
-  // ── Mano inferior (4 cartas) ────────────────────────────────
-  Widget _mano4(WarColors war) {
-    return Container(
-      height: 122,
-      margin: const EdgeInsets.symmetric(horizontal: 12),
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: _mano.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (context, i) {
-          final carta = _mano[i];
-          final seleccionada = _selHand?.id == carta.id;
-          final resaltarAtrib =
-              _step == _Step.atributos && carta.id == 'soldado';
-          final resaltarLupa =
-              _step == _Step.cartaGrande && carta.id == 'soldado';
-          final destacar = seleccionada || resaltarAtrib;
-          return GestureDetector(
-            onTap: () => _onHandTap(carta),
-            child: AnimatedBuilder(
-              animation: _pulse,
-              builder: (context, __) => Container(
-                width: 94,
-                decoration: BoxDecoration(
-                  color: war.superficie,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: destacar
-                        ? carta.condColor.withOpacity(0.5 + 0.5 * _pulse.value)
-                        : war.borde.withOpacity(0.35),
-                    width: destacar ? 2.5 : 1,
-                  ),
-                ),
-                padding: const EdgeInsets.all(6),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        GestureDetector(
-                          onTap: () => _verCarta(
-                            carta,
-                            avanzarAlCerrar: _step == _Step.cartaGrande &&
-                                carta.id == 'soldado',
-                          ),
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: resaltarLupa
-                                  ? _cRayo
-                                      .withOpacity(0.25 + 0.35 * _pulse.value)
-                                  : Colors.transparent,
-                            ),
-                            child: Icon(Icons.zoom_in,
-                                size: 16,
-                                color: resaltarLupa ? _cRayo : war.textoTenue),
-                          ),
-                        ),
-                        const Spacer(),
-                        Text('Ø${carta.coste}',
-                            style: const TextStyle(
-                                fontSize: 10,
-                                color: _cRayo,
-                                fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Icon(carta.icon, size: 15, color: carta.condColor),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            carta.nombre,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontFamily: 'Cinzel',
-                              fontSize: 10,
-                              height: 1.1,
-                              color: war.texto,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const Spacer(),
-                    if (carta.cond != _Cond.accion)
-                      Text('⚔${carta.fuerza}  🛡${carta.defensa}',
-                          style: TextStyle(fontSize: 10, color: war.textoTenue))
-                    else
-                      Text(carta.condLabel,
-                          style:
-                              TextStyle(fontSize: 9, color: carta.condColor)),
-                  ],
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
+  /// Jugadores para el desplegable del menú superior real (inicial + Zero).
+  List<HudJugadorInfo> get _hudJugadores => [
+        HudJugadorInfo(alias: 'TÚ', color: _cYo, zeros: _zero, esLocal: true),
+        const HudJugadorInfo(alias: 'Rojo', color: _cRojo, zeros: 0),
+        const HudJugadorInfo(alias: 'Azul', color: _cAzul, zeros: 0),
+        const HudJugadorInfo(alias: 'Verde', color: _cVerde, zeros: 0),
+      ];
 
   // ── Carta en grande (overlay) ───────────────────────────────
   Future<void> _verCarta(_TCard c, {bool avanzarAlCerrar = false}) async {
@@ -1109,7 +1015,8 @@ class _TutorialScreenState extends State<TutorialScreen>
       case _Step.energiaZero:
         return const _Coach(
           titulo: '1 · Energía Zero (Ø)',
-          cuerpo: 'Arriba ves tu Energía Zero: la moneda del juego. Con ella '
+          cuerpo: 'Abajo, en tu barra de jugador, ves tu Energía Zero (Ø): '
+              'la moneda del juego. Con ella '
               'despliegas cartas y lanzas acciones. La consigues ganando '
               'combates y capturando los RAYOS ⚡ del tablero.',
           boton: 'SIGUIENTE',
@@ -1125,10 +1032,9 @@ class _TutorialScreenState extends State<TutorialScreen>
       case _Step.cartaGrande:
         return const _Coach(
           titulo: '3 · Ver una carta en grande',
-          cuerpo:
-              'Toca la lupa 🔍 del "Soldado Zero" para ver todos sus datos en '
-              'detalle.',
-          hint: 'Toca la lupa de la carta Soldado Zero',
+          cuerpo: 'Mantén pulsada la carta "Soldado Zero" de tu mano para ver '
+              'todos sus datos en detalle. Cuando termines, pulsa SIGUIENTE.',
+          boton: 'SIGUIENTE',
         );
       case _Step.sacarCuartel:
         final tieneSel = _selHand?.id == 'soldado';

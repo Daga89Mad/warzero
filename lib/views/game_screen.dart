@@ -151,6 +151,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Claves de propuestas/avisos ya mostrados (para no repetir en cada sondeo).
   final Set<String> _alianzaVistos = {};
 
+  /// Nº de propuestas de alianza ENTRANTES pendientes de responder (para el
+  /// badge del menú). Se recalcula en cada _revisarAlianzas desde el estado.
+  int _propuestasPendientes = 0;
+
   /// Jugadores eliminados (cuartel conquistado).
   List<String> _jugadoresEliminados = [];
 
@@ -268,6 +272,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// turno y por tanto no pueden volver a moverse. Usar carta.id aquí era el
   /// bug de "dos Tiburón de combate": mover una copia bloqueaba a la otra.
   final Set<String> _cartasMovidasEsteTurno = {};
+
+  /// Cartas robadas este turno cuyo gasto/carta aún NO se han consolidado
+  /// (se consolidan al cerrar turno). Se usa para: (a) impedir sacrificarlas
+  /// el mismo turno y (b) identificarlas por referencia al revertir.
+  final List<CartaModel> _cartasRobadasEsteTurno = [];
 
   /// Exclusión mutua POR CARTA (no por turno): una carta que se movió este turno
   /// no puede evolucionar, y una que evolucionó no puede moverse. Se rastrea por
@@ -1368,6 +1377,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _boardStateInicial = serverStartBoard;
           _handInicial = List.from(manoFinal);
           _cartasMovidasEsteTurno.clear();
+          _cartasRobadasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
           _origenTurnoPorId.clear();
@@ -1432,6 +1442,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _boardStateInicial = _boardState;
         _handInicial = List.from(manoInicial);
         _cartasMovidasEsteTurno.clear();
+        _cartasRobadasEsteTurno.clear();
         _cartasQueEvolucionaron.clear();
         _cartasQueSeMovieron.clear();
         _origenTurnoPorId.clear();
@@ -1714,6 +1725,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               .withRayos(_rayoCoordsFromData(data))
               .withCuarteles(_cuartelesDestruidosFromData(data));
           _cartasMovidasEsteTurno.clear();
+          _cartasRobadasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
           _origenTurnoPorId.clear();
@@ -1913,6 +1925,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _boardState = _boardStateInicial;
       _hand = List.from(_handInicial);
       _cartasMovidasEsteTurno.clear();
+      _cartasRobadasEsteTurno.clear();
       _cartasQueEvolucionaron.clear();
       _cartasQueSeMovieron.clear();
       _origenTurnoPorId.clear();
@@ -2232,9 +2245,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
-  /// Abre las PUNTUACIONES de esta partida: victorias/derrotas (por combate) y
-  /// PC de cada jugador, leídos de statsPartida del lobby.
-  // ── Alianzas (partidas de 4+ jugadores) ──────────────────────────────
   void _revisarAlianzas(Map<String, dynamic> data) {
     final raw = data['alianzas'];
     _alianzas = raw is Map ? Map<String, dynamic>.from(raw) : {};
@@ -2242,9 +2252,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final est = EstadoAlianzas.fromMap(_alianzas);
     final miUid = widget.localPlayerUid;
 
-    // Conjunto de aliados del jugador local (él mismo + su aliado activo, si lo
-    // hay). El tablero lo usa para NO pintar como combate una casilla que solo
-    // comparto con mi aliado. Se actualiza vía setState porque afecta al render.
+    // Aliados del jugador local (para el render del tablero).
     final aliadoActivo = est.aliadoDe(miUid);
     final nuevosAliados = <String>{
       miUid,
@@ -2256,8 +2264,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       setState(() => _aliadosLocal = nuevosAliados);
     }
 
-    // Propuesta entrante para mí no vista aún → diálogo aceptar/rechazar.
-    final prop = est.propuestaEntrantePara(miUid);
+    // BANDEJA: nº de propuestas entrantes pendientes → badge del menú. Persiste
+    // hasta que respondas (aceptar/rechazar), aunque cierres el aviso.
+    final recibidas = est.propuestasEntrantesParaLista(miUid);
+    if (recibidas.length != _propuestasPendientes) {
+      setState(() => _propuestasPendientes = recibidas.length);
+    }
+
+    // Aviso AL ENTRAR / al llegar una nueva propuesta: diálogo de la primera no
+    // vista aún. Cerrar el aviso NO responde: la propuesta sigue en la bandeja.
+    final prop = recibidas.isNotEmpty ? recibidas.first : null;
     if (prop != null && !_alianzaVistos.contains(prop.clave)) {
       _alianzaVistos.add(prop.clave);
       _mostrarPropuestaAlianza(prop);
@@ -2306,41 +2322,106 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
+      useRootNavigator: true,
+      builder: (ctx) {
+        var armado = false; // los botones se activan tras 700 ms
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            if (!armado) {
+              Future.delayed(const Duration(milliseconds: 700), () {
+                if (ctx.mounted) setLocal(() => armado = true);
+              });
+            }
+            Color c(Color base) => armado ? base : base.withOpacity(0.35);
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0C1828),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: Color(0x66C8A860)),
+              ),
+              title: const Text('Propuesta de alianza',
+                  style: TextStyle(
+                      color: Color(0xFFE0D8C0),
+                      fontFamily: 'Cinzel',
+                      fontSize: 16)),
+              content: Text(
+                '${_aliasDeUidAlianza(p.deUid)} te propone una alianza durante '
+                '${p.turnos} turnos. Puedes responder ahora o más tarde desde '
+                'el menú → ALIANZA.',
+                style: const TextStyle(color: Color(0xFFB0C0D0), fontSize: 14),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(), // queda en bandeja
+                  child: const Text('MÁS TARDE',
+                      style: TextStyle(color: Color(0xFF9AB0C0))),
+                ),
+                TextButton(
+                  onPressed: armado
+                      ? () {
+                          Navigator.of(ctx).pop();
+                          _responderPropuesta(p, false);
+                        }
+                      : null,
+                  child: Text('RECHAZAR',
+                      style: TextStyle(color: c(const Color(0xFFE06060)))),
+                ),
+                TextButton(
+                  onPressed: armado
+                      ? () {
+                          Navigator.of(ctx).pop();
+                          _confirmarAceptarAlianza(p);
+                        }
+                      : null,
+                  child: Text('ACEPTAR',
+                      style: TextStyle(
+                          color: c(const Color(0xFF9AD06A)),
+                          fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Confirmación explícita antes de sellar la alianza (evita aceptados
+  /// accidentales por un toque perdido).
+  Future<void> _confirmarAceptarAlianza(PropuestaAlianza p) async {
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF0C1828),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
-          side: const BorderSide(color: Color(0x66C8A860)),
+          side: const BorderSide(color: Color(0x669AD06A)),
         ),
-        title: const Text('Propuesta de alianza',
+        title: const Text('Confirmar alianza',
             style: TextStyle(
                 color: Color(0xFFE0D8C0), fontFamily: 'Cinzel', fontSize: 16)),
         content: Text(
-          '${_aliasDeUidAlianza(p.deUid)} te propone una alianza durante '
-          '${p.turnos} turnos. ¿Aceptas?',
+          '¿Aliarte con ${_aliasDeUidAlianza(p.deUid)} durante ${p.turnos} '
+          'turnos?',
           style: const TextStyle(color: Color(0xFFB0C0D0), fontSize: 14),
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _responderPropuesta(p, false);
-            },
-            child: const Text('RECHAZAR',
-                style: TextStyle(color: Color(0xFFE06060))),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar',
+                style: TextStyle(color: Color(0xFF9AB0C0))),
           ),
           TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              _responderPropuesta(p, true);
-            },
-            child: const Text('ACEPTAR',
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('ALIARME',
                 style: TextStyle(
                     color: Color(0xFF9AD06A), fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
+    if (ok == true) _responderPropuesta(p, true);
   }
 
   Future<void> _responderPropuesta(PropuestaAlianza p, bool aceptar) async {
@@ -2354,6 +2435,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
       if (r.estado != null && r.estado!['alianzas'] is Map) {
         _alianzas = Map<String, dynamic>.from(r.estado!['alianzas'] as Map);
+        // Actualiza el badge al momento (sin esperar al siguiente sondeo).
+        final pend = EstadoAlianzas.fromMap(_alianzas)
+            .propuestasPendientesPara(widget.localPlayerUid);
+        if (mounted) setState(() => _propuestasPendientes = pend);
       }
       _toast(r.mensaje.isEmpty
           ? (aceptar ? 'Alianza aceptada.' : 'Propuesta rechazada.')
@@ -2536,11 +2621,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   /// Roba una carta al azar del mazo del jugador y la añade a la mano, a cambio
-  /// de un precio creciente (100 · 2^robosComprados). El gasto y la carta son
-  /// PERMANENTES (no se revierten al salir a mitad de turno): por eso se
-  /// consolidan en el snapshot de inicio de turno (_puntosInicial y
-  /// _handInicial) y el contador se persiste en el servidor. Usado por el
-  /// botón "ROBAR CARTA" del cuartel.
+  /// de un precio creciente (100 · 2^robosComprados).
+  ///
+  /// REVERTIBLE dentro del turno:
+  ///   • Si CIERRAS el turno, carta y gasto se consolidan (_cerrarTurno sube
+  ///     _hand con la carta incluida).
+  ///   • Si SALES o pulsas «Deshacer» SIN cerrar, la carta desaparece y la
+  ///     energía se devuelve — coherente con "tu progreso de este turno se
+  ///     perderá si no cerraste el turno".
+  ///
+  /// Detalles:
+  ///   • La carta va a _hand pero NO a _handInicial → al revertir se restaura
+  ///     _hand = _handInicial sin ella.
+  ///   • El coste entra en el pool REVERTIBLE (_energiaGastadaDespliegue), NO
+  ///     se consolida en _puntosInicial.
+  ///   • NO se persiste la mano aquí (solo el gasto y el contador de robos); la
+  ///     mano definitiva se sube al cerrar turno.
+  ///   • _robosComprados (precio) sube PERMANENTE aunque salgas: evita farmear
+  ///     robos baratos saliendo cada vez.
   Future<CompraResult> _robarCartaCuartel() async {
     CompraResult fallo(String m) => CompraResult(
         ok: false, mensaje: m, energiasRestantes: _localPlayer.puntos);
@@ -2560,45 +2658,46 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final carta = pool[math.Random().nextInt(pool.length)];
 
     setState(() {
+      // Carta REVERTIBLE: solo en _hand (no en _handInicial).
       _hand = [..._hand, carta];
-      // La carta robada forma parte de la baseline revertible del turno (para
-      // que sobreviva a "salir sin cerrar", igual que las cartas desplegadas).
-      _handInicial = [..._handInicial, carta];
+      _cartasRobadasEsteTurno.add(carta);
+      // Gasto REVERTIBLE: lo reembolsan "deshacer"/"salir".
       _localPlayer.puntos -= precio;
-      // Gasto permanente: se consolida en el snapshot de inicio de turno para
-      // que NO se reembolse al deshacer / salir.
-      _puntosInicial -= precio;
+      _energiaGastadaDespliegue += precio;
+      // El precio del próximo robo sube de forma permanente.
       _robosComprados += 1;
     });
 
     if (widget.lobbyId != null) {
       try {
+        // Solo se persiste el gasto y el contador de robos. La mano NO se sube
+        // aquí: si el jugador sale sin cerrar, la carta no debe sobrevivir. Al
+        // cerrar turno, _cerrarTurno sube _hand completa (con la carta robada).
         await _api.actualizarStats(
           lobbyId: widget.lobbyId!,
           uid: widget.localPlayerUid,
           energiesDelta: -precio,
           robosDelta: 1,
-          // Persistir la mano REVERTIBLE (incluye desplegadas + la robada),
-          // nunca _hand (que puede estar vaciada por despliegues sin consolidar).
-          mano: _handInicial.map((c) => c.id).toList(),
-          mazoRestante: _mazoRestante.map((c) => c.id).toList(),
         );
       } catch (_) {
-        // Revertir en caso de fallo de persistencia.
+        // Revertir si falla la persistencia.
         if (mounted) {
           setState(() {
-            final idx = _hand.lastIndexWhere((c) => c.id == carta.id);
+            final idx = _hand.lastIndexWhere((c) => identical(c, carta));
             if (idx != -1) _hand = [..._hand]..removeAt(idx);
-            final idxI = _handInicial.lastIndexWhere((c) => c.id == carta.id);
-            if (idxI != -1) _handInicial = [..._handInicial]..removeAt(idxI);
+            _cartasRobadasEsteTurno.removeWhere((c) => identical(c, carta));
             _localPlayer.puntos += precio;
-            _puntosInicial += precio;
+            _energiaGastadaDespliegue -= precio;
             _robosComprados -= 1;
           });
         }
         return fallo('Error al robar. Inténtalo de nuevo.');
       }
     }
+
+    // Persistir la deuda revertible (energía) por si se bloquea el móvil / se
+    // mata la app sin cerrar el turno.
+    _persistirDeudaPendiente();
 
     return CompraResult(
       ok: true,
@@ -3053,22 +3152,34 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Modal para elegir qué carta propia teletransportar.
   Future<void> _showCartaPropiaModal() async {
-    // Lista de candidatos: todas las cartas propias del jugador local
-    // en el tablero. Se identifican por (coord, indice).
+    // Destino ya elegido en la fase anterior (el teletransporte fija primero la
+    // celda destino y luego la carta que se mueve allí).
+    final destino = _accionController.objetivos.isNotEmpty
+        ? _accionController.objetivos.first
+        : null;
+
+    // Lista de candidatos: cartas propias del jugador local en el tablero que,
+    // ADEMÁS, puedan ATERRIZAR en el destino (una unidad de aire no puede
+    // teletransportarse a una celda de agua, etc.).
     final candidatos = <_CartaPropiaRef>[];
     _boardState.celdas.forEach((coord, celda) {
       for (int i = 0; i < celda.cartas.length; i++) {
         final c = celda.cartas[i];
         // Las cartas estáticas no pueden teletransportarse (mov 0).
         if (c.carta.esEstatica) continue;
-        if (c.ownerUid == _localPlayer.datos.uid) {
-          candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
-        }
+        if (c.ownerUid != _localPlayer.datos.uid) continue;
+        // Terreno: descartar las que no pueden aterrizar en el destino.
+        if (destino != null && !_config.canLand(destino, c.carta.tipo))
+          continue;
+        candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
       }
     });
 
     if (candidatos.isEmpty) {
-      _toast('No tienes cartas en el tablero para teletransportar.',
+      _toast(
+          destino != null
+              ? 'Ninguna de tus cartas puede aterrizar en $destino.'
+              : 'No tienes cartas en el tablero para teletransportar.',
           error: true);
       _cancelarAccion();
       return;
@@ -3258,6 +3369,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _boardState = _boardStateInicial;
       _hand = List.from(_handInicial);
       _cartasMovidasEsteTurno.clear();
+      _cartasRobadasEsteTurno.clear();
       _cartasQueEvolucionaron.clear();
       _cartasQueSeMovieron.clear();
       _origenTurnoPorId.clear();
@@ -3313,6 +3425,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
     if (index < 0 || index >= _hand.length) return;
     final carta = _hand[index];
+
+    // No se puede sacrificar una carta robada este MISMO turno (aún sin
+    // consolidar): evitaría el combo robar→sacrificar→salir para quedarse la
+    // recompensa (permanente) y recuperar el precio del robo (revertible).
+    if (_cartasRobadasEsteTurno.any((c) => identical(c, carta))) {
+      _toast(
+          'No puedes sacrificar una carta robada este turno. '
+          'Cierra el turno primero para consolidarla.',
+          error: true);
+      return;
+    }
+
     final recompensa = carta.coste ~/ 2;
 
     setState(() {
@@ -3936,6 +4060,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               .withRayos(_rayoCoordsFromData(estado))
               .withCuarteles(_cuartelesDestruidosFromData(estado));
           _cartasMovidasEsteTurno.clear();
+          _cartasRobadasEsteTurno.clear();
           _cartasQueEvolucionaron.clear();
           _cartasQueSeMovieron.clear();
           _origenTurnoPorId.clear();
@@ -4310,6 +4435,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   onPuntuaciones: _abrirPuntuaciones,
                   puedeAlianza: _jugadoresEnPartida >= 4 && !_estoyEliminado,
                   onAlianza: _abrirAlianza,
+                  propuestasAlianzaPendientes: _propuestasPendientes,
                   puedeDeshacer: _hayCambiosPendientes &&
                       !_yoCerreElTurno &&
                       !_estoyEliminado,
