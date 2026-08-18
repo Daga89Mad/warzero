@@ -55,6 +55,27 @@ int _defensaReducidaPorEfectos(Map<String, dynamic> carta) {
   return total;
 }
 
+/// Rompe la invisibilidad de las cartas indicadas (al entrar en combate).
+/// Elimina cualquier efecto de tipo `invisibilidad` de su lista `Efectos`.
+/// Las cartas que mueren en el combate no llegan aquí (ya no son supervivientes),
+/// así que "morir por una acción" queda cubierto de forma natural.
+void _revelarInvisibles(List<Map<String, dynamic>> cartas) {
+  for (final c in cartas) {
+    final raw = c['Efectos'] as List?;
+    if (raw == null || raw.isEmpty) continue;
+    final nuevos = raw.where((m) {
+      final mm = Map<String, dynamic>.from(m as Map);
+      return mm['tipo'] != 'invisibilidad';
+    }).toList();
+    if (nuevos.length == raw.length) continue;
+    if (nuevos.isEmpty) {
+      c.remove('Efectos');
+    } else {
+      c['Efectos'] = nuevos;
+    }
+  }
+}
+
 /// Defensa efectiva de una sola carta (no negativa).
 int _defensaEfectivaDeCarta(Map<String, dynamic> c) {
   final base = ((c['Defensa'] ?? c['defensa'] as num? ?? 0) as num).toInt();
@@ -277,7 +298,9 @@ class CombateService {
           pcPorJugador[conquistadorUid] =
               (pcPorJugador[conquistadorUid] ?? 0) + pcConquista;
 
-          // Las cartas atacantes permanecen en la celda.
+          // Las cartas atacantes permanecen en la celda. Han entrado en
+          // combate contra el cuartel → pierden la invisibilidad.
+          _revelarInvisibles(cartas);
           tableroResultante[coord] = cartas;
           resultados.add(ResultadoCombate(
             coord: coord,
@@ -291,7 +314,9 @@ class CombateService {
             esConquistaObelisco: true,
           ));
         } else {
-          // Fuerza insuficiente para conquistar: cartas permanecen (no hay combate real).
+          // Fuerza insuficiente para conquistar: cartas permanecen. Aun así han
+          // entrado en el cuartel enemigo (combate contra su defensa) → se revelan.
+          _revelarInvisibles(cartas);
           tableroResultante[coord] = cartas;
         }
         continue;
@@ -413,6 +438,8 @@ class CombateService {
             .toList();
       }
 
+      // Los supervivientes entraron en combate → pierden la invisibilidad.
+      _revelarInvisibles(supervivientes);
       if (supervivientes.isNotEmpty) {
         tableroResultante[coord] = supervivientes;
       }

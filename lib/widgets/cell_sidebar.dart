@@ -1,6 +1,7 @@
 // lib/widgets/cell_sidebar.dart
 
 import 'package:flutter/material.dart';
+import '../models/accion_pendiente.dart' show kDescargaCoste;
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
 import '../models/efecto_estado.dart';
@@ -64,6 +65,15 @@ class CellSidebar extends StatefulWidget {
   final Future<void> Function(CartaEnCelda carta, String coord, int indice)?
       onLanzarHabilidad;
 
+  /// Callback al pulsar el botón DESCARGA del cuartel propio (toggle).
+  final VoidCallback? onDescarga;
+
+  /// True si ya hay una descarga declarada este turno para este cuartel.
+  final bool descargaArmada;
+
+  /// Coste en energías de la descarga.
+  final int descargaCoste;
+
   /// Defensa base de cualquier cuartel general.
   static const int defensaBase = 40;
 
@@ -87,6 +97,9 @@ class CellSidebar extends StatefulWidget {
     this.onEvolucionar,
     this.turnoActual = 1, // NUEVO
     this.onLanzarHabilidad, // NUEVO
+    this.onDescarga,
+    this.descargaArmada = false,
+    this.descargaCoste = kDescargaCoste,
   });
 
   @override
@@ -272,6 +285,20 @@ class _CellSidebarState extends State<CellSidebar> {
                     minMov: minMov,
                     onTap: _selected.isEmpty ? null : _confirmMove,
                   ),
+
+          // Botón DESCARGA: solo en el cuartel PROPIO. Al activarlo, al resolver
+          // el turno todo lo que haya en el cuartel (amigos y enemigos) muere,
+          // a cambio de perder la defensa (se recupera en 4 turnos).
+          if (widget.isObelisco &&
+              !widget.isEnemyObelisco &&
+              widget.onDescarga != null)
+            _DescargaButton(
+              armada: widget.descargaArmada,
+              coste: widget.descargaCoste,
+              habilitado: widget.descargaArmada ||
+                  (widget.energiasDisponibles ?? 0) >= widget.descargaCoste,
+              onTap: widget.onDescarga!,
+            ),
         ],
       ),
     );
@@ -1077,6 +1104,106 @@ class _CardTile extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // BOTÓN MOVER
 // ─────────────────────────────────────────────────────────────
+/// Botón DESCARGA del cuartel propio. Muestra el coste y, si ya está armada,
+/// un estado "ARMADA" (pulsar de nuevo la cancela).
+class _DescargaButton extends StatelessWidget {
+  final bool armada;
+  final int coste;
+  final bool habilitado;
+  final VoidCallback onTap;
+
+  const _DescargaButton({
+    required this.armada,
+    required this.coste,
+    required this.habilitado,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final active = habilitado;
+    final accent = armada
+        ? const Color(0xFFE0C040)
+        : (active ? const Color(0xFFD84545) : const Color(0xFF354050));
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0x20506070), width: 1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                armada
+                    ? 'DESCARGA ARMADA — TOCA PARA CANCELAR'
+                    : 'AL RESOLVER: MUERE TODO EN EL CUARTEL',
+                style: TextStyle(
+                    fontSize: 7.5,
+                    color: accent,
+                    fontFamily: 'Cinzel',
+                    letterSpacing: 1),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  color: accent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(3),
+                  border:
+                      Border.all(color: accent.withOpacity(0.4), width: 0.5),
+                ),
+                child: Text('$coste⚡',
+                    style: TextStyle(
+                        fontSize: 8,
+                        color: accent,
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 1)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: active ? onTap : null,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              height: 36,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color:
+                    active ? accent.withOpacity(0.14) : const Color(0xFF0A1220),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(
+                  color: active
+                      ? accent.withOpacity(0.55)
+                      : const Color(0x25506070),
+                  width: 1,
+                ),
+              ),
+              child:
+                  Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(armada ? Icons.flash_on : Icons.warning_amber_rounded,
+                    size: 13, color: accent),
+                const SizedBox(width: 7),
+                Text(
+                  armada ? 'CANCELAR DESCARGA' : 'DESCARGA',
+                  style: TextStyle(
+                      fontSize: 9,
+                      color: accent,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1.5,
+                      fontWeight: FontWeight.bold),
+                ),
+              ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MoveButton extends StatelessWidget {
   final int selected;
   final int total;
@@ -1388,6 +1515,8 @@ class _EfectoCeldaEntry {
           return 4;
         case EfectoTipoEstado.potMovimiento:
           return 5;
+        case EfectoTipoEstado.invisibilidad:
+          return 6;
       }
     }
 
@@ -1427,6 +1556,8 @@ class _CellActionsBar extends StatelessWidget {
         return const Color(0xFF9AD0FF);
       case EfectoTipoEstado.potMovimiento:
         return const Color(0xFF9AD0FF);
+      case EfectoTipoEstado.invisibilidad:
+        return const Color(0xFFB68CE0); // púrpura tenue
     }
   }
 

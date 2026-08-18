@@ -1,5 +1,10 @@
 // lib/models/accion_pendiente.dart
 
+/// Coste en energías de la acción "Descarga" del cuartel. Configurable aquí
+/// (su espejo en el servidor es `WarZeroService`/`WarZeroLogic`, aunque la
+/// contabilidad de energías la lleva el cliente igual que el resto de acciones).
+const int kDescargaCoste = 20;
+
 /// Una acción declarada por un jugador durante su turno. Se serializa con los
 /// movimientos del turno y se resuelve cuando el turno se cierra.
 ///
@@ -51,6 +56,12 @@ class AccionPendiente {
   /// Turno en que se declaró la acción.
   final int turno;
 
+  /// True si esta acción es una "Descarga" de cuartel: al resolver el turno,
+  /// ANTES de combates, mata todo lo que haya en la celda `origen` (el cuartel
+  /// propio del jugador) —amigos y enemigos— y deja el cuartel con defensa 0,
+  /// recuperándose +25%/turno. No usa `habilidadId` (es una acción especial).
+  final bool esDescarga;
+
   /// Coste en energías pagado al declarar la acción (se descuenta localmente
   /// y se sincroniza al cerrar turno).
   final int costePagado;
@@ -66,6 +77,7 @@ class AccionPendiente {
     this.cartaOrigenIndice,
     this.cartaOrigenId,
     this.cartaAccionId,
+    this.esDescarga = false,
     this.costePagado = 0,
   });
 
@@ -79,6 +91,7 @@ class AccionPendiente {
         'objetivos': objetivos,
         'turno': turno,
         'costePagado': costePagado,
+        if (esDescarga) 'esDescarga': true,
         if (cartaOrigenCoord != null) 'cartaOrigenCoord': cartaOrigenCoord,
         if (cartaOrigenIndice != null) 'cartaOrigenIndice': cartaOrigenIndice,
         if (cartaOrigenId != null) 'cartaOrigenId': cartaOrigenId,
@@ -96,6 +109,7 @@ class AccionPendiente {
             const [],
         turno: (d['turno'] as num?)?.toInt() ?? 0,
         costePagado: (d['costePagado'] as num?)?.toInt() ?? 0,
+        esDescarga: d['esDescarga'] == true,
         cartaOrigenCoord: d['cartaOrigenCoord'] as String?,
         cartaOrigenIndice: (d['cartaOrigenIndice'] as num?)?.toInt(),
         cartaOrigenId: d['cartaOrigenId'] as String?,
@@ -113,6 +127,7 @@ class AccionPendiente {
     String? cartaOrigenId,
     String? cartaAccionId,
     int? turno,
+    bool? esDescarga,
     int? costePagado,
   }) =>
       AccionPendiente(
@@ -126,6 +141,7 @@ class AccionPendiente {
         cartaOrigenId: cartaOrigenId ?? this.cartaOrigenId,
         cartaAccionId: cartaAccionId ?? this.cartaAccionId,
         turno: turno ?? this.turno,
+        esDescarga: esDescarga ?? this.esDescarga,
         costePagado: costePagado ?? this.costePagado,
       );
 }

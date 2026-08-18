@@ -3152,34 +3152,52 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Modal para elegir qué carta propia teletransportar.
   Future<void> _showCartaPropiaModal() async {
-    // Destino ya elegido en la fase anterior (el teletransporte fija primero la
-    // celda destino y luego la carta que se mueve allí).
+    // Destino/objetivo ya elegido en la fase anterior.
+    //   - Teletransporte: es la celda DESTINO donde caerá la carta.
+    //   - Invisibilidad: es la celda que CONTIENE la carta propia a ocultar.
     final destino = _accionController.objetivos.isNotEmpty
         ? _accionController.objetivos.first
         : null;
 
-    // Lista de candidatos: cartas propias del jugador local en el tablero que,
-    // ADEMÁS, puedan ATERRIZAR en el destino (una unidad de aire no puede
-    // teletransportarse a una celda de agua, etc.).
+    final esInvisibilidad =
+        _accionController.habilidad?.efecto.tipo == EfectoTipo.invisibilidad;
+
     final candidatos = <_CartaPropiaRef>[];
-    _boardState.celdas.forEach((coord, celda) {
-      for (int i = 0; i < celda.cartas.length; i++) {
-        final c = celda.cartas[i];
-        // Las cartas estáticas no pueden teletransportarse (mov 0).
-        if (c.carta.esEstatica) continue;
-        if (c.ownerUid != _localPlayer.datos.uid) continue;
-        // Terreno: descartar las que no pueden aterrizar en el destino.
-        if (destino != null && !_config.canLand(destino, c.carta.tipo))
-          continue;
-        candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
+    if (esInvisibilidad) {
+      // Invisibilidad: solo las cartas PROPIAS de la celda objetivo. No hay
+      // restricción de terreno (la carta no se mueve).
+      if (destino != null) {
+        final celda = _boardState.getCelda(destino);
+        for (int i = 0; i < celda.cartas.length; i++) {
+          final c = celda.cartas[i];
+          if (c.ownerUid != _localPlayer.datos.uid) continue;
+          candidatos.add(_CartaPropiaRef(coord: destino, indice: i, carta: c));
+        }
       }
-    });
+    } else {
+      // Teletransporte: cartas propias del tablero que puedan ATERRIZAR en el
+      // destino (una unidad de aire no puede ir a una celda de agua, etc.).
+      _boardState.celdas.forEach((coord, celda) {
+        for (int i = 0; i < celda.cartas.length; i++) {
+          final c = celda.cartas[i];
+          // Las cartas estáticas no pueden teletransportarse (mov 0).
+          if (c.carta.esEstatica) continue;
+          if (c.ownerUid != _localPlayer.datos.uid) continue;
+          // Terreno: descartar las que no pueden aterrizar en el destino.
+          if (destino != null && !_config.canLand(destino, c.carta.tipo))
+            continue;
+          candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
+        }
+      });
+    }
 
     if (candidatos.isEmpty) {
       _toast(
-          destino != null
-              ? 'Ninguna de tus cartas puede aterrizar en $destino.'
-              : 'No tienes cartas en el tablero para teletransportar.',
+          esInvisibilidad
+              ? 'No tienes ninguna carta propia en esa celda.'
+              : (destino != null
+                  ? 'Ninguna de tus cartas puede aterrizar en $destino.'
+                  : 'No tienes cartas en el tablero para teletransportar.'),
           error: true);
       _cancelarAccion();
       return;
@@ -3267,6 +3285,54 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     _accionController.setCartaTeleport(ref.coord, ref.indice,
         cartaId: ref.carta.carta.id);
     _completarAccion();
+  }
+
+  /// Arma o cancela la DESCARGA sobre el cuartel propio [coord]. Es un toggle:
+  /// si ya estaba armada, se cancela y se reembolsa el coste. La descarga se
+  /// declara como una AccionPendiente (esDescarga) y se resuelve en el servidor
+  /// ANTES del combate: mata todo lo que haya en el cuartel (amigos y enemigos)
+  /// y deja la defensa a 0, recuperándose +25%/turno.
+  void _toggleDescarga(String coord) {
+    if (_yoCerreElTurno || _estoyEliminado) {
+      _toast('No puedes usar la descarga ahora.', error: true);
+      return;
+    }
+    if (_obeliscoLocal != coord) {
+      _toast('La descarga solo se usa en tu cuartel.', error: true);
+      return;
+    }
+    final idx = _accionesPendientes
+        .indexWhere((a) => a.esDescarga && a.origen == coord);
+    if (idx >= 0) {
+      // Cancelar: reembolsar el coste.
+      setState(() {
+        final a = _accionesPendientes.removeAt(idx);
+        _localPlayer.puntos += a.costePagado;
+      });
+      _toast('Descarga cancelada.');
+      return;
+    }
+    if (_localPlayer.puntos < kDescargaCoste) {
+      _toast(
+          'Energías insuficientes (${_localPlayer.puntos} / $kDescargaCoste).',
+          error: true);
+      return;
+    }
+    setState(() {
+      _accionesPendientes.add(AccionPendiente(
+        habilidadId: 0,
+        uid: _localPlayer.datos.uid,
+        zona: _localPlayer.zona,
+        origen: coord,
+        objetivos: [coord],
+        turno: _boardState.turnoActual,
+        esDescarga: true,
+        costePagado: kDescargaCoste,
+      ));
+      _localPlayer.puntos -= kDescargaCoste;
+    });
+    _toast(
+        'Descarga armada: al resolver morirá todo lo que haya en tu cuartel.');
   }
 
   /// Construye la AccionPendiente final, descuenta energías y la añade a
@@ -4364,8 +4430,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       );
     }
 
-    final sidebarCelda =
-        _sidebarCoord != null ? _boardState.getCelda(_sidebarCoord!) : null;
+    // Celda visible para el jugador local: oculta las cartas invisibles del
+    // rival también en el sidebar (las propias se conservan).
+    final sidebarCelda = _sidebarCoord != null
+        ? _boardState.celdaVisiblePara(_sidebarCoord!, _localPlayer.datos.uid)
+        : null;
     final sidebarTerrain = (_sidebarRi != null && _sidebarCi != null)
         ? _config.terrain(_sidebarRi!, _sidebarCi!)
         : null;
@@ -4616,6 +4685,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 turnoActual: _boardState.turnoActual, // NUEVO
                 onLanzarHabilidad: // NUEVO
                     _estoyEliminado ? null : _iniciarAccionDesdeTablero,
+                // Descarga: solo en el cuartel propio (sidebar lo restringe con
+                // isObelisco && !isEnemyObelisco).
+                onDescarga: (_estoyEliminado || _sidebarCoord == null)
+                    ? null
+                    : () => _toggleDescarga(_sidebarCoord!),
+                descargaArmada: _sidebarCoord != null &&
+                    _accionesPendientes
+                        .any((a) => a.esDescarga && a.origen == _sidebarCoord),
+                descargaCoste: kDescargaCoste,
               ),
             ),
           ],

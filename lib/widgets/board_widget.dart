@@ -941,7 +941,11 @@ class _GridContent extends StatelessWidget {
                 rowLabelCell(config.rowLabels[ri]),
                 ...List.generate(config.cols, (ci) {
                   final coord = config.coordLabel(ri, ci);
-                  final celda = boardState.getCelda(coord);
+                  // Celda tal y como la ve el jugador local: las cartas
+                  // invisibles del rival se ocultan (las propias se conservan y
+                  // el CellWidget las pinta translúcidas).
+                  final celda =
+                      boardState.celdaVisiblePara(coord, localPlayerUid);
                   return CellWidget(
                     ri: ri,
                     ci: ci,

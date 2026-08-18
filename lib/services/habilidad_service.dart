@@ -115,6 +115,18 @@ class HabilidadService {
       candidatos.removeWhere((c) => cgs.contains(c));
     }
 
+    // Invisibilidad: solo se lanza sobre CARTAS PROPIAS. El objetivo es la celda
+    // que contiene la carta, así que se incluye el propio origen (para "cerca" y
+    // "media" que abarcan la celda desde la que se lanza) y se restringe a las
+    // celdas que tengan una carta propia. Se resuelve aquí y se retorna: el
+    // resto de filtros (veneno/parálisis) no aplican.
+    if (habilidad.efecto.tipo == EfectoTipo.invisibilidad) {
+      candidatos.add(origen); // la celda de origen también es válida
+      if (coordsPropias.isEmpty) return <String>{};
+      candidatos.retainWhere(coordsPropias.contains);
+      return candidatos;
+    }
+
     // Veneno y parálisis son efectos ofensivos: no pueden apuntar a celdas que
     // contengan cartas del propio lanzador. Así el jugador no puede envenenar
     // ni paralizar sus propias unidades (ni malgastar la carta en sí mismo).
@@ -212,6 +224,7 @@ class HabilidadService {
     final paralisis = <AccionPendiente>[];
     final escudos = <AccionPendiente>[];
     final potenciaciones = <AccionPendiente>[];
+    final invisibilidades = <AccionPendiente>[];
 
     for (final a in acciones) {
       final h = CatalogoHabilidades.get(a.habilidadId);
@@ -237,6 +250,9 @@ class HabilidadService {
         case EfectoTipo.potenciarMovimiento:
           potenciaciones.add(a);
           break;
+        case EfectoTipo.invisibilidad:
+          invisibilidades.add(a);
+          break;
       }
     }
 
@@ -257,6 +273,9 @@ class HabilidadService {
     }
     for (final a in potenciaciones) {
       _aplicarPotenciacion(a, t, e, log, obeliscosPorJugador);
+    }
+    for (final a in invisibilidades) {
+      _aplicarInvisibilidad(a, t, log);
     }
 
     // Propagar efectos preexistentes a cartas que estén actualmente en la celda.
@@ -547,6 +566,70 @@ class HabilidadService {
         'magnitud': efecto.magnitud,
       });
     }
+  }
+
+  /// Invisibilidad: ancla el efecto a UNA carta PROPIA (identificada por
+  /// `cartaOrigenCoord` + `cartaOrigenId`/`cartaOrigenIndice`, igual que el
+  /// teletransporte). NO es un efecto de celda: no se propaga a otras cartas que
+  /// entren, solo la carta seleccionada queda invisible. Se rompe al expirar los
+  /// turnos (tick), al entrar en combate o al morir (ver CombateService).
+  static void _aplicarInvisibilidad(
+    AccionPendiente a,
+    Map<String, List<Map<String, dynamic>>> t,
+    List<Map<String, dynamic>> log,
+  ) {
+    final h = CatalogoHabilidades.get(a.habilidadId);
+    if (h == null) return;
+
+    final fromCoord = a.cartaOrigenCoord;
+    if (fromCoord == null) {
+      log.add(_logFallo(a, h, 'Falta la carta objetivo de invisibilidad'));
+      return;
+    }
+    final cartas = t[fromCoord];
+    if (cartas == null || cartas.isEmpty) {
+      log.add(_logFallo(a, h, 'La carta objetivo ya no existe'));
+      return;
+    }
+
+    // Localizar la carta: preferimos por id (robusto ante cambios de índice).
+    int idx = a.cartaOrigenIndice ?? -1;
+    final cartaId = a.cartaOrigenId;
+    if (cartaId != null && cartaId.isNotEmpty) {
+      final byId =
+          cartas.indexWhere((c) => (c['id'] ?? c['Id'])?.toString() == cartaId);
+      if (byId >= 0) idx = byId;
+    }
+    if (idx < 0 || idx >= cartas.length) {
+      log.add(_logFallo(a, h, 'La carta objetivo ya no existe'));
+      return;
+    }
+
+    final carta = cartas[idx];
+    if ((carta['ownerUid'] ?? '') != a.uid) {
+      log.add(_logFallo(a, h, 'La carta objetivo no es propia'));
+      return;
+    }
+
+    final efecto = EfectoActivo(
+      tipo: EfectoTipoEstado.invisibilidad,
+      turnosRestantes: h.efecto.duracionTurnos,
+      magnitud: 0,
+      origenUid: a.uid,
+    );
+    _agregarOFusionarEfectoCarta(carta, efecto);
+
+    log.add({
+      'tipo': 'invisibilidad',
+      'habilidadId': h.id,
+      'habilidadNombre': h.nombre,
+      'uid': a.uid,
+      'zona': a.zona,
+      'origen': a.origen,
+      'objetivo': fromCoord,
+      'turnosRestantes': efecto.turnosRestantes,
+      'cartaNombre': carta['Nombre'] ?? carta['nombre'] ?? '',
+    });
   }
 
   /// Para cada celda con efectos activos, garantiza que las cartas

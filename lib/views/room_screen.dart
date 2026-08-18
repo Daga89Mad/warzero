@@ -34,6 +34,11 @@ class _RoomScreenState extends State<RoomScreen> {
   int? _selectedEjercitoId;
   bool _navigating = false;
 
+  /// True mientras se espera a que el servidor rellene los huecos con bots tras
+  /// pulsar "Iniciar batalla". Muestra un overlay con spinner "Buscando bots…".
+  /// Solo se activa si al iniciar quedaban huecos libres.
+  bool _buscandoBots = false;
+
   /// Última instantánea de la sala recibida del stream. Se usa en [_gestionarSalida] para
   /// saber si soy el host (y decidir si mantengo o borro la sala al salir).
   LobbyModel? _lobby;
@@ -72,7 +77,24 @@ class _RoomScreenState extends State<RoomScreen> {
     // NO navegamos aquí: iniciarPartida puede diferir el arranque (pide al
     // servidor que rellene los huecos con bots). La navegación al juego la
     // dispara el propio stream cuando `estado` pasa a `en_curso` (ver build).
-    await _service.iniciarPartida(widget.lobbyId);
+    //
+    // Solo si quedan huecos libres mostramos el overlay "Buscando bots…"
+    // mientras el orquestador los rellena. Si la sala ya está completa, arranca
+    // de inmediato y no hace falta spinner.
+    final huecos = lobby.maxJugadores - lobby.jugadores.length;
+    if (huecos > 0) {
+      setState(() => _buscandoBots = true);
+    }
+    try {
+      await _service.iniciarPartida(widget.lobbyId);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _buscandoBots = false);
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(SnackBar(content: Text('No se pudo iniciar: $e')));
+      }
+    }
   }
 
   /// Salida EXPLÍCITA de la sala (botón de salir de la cabecera). El botón
@@ -172,73 +194,83 @@ class _RoomScreenState extends State<RoomScreen> {
       },
       child: Scaffold(
         backgroundColor: war.fondo,
-        body: StreamBuilder<LobbyModel?>(
-          stream: _service.lobbyStream(widget.lobbyId),
-          builder: (ctx, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
-              return Center(
-                  child: CircularProgressIndicator(color: war.primario));
-            }
-            final lobby = snap.data;
-            if (lobby == null) {
-              WidgetsBinding.instance
-                  .addPostFrameCallback((_) => Navigator.of(context).pop());
-              return const SizedBox();
-            }
-            _lobby = lobby; // cache para _gestionarSalida (saber si soy host)
+        body: Stack(
+          children: [
+            StreamBuilder<LobbyModel?>(
+              stream: _service.lobbyStream(widget.lobbyId),
+              builder: (ctx, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return Center(
+                      child: CircularProgressIndicator(color: war.primario));
+                }
+                final lobby = snap.data;
+                if (lobby == null) {
+                  WidgetsBinding.instance
+                      .addPostFrameCallback((_) => Navigator.of(context).pop());
+                  return const SizedBox();
+                }
+                _lobby =
+                    lobby; // cache para _gestionarSalida (saber si soy host)
 
-            if (lobby.estado == LobbyEstado.enCurso) {
-              _goToGame(lobby);
-            }
+                if (lobby.estado == LobbyEstado.enCurso) {
+                  _goToGame(lobby);
+                }
 
-            final isHost = lobby.hostUid == widget.localUid;
-            final me = lobby.jugadores.firstWhere(
-                (j) => j.uid == widget.localUid,
-                orElse: () => LobbyJugador(
-                    uid: widget.localUid, alias: widget.localAlias));
+                final isHost = lobby.hostUid == widget.localUid;
+                final me = lobby.jugadores.firstWhere(
+                    (j) => j.uid == widget.localUid,
+                    orElse: () => LobbyJugador(
+                        uid: widget.localUid, alias: widget.localAlias));
 
-            return SafeArea(
-              child: Column(
-                children: [
-                  _RoomHeader(
-                    lobby: lobby,
-                    isHost: isHost,
-                    onLeave: _gestionarSalida,
-                  ),
-                  Divider(color: war.primario.withOpacity(0.12), height: 1),
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Expanded(
-                          flex: 2,
-                          child: _PlayerList(
-                            lobby: lobby,
-                            localUid: widget.localUid,
-                          ),
+                return SafeArea(
+                  child: Column(
+                    children: [
+                      _RoomHeader(
+                        lobby: lobby,
+                        isHost: isHost,
+                        onLeave: _gestionarSalida,
+                      ),
+                      Divider(color: war.primario.withOpacity(0.12), height: 1),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 2,
+                              child: _PlayerList(
+                                lobby: lobby,
+                                localUid: widget.localUid,
+                              ),
+                            ),
+                            Container(
+                                width: 1,
+                                color: war.primario.withOpacity(0.12)),
+                            Expanded(
+                              flex: 3,
+                              child: _ArmySelector(
+                                selectedId:
+                                    _selectedEjercitoId ?? me.ejercitoId,
+                                onSelect: _selectEjercito,
+                              ),
+                            ),
+                          ],
                         ),
-                        Container(
-                            width: 1, color: war.primario.withOpacity(0.12)),
-                        Expanded(
-                          flex: 3,
-                          child: _ArmySelector(
-                            selectedId: _selectedEjercitoId ?? me.ejercitoId,
-                            onSelect: _selectEjercito,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                      _RoomFooter(
+                        lobby: lobby,
+                        isHost: isHost,
+                        localUid: widget.localUid,
+                        selectedEjercito: _selectedEjercitoId,
+                        onStart: () => _iniciarPartida(lobby),
+                      ),
+                    ],
                   ),
-                  _RoomFooter(
-                    lobby: lobby,
-                    isHost: isHost,
-                    localUid: widget.localUid,
-                    selectedEjercito: _selectedEjercitoId,
-                    onStart: () => _iniciarPartida(lobby),
-                  ),
-                ],
-              ),
-            );
-          },
+                );
+              },
+            ),
+
+            // Overlay "Buscando bots…": solo cuando se inició con huecos libres.
+            if (_buscandoBots) _BuscandoBotsOverlay(color: war.primario),
+          ],
         ),
       ),
     );
@@ -248,6 +280,53 @@ class _RoomScreenState extends State<RoomScreen> {
 // ─────────────────────────────────────────────────────────────
 // HEADER
 // ─────────────────────────────────────────────────────────────
+/// Overlay a pantalla completa con spinner y el mensaje "Buscando bots…".
+/// Bloquea la interacción mientras el servidor rellena los huecos de la sala.
+class _BuscandoBotsOverlay extends StatelessWidget {
+  final Color color;
+  const _BuscandoBotsOverlay({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: Container(
+          color: Colors.black.withOpacity(0.62),
+          alignment: Alignment.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 44,
+                height: 44,
+                child: CircularProgressIndicator(color: color, strokeWidth: 3),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                'Buscando bots…',
+                style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 14,
+                  letterSpacing: 1.5,
+                  color: color,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Rellenando los huecos de la sala',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Color(0xFFB0BEC5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RoomHeader extends StatelessWidget {
   final LobbyModel lobby;
   final bool isHost;

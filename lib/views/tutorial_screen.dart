@@ -29,6 +29,8 @@ import '../widgets/board_widget.dart';
 import '../models/jugador_model.dart';
 import '../widgets/player_hud.dart';
 import '../widgets/hand_widget.dart';
+import '../widgets/carta_rota_animation.dart';
+import '../widgets/card_detail_overlay.dart';
 
 // ─────────────────────────────────────────────────────────────
 // COLORES DE JUGADOR (fijos).
@@ -56,6 +58,12 @@ class _TCard {
   final _Cond cond;
   final IconData icon;
 
+  /// Evolución: id de la carta resultante y coste en energía. Si ambos están
+  /// definidos (id no vacío y coste > 0), la carta "puede evolucionar" y en su
+  /// detalle aparece la flecha de evolución (igual que en el juego).
+  final String idEvolucion;
+  final int evolucion;
+
   const _TCard({
     required this.id,
     required this.nombre,
@@ -67,6 +75,8 @@ class _TCard {
     this.tipo = 1,
     this.cond = _Cond.basica,
     required this.icon,
+    this.idEvolucion = '',
+    this.evolucion = 0,
   });
 
   String get tipoNombre => tipo == 2 ? 'Aire' : (tipo == 3 ? 'Mar' : 'Tierra');
@@ -123,6 +133,8 @@ class _TCard {
         movimiento: movimiento,
         tipo: tipo,
         condicion: condicion,
+        idEvolucion: idEvolucion,
+        evolucion: evolucion,
       );
 }
 
@@ -142,6 +154,7 @@ enum _Step {
   cartaGrande,
   sacarCuartel,
   mover,
+  evolucion,
   batalla,
   estatica,
   teletransporte,
@@ -156,6 +169,7 @@ const List<_Step> _orden = [
   _Step.cartaGrande,
   _Step.sacarCuartel,
   _Step.mover,
+  _Step.evolucion,
   _Step.batalla,
   _Step.estatica,
   _Step.teletransporte,
@@ -233,6 +247,23 @@ class _TutorialScreenState extends State<TutorialScreen>
     tipo: 1,
     cond: _Cond.basica,
     icon: Icons.person,
+    idEvolucion: 'soldado_elite',
+    evolucion: 3,
+  );
+  // Evolución del Soldado Zero: más fuerza, defensa y movimiento.
+  static const _soldadoElite = _TCard(
+    id: 'soldado_elite',
+    nombre: 'Soldado Élite',
+    desc: 'Versión evolucionada del Soldado Zero: más fuerza, defensa y '
+        'movimiento. Una carta evolucionada no puede moverse el turno en que '
+        'evoluciona.',
+    fuerza: 5,
+    defensa: 5,
+    coste: 4,
+    movimiento: 3,
+    tipo: 1,
+    cond: _Cond.basica,
+    icon: Icons.shield_moon,
   );
   static const _torreta = _TCard(
     id: 'torreta',
@@ -338,12 +369,17 @@ class _TutorialScreenState extends State<TutorialScreen>
       _spawnDron();
     } else if (_step == _Step.misil) {
       _spawnTanque();
+    } else if (_step == _Step.evolucion) {
+      // Resaltar la unidad propia para que se vea qué tocar y evolucionar.
+      final fc = _friendlyCoords();
+      if (fc.isNotEmpty) _selBoard = fc.first;
     }
   }
 
   void _spawnDron() {
     if (_coordDe('dron', 'rojo') != null) return;
-    final s = _coordDe('soldado', 'yo');
+    final fc = _friendlyCoords();
+    final s = fc.isNotEmpty ? fc.first : null;
     String? cell = s != null ? _celdaLibreVecina(s) : null;
     cell ??= _primeraLibrePref(const ['D8', 'C8', 'D7', 'C7', 'E8']);
     if (cell != null) _board[cell] = const _Placed(_dron, 'rojo');
@@ -557,6 +593,12 @@ class _TutorialScreenState extends State<TutorialScreen>
           _moverSoldado(coord);
         }
         break;
+      case _Step.evolucion:
+        // Tocar tu unidad abre el detalle REAL con la flecha de evolución.
+        if (placed?.owner == 'yo') {
+          _abrirEvolucion(coord);
+        }
+        break;
       case _Step.batalla:
         if (placed?.owner == 'yo') {
           setState(() {
@@ -617,9 +659,36 @@ class _TutorialScreenState extends State<TutorialScreen>
     _advance();
   }
 
+  // ── Evolución (usa el detalle REAL del juego, con su flecha) ──
+  /// Abre el detalle real de la carta en [coord] con la flecha de evolución.
+  /// El coste se descuenta de la Energía Zero, igual que en la partida.
+  Future<void> _abrirEvolucion(String coord) async {
+    final placed = _board[coord];
+    if (placed == null) return;
+    await showCardDetail(
+      context,
+      placed.card.aModelo(),
+      energiasDisponibles: _zero,
+      resolveEvolucion: (id) async =>
+          id == _soldadoElite.id ? _soldadoElite.aModelo() : null,
+      onEvolucionar: (evolucion) async => _evolucionarUnidad(coord),
+    );
+  }
+
+  void _evolucionarUnidad(String coord) {
+    final placed = _board[coord];
+    if (placed == null) return;
+    final coste = placed.card.evolucion;
+    setState(() {
+      _board[coord] = _Placed(_soldadoElite, placed.owner);
+      _zero = (_zero - coste).clamp(0, 999);
+    });
+    _toast('${placed.card.nombre} → ${_soldadoElite.nombre}  (-${coste}Ø)');
+    _advance();
+  }
+
   void _atacar(String coordEnemigo) {
-    final origen = _selBoard ?? _coordDe('soldado', 'yo');
-    if (origen == null) return;
+    final origen = _selBoard ?? _friendlyCoords().first;
     final enemigo = _board[coordEnemigo];
     final yo = _board[origen];
     setState(() {
@@ -627,8 +696,8 @@ class _TutorialScreenState extends State<TutorialScreen>
       _board[coordEnemigo] = movida;
       _zero += enemigo?.card.coste ?? 0;
     });
-    _mostrarResultadoCombate(
-        yo?.card ?? _soldado, enemigo?.card ?? _dron, enemigo?.card.coste ?? 0);
+    _mostrarResultadoCombate(yo?.card ?? _soldado, enemigo?.card ?? _dron,
+        enemigo?.card.coste ?? 0, coordEnemigo);
   }
 
   void _desplegarTorreta(String coord) {
@@ -929,67 +998,158 @@ class _TutorialScreenState extends State<TutorialScreen>
     );
   }
 
-  // ── Resultado de combate (diálogo) ──────────────────────────
-  void _mostrarResultadoCombate(_TCard atacante, _TCard defensor, int premio) {
+  // ── Resultado de combate (igual que en el juego) ────────────
+  /// Presenta el combate con la MISMA animación de carta rota que usa el
+  /// informe de batalla del juego (`CartaRotaStrip`), más el desglose de
+  /// fuerza/defensa/poder neto y la recompensa.
+  void _mostrarResultadoCombate(
+      _TCard atacante, _TCard defensor, int premio, String coord) {
     final war = context.war;
+    const verde = Color(0xFF4ABB58);
+    final poderNeto = atacante.fuerza - defensor.defensa;
+    final pnTxt = poderNeto >= 0 ? '+$poderNeto' : '$poderNeto';
+
+    Widget stat(String icon, String value, Color color) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: color.withOpacity(0.35), width: 0.6),
+          ),
+          child: Text('$icon $value',
+              style:
+                  TextStyle(fontFamily: 'Cinzel', fontSize: 10, color: color)),
+        );
+
     showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => Dialog(
         backgroundColor: war.superficie,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Icon(Icons.military_tech,
-                  size: 40, color: Color(0xFF4ABB58)),
-              const SizedBox(height: 10),
-              const Text('¡VICTORIA EN COMBATE!',
-                  style: TextStyle(
-                      fontFamily: 'Cinzel',
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF4ABB58))),
-              const SizedBox(height: 14),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  Column(children: [
-                    Icon(atacante.icon, color: _cYo, size: 30),
-                    Text('⚔${atacante.fuerza}',
-                        style: TextStyle(color: war.texto, fontSize: 12)),
-                  ]),
-                  Text('VS',
+              // Cabecera ⚔ CELDA — como el informe de batalla del juego.
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: verde.withOpacity(0.10),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(14)),
+                ),
+                child: Row(children: [
+                  Text('⚔  COMBATE EN $coord',
                       style: TextStyle(
-                          color: war.textoTenue, fontFamily: 'Cinzel')),
-                  Column(children: [
-                    Icon(defensor.icon, color: _cRojo, size: 30),
-                    Text('🛡${defensor.defensa}',
-                        style: TextStyle(color: war.texto, fontSize: 12)),
-                  ]),
-                ],
+                          fontFamily: 'Cinzel',
+                          fontSize: 11,
+                          letterSpacing: 1.5,
+                          color: war.primario)),
+                  const Spacer(),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: verde.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text('TU COMBATE',
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 8,
+                            letterSpacing: 1,
+                            color: verde)),
+                  ),
+                ]),
               ),
-              const SizedBox(height: 12),
-              Text(
-                'Tu fuerza (${atacante.fuerza}) supera la defensa enemiga '
-                '(${defensor.defensa}): la unidad rival es destruida y '
-                'conquistas la celda. Ganas +$premio Ø.',
-                textAlign: TextAlign.center,
-                style:
-                    TextStyle(fontSize: 12, height: 1.4, color: war.textoTenue),
-              ),
-              const SizedBox(height: 18),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.of(context).pop();
-                    _advance();
-                  },
-                  child: const Text('CONTINUAR',
-                      style: TextStyle(fontFamily: 'Cinzel', letterSpacing: 1)),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        const Icon(Icons.emoji_events, size: 15, color: verde),
+                        const SizedBox(width: 6),
+                        const Text('VICTORIA: TÚ',
+                            style: TextStyle(
+                                fontFamily: 'Cinzel',
+                                fontSize: 10,
+                                letterSpacing: 1,
+                                color: verde)),
+                      ]),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4, left: 21),
+                        child: Text('+$premio Ø  ·  +3 PC',
+                            style: TextStyle(
+                                fontFamily: 'Cinzel',
+                                fontSize: 9,
+                                color: war.textoTenue)),
+                      ),
+                      const SizedBox(height: 10),
+                      // Desglose fuerza (tú) vs defensa (rival) y poder neto.
+                      Row(children: [
+                        stat('⚔', '${atacante.fuerza}', _cYo),
+                        const SizedBox(width: 8),
+                        Text('vs',
+                            style: TextStyle(
+                                color: war.textoTenue,
+                                fontFamily: 'Cinzel',
+                                fontSize: 9)),
+                        const SizedBox(width: 8),
+                        stat('🛡', '${defensor.defensa}', _cRojo),
+                        const Spacer(),
+                        stat('⚡', pnTxt, verde),
+                      ]),
+                      const SizedBox(height: 16),
+                      // Animación de carta rota — EXACTAMENTE la del juego.
+                      Center(
+                        child: CartaRotaStrip(
+                          cartas: [
+                            {
+                              'Nombre': defensor.nombre,
+                              'Fuerza': defensor.fuerza,
+                              'Defensa': defensor.defensa,
+                              'Imagen': '',
+                              'ownerUid': 'rojo',
+                              'ownerZone': 'nw',
+                            }
+                          ],
+                          localUid: 'yo',
+                          colorZona: (z) =>
+                              (z == 'se' || z == 'yo') ? _cYo : _cRojo,
+                          titulo: 'CARTA ENEMIGA DESTRUIDA',
+                          cardWidth: 116,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Tu fuerza (${atacante.fuerza}) supera la defensa '
+                        'enemiga (${defensor.defensa}): la unidad rival es '
+                        'destruida y conquistas la celda.',
+                        style: TextStyle(
+                            fontSize: 11, height: 1.4, color: war.textoTenue),
+                      ),
+                      const SizedBox(height: 16),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            _advance();
+                          },
+                          child: const Text('CONTINUAR',
+                              style: TextStyle(
+                                  fontFamily: 'Cinzel', letterSpacing: 1)),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -1017,23 +1177,26 @@ class _TutorialScreenState extends State<TutorialScreen>
           titulo: '1 · Energía Zero (Ø)',
           cuerpo: 'Abajo, en tu barra de jugador, ves tu Energía Zero (Ø): '
               'la moneda del juego. Con ella '
-              'despliegas cartas y lanzas acciones. La consigues ganando '
-              'combates y capturando los RAYOS ⚡ del tablero.',
+              'despliegas cartas , lanzas acciones, y compras generales. La consigues ganando '
+              'combates y minando en casillas con el icono (Ø) en amarillo del tablero.',
           boton: 'SIGUIENTE',
         );
       case _Step.atributos:
         return const _Coach(
           titulo: '2 · Atributos de una carta',
-          cuerpo: 'Mira el "Soldado Zero" en tu mano. Cada carta tiene: '
-              '⚔ Fuerza (ataque), 🛡 Defensa (aguante), Ø Coste (lo que pagas '
-              'para desplegarla), su tipo de terreno y su Movimiento.',
+          cuerpo:
+              ' Las cartas que aparecen abajo son tu mano en ese momento, las miniaturas te muestran los 4 atributos que tienen las cartas '
+              ' Arriba izquierda Ø Coste (lo que pagas para desplegarla), ariba derecha ⚔ Fuerza (ataque), abajo izquierda movimiento, abajo derecha 🛡 Defensa (aguante)',
           boton: 'SIGUIENTE',
         );
       case _Step.cartaGrande:
         return const _Coach(
           titulo: '3 · Ver una carta en grande',
-          cuerpo: 'Mantén pulsada la carta "Soldado Zero" de tu mano para ver '
-              'todos sus datos en detalle. Cuando termines, pulsa SIGUIENTE.',
+          cuerpo:
+              'Mantén pulsada la carta "Soldado Celeste" de tu mano para ver '
+              'todos sus datos en detalle, de esta forma podremos ver el tipo de terreno donde puede moverse esta carta tierra/mar/aire o el tipo de carta si es básica, estática o de acción, '
+              'o descripción de la carta, o detalles de su historia y habilidades especiales. '
+              'Cuando termines, pulsa SIGUIENTE.',
           boton: 'SIGUIENTE',
         );
       case _Step.sacarCuartel:
@@ -1042,8 +1205,9 @@ class _TutorialScreenState extends State<TutorialScreen>
           titulo: '4 · Sacar la carta al cuartel',
           cuerpo:
               'Para entrar en juego, primero SELECCIONA una carta tocándola en '
-              'tu mano y luego tócala sobre TU cuartel (amarillo, F10, esquina '
-              'inferior derecha).',
+              'tu mano luego tócala sobre TU cuartel (amarillo, F10, esquina inferior derecha) '
+              ' La mayoría de cartas deben pasar por el cuartel excepto estáticas '
+              'que se colocan en cualquier celda donde tengas una carta que lleve mas de un turno, y las de acción que lanzan una habilidad sobre alguna celda',
           hint: tieneSel
               ? 'Ahora toca tu cuartel resaltado (F10)'
               : 'Selecciona el Soldado en tu mano',
@@ -1059,24 +1223,33 @@ class _TutorialScreenState extends State<TutorialScreen>
               ? 'Toca tu Soldado en el tablero'
               : 'Toca una celda resaltada',
         );
+      case _Step.evolucion:
+        return _Coach(
+          titulo: '6 · Evolución',
+          cuerpo: 'Algunas cartas pueden EVOLUCIONAR a una versión más potente '
+              'pagando Energía Zero. Toca tu Soldado en el tablero para abrir su '
+              'ficha: pulsa la FLECHA de evolución para ver en qué se convierte y '
+              'luego EVOLUCIONAR (−${_soldado.evolucion}Ø). Una carta recién '
+              'evolucionada no puede moverse ese turno.',
+          hint: 'Toca tu Soldado y pulsa la flecha de evolución',
+        );
       case _Step.batalla:
         return _Coach(
-          titulo: '6 · ¡Batalla!',
+          titulo: '7 · ¡Batalla!',
           cuerpo:
               'Ha aparecido un Dron Rival junto a ti. Al entrar en una celda '
               'enemiga se combate: gana quien supere la defensa rival. '
-              'Selecciona tu Soldado y ataca al Dron.',
+              'Selecciona tu unidad y ataca al Dron.',
           hint: _selBoard == null
-              ? 'Toca tu Soldado para seleccionarlo'
+              ? 'Toca tu unidad para seleccionarla'
               : 'Toca la celda del Dron Rival',
         );
       case _Step.estatica:
         final tieneSel = _selHand?.id == 'torreta';
         return _Coach(
-          titulo: '7 · Cartas estáticas',
-          cuerpo:
-              'La "Torreta Búnker" es ESTÁTICA: no se mueve (Mov 0), pero da '
-              'mucha defensa. Selecciónala en tu mano y colócala sobre una '
+          titulo: '8 · Cartas estáticas',
+          cuerpo: 'La "Torreta Búnker" es ESTÁTICA: no se mueve (Mov 0). '
+              'Selecciónala en tu mano y colócala sobre una '
               'celda que controlas.',
           hint: tieneSel
               ? 'Toca una celda resaltada para colocarla'
@@ -1092,7 +1265,7 @@ class _TutorialScreenState extends State<TutorialScreen>
           hint = 'Toca la celda de destino';
         }
         return _Coach(
-          titulo: '8 · Acción: Teletransporte',
+          titulo: '9 · Acción: Teletransporte',
           cuerpo: 'Las cartas de ACCIÓN lanzan efectos y se descartan. El '
               'Teletransporte mueve una carta tuya a cualquier celda libre: '
               'selecciona la acción, elige tu carta y luego el destino.',
@@ -1101,7 +1274,7 @@ class _TutorialScreenState extends State<TutorialScreen>
       case _Step.misil:
         final tieneSel = _selHand?.id == 'misil';
         return _Coach(
-          titulo: '9 · Acción: Misil',
+          titulo: '10 · Acción: Misil',
           cuerpo: 'Ha aparecido un Tanque Rival. El Misil Zero es una acción '
               'ofensiva: destruye una carta enemiga a distancia. Selecciónalo '
               'en tu mano y apunta al Tanque.',
@@ -1114,8 +1287,8 @@ class _TutorialScreenState extends State<TutorialScreen>
           titulo: '¡Tutorial completado!',
           cuerpo:
               'Ya conoces la Energía Zero, los atributos, el despliegue, el '
-              'movimiento, el combate y las cartas estáticas y de acción. '
-              '¡Estás listo para tu primera partida real!',
+              'movimiento, la evolución, el combate y las cartas estáticas y de '
+              'acción. ¡Estás listo para tu primera partida real!',
           boton: 'TERMINAR',
         );
     }

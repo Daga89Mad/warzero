@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/board_state.dart';
 import '../models/game_config.dart';
 import '../services/settings_controller.dart';
-import '../widgets/cell_widget.dart' show kObeliscoCoords, ownerColor;
+import '../widgets/cell_widget.dart' show ownerColor;
 
 // Colores de EVENTO / bando (lenguaje del juego, fijos en cualquier tema).
 const _cCombate = Color(0xFFC04040);
@@ -135,9 +135,11 @@ class RevisionTurnoScreen extends StatelessWidget {
   /// True si [coord] es un cuartel general (de cualquier jugador). En los
   /// cuarteles NUNCA se revelan las cartas que hay dentro durante la revisión.
   bool _esObelisco(String coord) =>
-      kObeliscoCoords.contains(coord) ||
-      obeliscosPorJugador.values.contains(coord) ||
-      coord == obeliscoLocal;
+      // Cuarteles REALES del servidor (obeliscosPorJugador + el propio).
+      // SIN fallback a kObeliscoCoords: ese set está hardcodeado a las
+      // esquinas de un 6×10 y marcaba cuarteles falsos (p. ej. F1/A10/F10)
+      // en mapas grandes como el de 8 jugadores (12×20).
+      obeliscosPorJugador.values.contains(coord) || coord == obeliscoLocal;
 
   /// ¿La acción [a] toca la celda [coord] (como origen, objetivo o destino)?
   bool _accionTocaCoord(Map<String, dynamic> a, String coord) {
@@ -229,7 +231,10 @@ class RevisionTurnoScreen extends StatelessWidget {
                 ? 'no impactó (sin bajas)'
                 : 'destruyó: ${destruidas.join(', ')}');
           } else if (esOrigen) {
-            detalle.write('\nCelda de origen del disparo');
+            final obj = (a['objetivo'] as String?) ?? '';
+            detalle.write(obj.isNotEmpty
+                ? '\nCelda de origen · disparó hacia $obj'
+                : '\nCelda de origen del disparo');
           }
           break;
         case 'veneno':
@@ -330,7 +335,7 @@ class RevisionTurnoScreen extends StatelessWidget {
     // aparecer al pulsar la casilla en la revisión de turno.
     final cartas = _esObelisco(coord)
         ? const <CartaEnCelda>[]
-        : boardState.getCelda(coord).cartas;
+        : boardState.celdaVisiblePara(coord, localUid).cartas;
     if (cartas.isNotEmpty) {
       final lineas = cartas
           .take(10)
@@ -345,7 +350,35 @@ class RevisionTurnoScreen extends StatelessWidget {
       ));
     }
 
-    return eventos;
+    // De-duplicar eventos idénticos (p. ej. dos disparos iguales desde la
+    // misma celda al mismo objetivo): se muestra un contador ×N en lugar de
+    // repetir la misma ficha varias veces.
+    final orden = <String>[];
+    final primero = <String, _EventoCelda>{};
+    final conteo = <String, int>{};
+    for (final ev in eventos) {
+      final key =
+          '${ev.icon.codePoint}|${ev.color.value}|${ev.titulo}|${ev.detalle}';
+      if (primero.containsKey(key)) {
+        conteo[key] = (conteo[key] ?? 1) + 1;
+      } else {
+        primero[key] = ev;
+        orden.add(key);
+        conteo[key] = 1;
+      }
+    }
+    return [
+      for (final k in orden)
+        if ((conteo[k] ?? 1) > 1)
+          _EventoCelda(
+            icon: primero[k]!.icon,
+            color: primero[k]!.color,
+            titulo: '${primero[k]!.titulo}  ×${conteo[k]}',
+            detalle: primero[k]!.detalle,
+          )
+        else
+          primero[k]!,
+    ];
   }
 
   /// Muestra un panel inferior con el detalle de lo ocurrido en [coord].
@@ -465,7 +498,7 @@ class RevisionTurnoScreen extends StatelessWidget {
                   Icon(Icons.touch_app, size: 10, color: war.textoTenue),
                   const SizedBox(width: 4),
                   Text(
-                    'Toca una celda para ver el detalle',
+                    'Toca una celda · pellizca para ampliar',
                     style: TextStyle(
                       fontFamily: 'Cinzel',
                       fontSize: 8,
@@ -504,25 +537,35 @@ class RevisionTurnoScreen extends StatelessWidget {
                         config.rows * cellMargin +
                         labelGutter;
 
-                    return Center(
-                      child: SizedBox(
-                        width: gridW,
-                        height: gridH,
-                        child: _MiniBoard(
-                          config: config,
-                          boardState: boardState,
-                          cellSize: cellSize,
-                          labelGutter: labelGutter,
-                          combateCoords: combate,
-                          accionCoords: accion,
-                          movimientoRivalCoords: movRival,
-                          conquistaCoords: conquista,
-                          localUid: localUid,
-                          playerColors: playerColors,
-                          obeliscoLocal: obeliscoLocal,
-                          obeliscosPorJugador: obeliscosPorJugador,
-                          onTapCoord: (coord) =>
-                              _mostrarDetalleCelda(context, coord),
+                    // Zoom con pellizco + arrastre: en mapas grandes (12×20)
+                    // las celdas son diminutas; InteractiveViewer permite
+                    // ampliar y desplazar el tablero.
+                    return InteractiveViewer(
+                      panEnabled: true,
+                      scaleEnabled: true,
+                      minScale: 1.0,
+                      maxScale: 6.0,
+                      boundaryMargin: const EdgeInsets.all(120),
+                      child: Center(
+                        child: SizedBox(
+                          width: gridW,
+                          height: gridH,
+                          child: _MiniBoard(
+                            config: config,
+                            boardState: boardState,
+                            cellSize: cellSize,
+                            labelGutter: labelGutter,
+                            combateCoords: combate,
+                            accionCoords: accion,
+                            movimientoRivalCoords: movRival,
+                            conquistaCoords: conquista,
+                            localUid: localUid,
+                            playerColors: playerColors,
+                            obeliscoLocal: obeliscoLocal,
+                            obeliscosPorJugador: obeliscosPorJugador,
+                            onTapCoord: (coord) =>
+                                _mostrarDetalleCelda(context, coord),
+                          ),
                         ),
                       ),
                     );
@@ -783,12 +826,17 @@ class _MiniBoard extends StatelessWidget {
   });
 
   bool _esObelisco(String coord) =>
-      kObeliscoCoords.contains(coord) ||
+      // Solo cuarteles REALES del servidor (ver nota en la clase externa).
       obeliscosPorJugador.values.contains(coord);
 
   @override
   Widget build(BuildContext context) {
     final war = context.war;
+    // Cada _MiniCell añade margin EdgeInsets.all(0.5) → ocupa cellSize + 1.0.
+    // El header y las filas deben avanzar en ese mismo paso para no
+    // desalinearse en mapas grandes (p. ej. 12×20).
+    const cellStep = 1.0; // margen total por celda (0.5 por lado)
+    final slot = cellSize + cellStep;
     return Column(
       children: [
         // ── Header: etiquetas de columna ──
@@ -799,7 +847,7 @@ class _MiniBoard extends StatelessWidget {
               SizedBox(width: labelGutter),
               for (int c = 0; c < config.cols; c++)
                 SizedBox(
-                  width: cellSize,
+                  width: slot,
                   child: Center(
                     child: Text(
                       '${config.colLabels[c]}',
@@ -818,7 +866,7 @@ class _MiniBoard extends StatelessWidget {
         // ── Filas ──
         for (int r = 0; r < config.rows; r++)
           SizedBox(
-            height: cellSize,
+            height: slot,
             child: Row(
               children: [
                 SizedBox(
@@ -929,7 +977,8 @@ class _MiniCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final war = context.war;
-    final cartas = boardState.getCelda(coord).cartas;
+    // Ocultar las cartas invisibles del rival también en la ficha del mapa.
+    final cartas = boardState.celdaVisiblePara(coord, localUid).cartas;
     final tieneCartas = cartas.isNotEmpty;
     final isRayo = boardState.esRayo(coord); // ← rayo de farmeo
 

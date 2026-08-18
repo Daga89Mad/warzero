@@ -119,11 +119,9 @@ class _HandCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Color del borde del círculo de coste: rojo si no puede pagar, dorado si sí.
-    final costCircleColor =
-        affordable ? const Color(0xFFB08040) : const Color(0xFF8B2020);
-    final costTextColor =
-        affordable ? const Color(0xFF040C14) : const Color(0xFFFFAAAA);
+    // Coste: dorado si puede pagar, rojo si no (señal clara de "sin energía").
+    final costeColor =
+        affordable ? const Color(0xFFB08040) : const Color(0xFFC85050);
 
     return GestureDetector(
       onTap: onTap,
@@ -157,47 +155,21 @@ class _HandCard extends StatelessWidget {
               : [],
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(4, 6, 4, 5),
+          padding: const EdgeInsets.fromLTRB(4, 5, 4, 4),
           child: Column(
             children: [
-              // ── Top row: fuerza + coste ──
+              // ── Fila superior: COSTE (izq) · FUERZA (dcha) ──
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '${carta.fuerza}',
-                    style: TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.bold,
-                      color: affordable
-                          ? const Color(0xFFE0C060)
-                          : const Color(0xFF806040),
-                      fontFamily: 'Cinzel',
-                      height: 1,
-                    ),
-                  ),
-                  Container(
-                    width: 16,
-                    height: 16,
-                    decoration: BoxDecoration(
-                      color: costCircleColor,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Center(
-                      child: Text(
-                        '$costeMostrado',
-                        style: TextStyle(
-                            fontSize: 8,
-                            fontWeight: FontWeight.bold,
-                            color: costTextColor,
-                            fontFamily: 'Cinzel'),
-                      ),
-                    ),
-                  ),
+                  _miniStat(Icons.monetization_on_outlined, costeMostrado,
+                      costeColor),
+                  _miniStat(Icons.bolt, carta.fuerza, const Color(0xFFC04040),
+                      dim: !affordable),
                 ],
               ),
-              // ── Art area ──
+              // ── Arte ──
               Expanded(
                 child: Center(
                   child: Opacity(
@@ -205,8 +177,8 @@ class _HandCard extends StatelessWidget {
                     child: carta.imagen.isNotEmpty
                         ? Image.network(
                             carta.imagen,
-                            width: 36,
-                            height: 36,
+                            width: 34,
+                            height: 34,
                             fit: BoxFit.contain,
                             errorBuilder: (_, __, ___) =>
                                 const _PlaceholderIcon(),
@@ -215,6 +187,20 @@ class _HandCard extends StatelessWidget {
                   ),
                 ),
               ),
+              // ── Fila inferior: MOVIMIENTO (izq) · DEFENSA (dcha) ──
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _miniStat(Icons.open_with, carta.movimiento,
+                      const Color(0xFF4080C0),
+                      dim: !affordable),
+                  _miniStat(Icons.shield_outlined, carta.defensa,
+                      const Color(0xFF40B070),
+                      dim: !affordable),
+                ],
+              ),
+              const SizedBox(height: 2),
               // ── Nombre ──
               Text(
                 carta.nombre,
@@ -230,21 +216,33 @@ class _HandCard extends StatelessWidget {
                   fontFamily: 'Cinzel',
                 ),
               ),
-              // ── Ejército ──
-              Text(
-                'EJÉRCITO ${carta.ejercito}',
-                style: TextStyle(
-                  fontSize: 5,
-                  color: affordable
-                      ? const Color(0x7F506878)
-                      : const Color(0x4F3A3040),
-                  fontFamily: 'Cinzel',
-                ),
-              ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  /// Mini-atributo (icono + valor) para una esquina de la miniatura. Usa los
+  /// mismos iconos/colores que el detalle de carta para mantener coherencia.
+  Widget _miniStat(IconData icon, int value, Color color, {bool dim = false}) {
+    final c = dim ? color.withOpacity(0.42) : color;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 8, color: c),
+        const SizedBox(width: 1),
+        Text(
+          '$value',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: c,
+            fontFamily: 'Cinzel',
+            height: 1,
+          ),
+        ),
+      ],
     );
   }
 }

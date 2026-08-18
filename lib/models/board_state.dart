@@ -121,6 +121,18 @@ class CartaEnCelda {
     return false;
   }
 
+  /// True si la carta arrastra una invisibilidad activa. Mientras lo esté, solo
+  /// su propietario debe verla en el tablero (el resto de clientes la ocultan) y
+  /// para el propietario se pinta con transparencia. El efecto se rompe al
+  /// expirar los turnos, al entrar en combate o al morir la carta.
+  bool get invisible {
+    for (final e in efectos) {
+      if (e.turnosRestantes <= 0) continue;
+      if (e.tipo == EfectoTipoEstado.invisibilidad) return true;
+    }
+    return false;
+  }
+
   bool habilidadDisponible(int turnoActual) {
     if (!carta.tieneHabilidad) return false;
     if (ultimoUsoHabilidad == null) return true;
@@ -362,6 +374,23 @@ class BoardState {
         e.tipo == EfectoTipoEstado.escudo &&
         e.turnosRestantes > 0 &&
         e.origenUid != localUid);
+  }
+
+  /// Devuelve la celda tal y como debe VERLA [viewerUid]: se ocultan las cartas
+  /// invisibles que NO pertenezcan al observador. Las cartas invisibles propias
+  /// sí se conservan (el propietario las ve, con transparencia). Se usa en el
+  /// tablero y en el sidebar para que el rival no vea las cartas invisibles.
+  ///
+  /// La resolución del turno en el servidor SIEMPRE trabaja con el tablero
+  /// completo: esto es solo un filtro de presentación local.
+  CeldaState celdaVisiblePara(String coord, String? viewerUid) {
+    final celda = getCelda(coord);
+    if (viewerUid == null) return celda;
+    final visibles = celda.cartas
+        .where((c) => !(c.invisible && c.ownerUid != viewerUid))
+        .toList();
+    if (visibles.length == celda.cartas.length) return celda;
+    return celda.withCartas(visibles);
   }
 
   /// True si [coord] es una de las celdas de rayo activas.

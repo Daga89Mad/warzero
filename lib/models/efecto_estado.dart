@@ -9,6 +9,11 @@ enum EfectoTipoEstado {
   potFuerza,
   potDefensa,
   potMovimiento,
+  // Invisibilidad: efecto que se ancla a UNA carta (no a la celda). Mientras
+  // está activo, la carta solo es visible para su propietario (el rival no la
+  // ve en el tablero). Se rompe al expirar los turnos, al entrar en combate o
+  // al morir la carta.
+  invisibilidad,
   // futuro: regeneracion...
 }
 
@@ -27,6 +32,8 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return 'Defensa+';
       case EfectoTipoEstado.potMovimiento:
         return 'Movimiento+';
+      case EfectoTipoEstado.invisibilidad:
+        return 'Invisible';
     }
   }
 
@@ -44,6 +51,8 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return '🛡';
       case EfectoTipoEstado.potMovimiento:
         return '💨';
+      case EfectoTipoEstado.invisibilidad:
+        return '👻';
     }
   }
 

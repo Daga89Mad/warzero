@@ -90,7 +90,18 @@ enum EfectoTipo {
   potenciarFuerza,
   potenciarDefensa,
   potenciarMovimiento,
+
+  /// Invisibilidad: se aplica sobre UNA carta PROPIA (no sobre la celda). La
+  /// carta queda invisible para el resto de jugadores durante [duracionTurnos]
+  /// turnos. El efecto termina de tres formas: al expirar los turnos, al entrar
+  /// la carta en combate, o al morir la carta por una acción. Igual que el
+  /// teletransporte, requiere seleccionar la carta objetivo (`requiereCartaPropia`).
+  invisibilidad,
 }
+
+/// Duración por defecto (configurable) de la invisibilidad, en turnos.
+/// Su espejo en el servidor es `CatalogoHabilidades` de `WarZeroLogic.cs`.
+const int kInvisibilidadDuracionTurnos = 3;
 
 /// Magnitudes y duración por defecto de las potenciaciones. Configurables aquí
 /// (y su espejo en el servidor, `WarZeroLogic.cs`).
@@ -147,6 +158,11 @@ class EfectoHabilidad {
     this.defensaReducida = kPotMovimientoMagnitud,
     this.duracionTurnos = kPotDuracionTurnos,
   }) : tipo = EfectoTipo.potenciarMovimiento;
+
+  const EfectoHabilidad.invisibilidad({
+    this.duracionTurnos = kInvisibilidadDuracionTurnos,
+  })  : tipo = EfectoTipo.invisibilidad,
+        defensaReducida = 0;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -210,7 +226,8 @@ class Habilidad {
 ///   15, 16, 17 → potenciar fuerza (propia, adyacente, lejano)
 ///   18, 19, 20 → potenciar defensa (propia, adyacente, lejano)
 ///   21, 22, 23 → potenciar movimiento (propia, adyacente, lejano)
-///   24+      → reservado (futuras)
+///   24, 25, 26 → invisibilidad (cerca, media, lejos) — solo cartas propias
+///   27+      → reservado (futuras)
 class CatalogoHabilidades {
   CatalogoHabilidades._();
 
@@ -294,14 +311,12 @@ class CatalogoHabilidades {
     7: Habilidad(
       id: 7,
       nombre: 'Veneno medio',
-      descripcion:
-          'Envenena una celda dentro de un radio de 7 desde el origen, '
-          'excepto cuarteles generales. Durante 3 turnos las cartas en ella '
+      descripcion: 'Envenena una celda dentro de un radio de 7 desde el origen '
+          '(cuarteles incluidos). Durante 3 turnos las cartas en ella '
           '(o que entren después) pierden 3 de defensa.',
       icon: '☠',
       rango: RangoHabilidad.radioN(7),
       efecto: EfectoHabilidad.veneno(),
-      excluyeCG: true,
     ),
     8: Habilidad(
       id: 8,
@@ -328,14 +343,12 @@ class CatalogoHabilidades {
     10: Habilidad(
       id: 10,
       nombre: 'Parálisis media',
-      descripcion:
-          'Paraliza una celda dentro de un radio de 7 desde el origen, excepto '
-          'cuarteles. Durante 3 turnos las cartas en ella (o que entren) no '
-          'pueden moverse.',
+      descripcion: 'Paraliza una celda dentro de un radio de 7 desde el origen '
+          '(cuarteles incluidos). Durante 3 turnos las cartas en ella '
+          '(o que entren) no pueden moverse.',
       icon: '⏱',
       rango: RangoHabilidad.radioN(7),
       efecto: EfectoHabilidad.paralisis(),
-      excluyeCG: true,
     ),
     11: Habilidad(
       id: 11,
@@ -474,6 +487,51 @@ class CatalogoHabilidades {
       icon: '💨',
       rango: RangoHabilidad.cualquiera(),
       efecto: EfectoHabilidad.potMovimiento(),
+    ),
+
+    // ── INVISIBILIDAD (solo cartas PROPIAS) ────────────────
+    // El objetivo NO es una celda vacía sino una carta propia. Igual que el
+    // teletransporte se selecciona la carta (`requiereCartaPropia`). Los rangos:
+    //   cerca  → solo cartas de la celda desde donde se lanza (propia).
+    //   media  → la propia celda y las colindantes (frontera + origen).
+    //   lejos  → cualquier carta propia del tablero.
+    // El servicio `HabilidadService.calcularObjetivosValidos` restringe los
+    // objetivos a celdas que contengan una carta propia.
+    24: Habilidad(
+      id: 24,
+      nombre: 'Invisibilidad cercana',
+      descripcion:
+          'Vuelve invisible durante $kInvisibilidadDuracionTurnos turnos a una '
+          'carta propia de la celda desde la que se lanza. Solo tú la ves; el '
+          'efecto se rompe al entrar en combate o si la carta muere.',
+      icon: '👻',
+      rango: RangoHabilidad.propia(),
+      efecto: EfectoHabilidad.invisibilidad(),
+      requiereCartaPropia: true,
+    ),
+    25: Habilidad(
+      id: 25,
+      nombre: 'Invisibilidad media',
+      descripcion:
+          'Vuelve invisible durante $kInvisibilidadDuracionTurnos turnos a una '
+          'carta propia de la propia celda o de una adyacente. Solo tú la ves; '
+          'el efecto se rompe al entrar en combate o si la carta muere.',
+      icon: '👻',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.invisibilidad(),
+      requiereCartaPropia: true,
+    ),
+    26: Habilidad(
+      id: 26,
+      nombre: 'Invisibilidad lejana',
+      descripcion:
+          'Vuelve invisible durante $kInvisibilidadDuracionTurnos turnos a '
+          'cualquier carta propia del tablero. Solo tú la ves; el efecto se '
+          'rompe al entrar en combate o si la carta muere.',
+      icon: '👻',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.invisibilidad(),
+      requiereCartaPropia: true,
     ),
   };
 

@@ -173,6 +173,12 @@ class CellWidget extends StatelessWidget {
     // Todas las celdas usan la misma decoración — el terreno se indica solo con el badge.
     final cellDeco = _cellDecoration(isDark);
 
+    // ¿Hay alguna carta INVISIBLE propia en esta celda? (Las invisibles del
+    // rival ya vienen filtradas fuera.) Si la hay, se pinta translúcida y con
+    // un badge 👻 para que el propietario recuerde que solo él la ve.
+    final hayInvisiblePropia = localPlayerUid != null &&
+        celda.cartas.any((c) => c.ownerUid == localPlayerUid && c.invisible);
+
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
@@ -277,15 +283,30 @@ class CellWidget extends StatelessWidget {
               ),
             if (!celda.isEmpty)
               Center(
-                child: _CardStack(
-                  celda: celda,
-                  isEnemyObelisco: obeliscosEfectivos.contains(coord) &&
-                      !isObelisco &&
-                      !isConquistado,
-                  playerColors: playerColors,
-                  venenosCelda: venenosCelda,
-                  escudosCelda: escudosCelda,
-                  aliadosLocal: aliadosLocal,
+                child: Opacity(
+                  // Carta(s) invisible(s) propia(s): se pintan translúcidas.
+                  opacity: hayInvisiblePropia ? 0.45 : 1.0,
+                  child: _CardStack(
+                    celda: celda,
+                    isEnemyObelisco: obeliscosEfectivos.contains(coord) &&
+                        !isObelisco &&
+                        !isConquistado,
+                    playerColors: playerColors,
+                    venenosCelda: venenosCelda,
+                    escudosCelda: escudosCelda,
+                    aliadosLocal: aliadosLocal,
+                  ),
+                ),
+              ),
+
+            // Badge 👻 de invisibilidad propia (esquina inferior izquierda), por
+            // encima del token para que sea legible.
+            if (hayInvisiblePropia)
+              const Positioned(
+                left: 3,
+                bottom: 3,
+                child: IgnorePointer(
+                  child: Text('👻', style: TextStyle(fontSize: 11, height: 1)),
                 ),
               ),
 

@@ -823,10 +823,44 @@ class _AccionesTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final war = context.war;
-    final acciones = accionesLog
+    final base = accionesLog
         .where((a) => _tiposAccion.contains(a['tipo']))
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
+    // Agrupar acciones IDÉNTICAS (p. ej. dos disparos iguales de dos cartas
+    // en la misma celda al mismo objetivo) para mostrar un contador ×N en
+    // vez de repetir la misma ficha.
+    final orden = <String>[];
+    final primera = <String, Map<String, dynamic>>{};
+    final conteo = <String, int>{};
+    for (final a in base) {
+      final destr = (a['cartasDestruidas'] as List? ?? const [])
+          .map((c) => Map<String, dynamic>.from(c as Map))
+          .map((c) => '${c['Nombre'] ?? c['nombre']}:${c['ownerUid'] ?? ''}')
+          .toList()
+        ..sort();
+      final key = [
+        a['tipo'],
+        a['uid'],
+        a['habilidadNombre'],
+        a['origen'],
+        a['cartaOrigenCoord'],
+        a['destino'],
+        a['objetivo'],
+        a['turnosRestantes'],
+        a['magnitud'],
+        a['motivo'],
+        destr.join(','),
+      ].join('|');
+      if (primera.containsKey(key)) {
+        conteo[key] = (conteo[key] ?? 1) + 1;
+      } else {
+        primera[key] = a;
+        orden.add(key);
+        conteo[key] = 1;
+      }
+    }
+    final acciones = orden;
 
     if (acciones.isEmpty) {
       return Center(
@@ -863,7 +897,8 @@ class _AccionesTab extends StatelessWidget {
       itemCount: acciones.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (_, i) => _AccionTile(
-        data: acciones[i],
+        data: primera[acciones[i]]!,
+        count: conteo[acciones[i]] ?? 1,
         localUid: localUid,
         alias: alias,
         colorZona: colorZona,
@@ -875,12 +910,14 @@ class _AccionesTab extends StatelessWidget {
 /// Ficha de una acción/habilidad en la pestaña ACCIONES.
 class _AccionTile extends StatelessWidget {
   final Map<String, dynamic> data;
+  final int count;
   final String localUid;
   final String Function(String) alias;
   final Color Function(String?) colorZona;
 
   const _AccionTile({
     required this.data,
+    this.count = 1,
     required this.localUid,
     required this.alias,
     required this.colorZona,
@@ -1034,6 +1071,15 @@ class _AccionTile extends StatelessWidget {
                           color: color)),
                 ),
                 const SizedBox(width: 6),
+                if (count > 1) ...[
+                  Text('×$count',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: color)),
+                  const SizedBox(width: 6),
+                ],
                 _Badge(label: etiqueta, color: color),
               ],
             ),
