@@ -10,6 +10,7 @@ import 'package:warzero/views/settingsScreen.dart';
 import 'package:warzero/views/lobby_screen.dart';
 import 'package:warzero/views/mazo_screen.dart';
 import 'package:warzero/views/cartas_screen.dart';
+import 'package:warzero/views/centro_mando_screen.dart';
 import 'package:warzero/views/historias_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/ranking_screen.dart';
@@ -117,6 +118,16 @@ class MenuScreen extends StatelessWidget {
                   crossAxisSpacing: 12,
                   childAspectRatio: 1.05,
                   children: [
+                    _MenuTile(
+                      icon: Icons.hub_outlined,
+                      label: 'CENTRO DE MANDO',
+                      sublabel: 'Abre sobres con\nEnergía Zero',
+                      accent: const Color(0xFF35D0FF),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const CentroMandoScreen()),
+                      ),
+                    ),
                     _MenuTile(
                       icon: Icons.public,
                       label: 'JUGAR',

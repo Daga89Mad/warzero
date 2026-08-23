@@ -197,6 +197,21 @@ class CartaModel {
   /// check en la edición de cartas. Campo Firestore: `PorDefecto`.
   final bool porDefecto;
 
+  /// Número de carta dentro de su ejército (coleccionable). Sirve para:
+  ///   • Ordenar la colección (1..N) y numerar el catálogo del ejército.
+  ///   • Mostrar las cartas que el jugador NO posee como "bloqueadas" en su
+  ///     posición correspondiente sin revelar imagen ni datos.
+  /// 0 = carta aún sin numerar (no cuenta para el % de completado del ejército).
+  /// Campo Firestore: `Numero`.
+  final int numero;
+
+  /// Peso/probabilidad relativa de que esta carta salga al abrir un sobre.
+  /// Es un número (peso) que el servidor normaliza sobre la suma de pesos del
+  /// ejército: prob_real = probabilidad / Σ(probabilidades del pool). 0 = la
+  /// carta no sale en sobres (solo se consigue por otras vías). Campo
+  /// Firestore: `Probabilidad`.
+  final double probabilidad;
+
   const CartaModel({
     required this.id,
     required this.nombre,
@@ -215,6 +230,8 @@ class CartaModel {
     this.evolucion = 0,
     this.condicion = CondicionCarta.basica,
     this.porDefecto = false,
+    this.numero = 0,
+    this.probabilidad = 0,
   });
 
   /// True si esta carta tiene una evolución configurada.
@@ -241,6 +258,12 @@ class CartaModel {
   /// True si la carta tiene una habilidad asignada (id > 0 en el catálogo).
   bool get tieneHabilidad => idHabilidad > 0;
 
+  /// True si la carta está numerada (participa en el conteo de coleccionismo).
+  bool get estaNumerada => numero > 0;
+
+  /// True si la carta puede salir al abrir sobres (peso > 0).
+  bool get saleEnSobres => probabilidad > 0;
+
   /// Movimiento efectivo: las estáticas, las cartas de acción y las acciones
   /// estáticas siempre tienen 0 (no se colocan como cartas móviles).
   int get movimientoEfectivo =>
@@ -254,9 +277,22 @@ class CartaModel {
     return fallback;
   }
 
+  static double _parseDouble(dynamic v, {double fallback = 0}) {
+    if (v == null) return fallback;
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      return double.tryParse(v.trim().replaceAll(',', '.')) ?? fallback;
+    }
+    return fallback;
+  }
+
   static int _field(Map<String, dynamic> d, String pascal, String snake,
           {int fallback = 0}) =>
       _parseInt(d[pascal] ?? d[snake], fallback: fallback);
+
+  static double _fieldD(Map<String, dynamic> d, String pascal, String snake,
+          {double fallback = 0}) =>
+      _parseDouble(d[pascal] ?? d[snake], fallback: fallback);
 
   static String _fieldStr(Map<String, dynamic> d, String pascal, String camel,
           {String fallback = ''}) =>
@@ -283,6 +319,8 @@ class CartaModel {
       evolucion: _parseInt(d['Evolucion']),
       condicion: CondicionCartaExt.fromInt(_parseInt(d['Condicion'])),
       porDefecto: d['PorDefecto'] == true,
+      numero: _parseInt(d['Numero']),
+      probabilidad: _parseDouble(d['Probabilidad']),
     );
   }
 
@@ -307,6 +345,8 @@ class CartaModel {
         condicion:
             CondicionCartaExt.fromInt(_field(d, 'Condicion', 'condicion')),
         porDefecto: (d['PorDefecto'] ?? d['porDefecto']) == true,
+        numero: _field(d, 'Numero', 'numero'),
+        probabilidad: _fieldD(d, 'Probabilidad', 'probabilidad'),
       );
 
   // ── Serialización ─────────────────────────────────────────
@@ -328,6 +368,8 @@ class CartaModel {
         'Evolucion': evolucion,
         'Condicion': condicion.value,
         'PorDefecto': porDefecto,
+        'Numero': numero,
+        'Probabilidad': probabilidad,
       };
 
   CartaModel copyWith({
@@ -348,6 +390,8 @@ class CartaModel {
     int? evolucion,
     CondicionCarta? condicion,
     bool? porDefecto,
+    int? numero,
+    double? probabilidad,
   }) =>
       CartaModel(
         id: id ?? this.id,
@@ -368,6 +412,8 @@ class CartaModel {
         evolucion: evolucion ?? this.evolucion,
         condicion: condicion ?? this.condicion,
         porDefecto: porDefecto ?? this.porDefecto,
+        numero: numero ?? this.numero,
+        probabilidad: probabilidad ?? this.probabilidad,
       );
 
   String get tipoLabel {

@@ -1,4 +1,3 @@
-
 name: warzero
 description: "Juego de cartas por turnos con temática de guerra futurista"
 publish_to: 'none'
@@ -67,6 +66,9 @@ flutter:
   uses-material-design: true
 
   assets:
+    # Carpeta con los marcos decorativos (marco_legendaria_N.png / marco_especial_N.png)
+    # y demás imágenes del juego. Entrada de directorio: incluye todo el contenido.
+    - assets/images/
     - assets/images/logo.png
     - assets/images/map_background.png
     - assets/images/Mapa8New.png

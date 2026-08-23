@@ -33,6 +33,7 @@ Future<void> showCardDetail(
   int fuerzaExtra = 0,
   int movimientoExtra = 0,
   bool paralizada = false,
+  bool esLegendaria = false,
 }) {
   return showGeneralDialog(
     context: context,
@@ -66,6 +67,7 @@ Future<void> showCardDetail(
       fuerzaExtra: fuerzaExtra,
       movimientoExtra: movimientoExtra,
       paralizada: paralizada,
+      esLegendaria: esLegendaria,
     ),
   );
 }
@@ -86,6 +88,7 @@ class _CardDetailPage extends StatefulWidget {
   final int fuerzaExtra;
   final int movimientoExtra;
   final bool paralizada;
+  final bool esLegendaria;
 
   const _CardDetailPage({
     required this.carta,
@@ -102,6 +105,7 @@ class _CardDetailPage extends StatefulWidget {
     this.fuerzaExtra = 0,
     this.movimientoExtra = 0,
     this.paralizada = false,
+    this.esLegendaria = false,
   });
 
   @override
@@ -260,15 +264,14 @@ class _CardDetailPageState extends State<_CardDetailPage>
   Size _cardSize(BuildContext context) {
     final mq = MediaQuery.of(context).size;
     const double aspect = 1.5;
-    // No hay flecha lateral: solo un mini-padding para que la carta no
-    // toque los bordes laterales de la pantalla.
-    const double totalSideSpace = 20.0;
+    // Margen lateral mínimo: la carta ocupa casi todo el ancho de pantalla.
+    const double totalSideSpace = 12.0;
     final double usableWidth = mq.width - totalSideSpace;
 
-    final double maxW = (usableWidth * 0.98).clamp(0.0, 560.0);
-    // Dejar espacio vertical para la flecha de evolución que ahora va
-    // debajo (64dp + spacer) y para los botones de habilidad/evolucionar.
-    final double maxH = (mq.height * 0.78).clamp(0.0, 820.0);
+    final double maxW = usableWidth.clamp(0.0, 720.0);
+    // Usamos más alto de pantalla. En la mayoría de móviles la carta sigue
+    // limitada por el ancho, pero en pantallas altas gana tamaño.
+    final double maxH = (mq.height * 0.88).clamp(0.0, 980.0);
 
     double cardW = maxW;
     double cardH = cardW * aspect;
@@ -317,6 +320,7 @@ class _CardDetailPageState extends State<_CardDetailPage>
                     back: _evolucion,
                     cardWidth: sz.width,
                     cardHeight: sz.height,
+                    esLegendaria: widget.esLegendaria,
                   ),
                 ),
 
@@ -672,12 +676,17 @@ class _FlippingCard extends StatelessWidget {
   final double cardWidth;
   final double cardHeight;
 
+  /// La skin legendaria pertenece a la carta frontal; solo se aplica a la cara
+  /// delantera (la evolución del reverso es otra carta distinta).
+  final bool esLegendaria;
+
   const _FlippingCard({
     required this.controller,
     required this.front,
     required this.cardWidth,
     required this.cardHeight,
     this.back,
+    this.esLegendaria = false,
   });
 
   @override
@@ -701,12 +710,14 @@ class _FlippingCard extends StatelessWidget {
                     carta: back ?? front,
                     cardWidth: cardWidth,
                     cardHeight: cardHeight,
+                    esLegendaria: false,
                   ),
                 )
               : _CardFace(
                   carta: front,
                   cardWidth: cardWidth,
                   cardHeight: cardHeight,
+                  esLegendaria: esLegendaria,
                 ),
         );
       },
@@ -907,6 +918,51 @@ class _EvolveButton extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
+// MARCOS DECORATIVOS (assets transparentes en assets/images/)
+//   Mapeo por ejército: 1 Humanos · 2 Biónicos · 3 Demonios · 4 Nefilim.
+//   - Legendaria: envuelve la ILUSTRACIÓN (marco horizontal).
+//   - Especial:   envuelve TODA la carta (marco vertical).
+// ─────────────────────────────────────────────────────────────
+String _marcoLegendaria(int ejercito) =>
+    'assets/images/marco_legendaria_$ejercito.png';
+String _marcoEspecial(int ejercito) =>
+    'assets/images/marco_especial_$ejercito.png';
+
+// Cuánto sobresale cada marco respecto a su área base (fracción del ANCHO de la
+// carta). Ajusta finamente si los adornos quedan demasiado dentro/fuera.
+const double _kSangradoEspecial = 0.02; // marco de toda la carta (sangrado)
+const double _kSangradoLegendariaX = 0.06; // marco de la ilustración (lados)
+const double _kSangradoLegendariaY =
+    0.10; // marco de la ilustración (arriba/abajo)
+
+// Ventanas internas del marco ESPECIAL, medidas sobre el PNG (1046x1504) como
+// fracciones del propio marco. El contenido de la carta se coloca EXACTAMENTE
+// en estos huecos para que encaje con el marco. Si mañana cambias el arte del
+// marco y las ventanas se mueven, basta reajustar estos números.
+const double _kEspImgL = 0.070,
+    _kEspImgT = 0.156,
+    _kEspImgR = 0.929,
+    _kEspImgB = 0.628; // ventana de la ilustración
+const double _kEspTxtL = 0.070,
+    _kEspTxtT = 0.658,
+    _kEspTxtR = 0.928,
+    _kEspTxtB = 0.893; // ventana de texto
+const double _kEspTitL = 0.203,
+    _kEspTitT = 0.048,
+    _kEspTitR = 0.795,
+    _kEspTitB = 0.130; // barra de título
+// Centros de los huecos de esquina (coste, fuerza, mov, defensa).
+const double _kEspSlotTLx = 0.084, _kEspSlotTLy = 0.068;
+const double _kEspSlotTRx = 0.914, _kEspSlotTRy = 0.068;
+const double _kEspSlotBLx = 0.084, _kEspSlotBLy = 0.938;
+const double _kEspSlotBRx = 0.914, _kEspSlotBRy = 0.938;
+// Tamaño de cada hueco de esquina (fracción del marco).
+const double _kEspSlotW = 0.070, _kEspSlotH = 0.050;
+// true  -> la ilustración se ve ENTERA (BoxFit.contain, puede dejar bandas).
+// false -> la ilustración RELLENA la ventana (BoxFit.cover, recorta bordes).
+const bool _kEspImagenCompleta = false;
+
+// ─────────────────────────────────────────────────────────────
 // CARTA FÍSICA (RESPONSIVE — tamaño recibido del padre)
 // ─────────────────────────────────────────────────────────────
 class _CardFace extends StatelessWidget {
@@ -914,15 +970,22 @@ class _CardFace extends StatelessWidget {
   final double cardWidth;
   final double cardHeight;
 
+  /// True si la skin aplicada a esta carta es legendaria (marco en la imagen).
+  final bool esLegendaria;
+
   const _CardFace({
     required this.carta,
     required this.cardWidth,
     required this.cardHeight,
+    this.esLegendaria = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    // Las cartas Especiales llevan marco de ejército alrededor de TODA la carta.
+    final bool especial = carta.esEspecial;
+
+    final Widget nucleo = Container(
       width: cardWidth,
       height: cardHeight,
       decoration: BoxDecoration(
@@ -936,7 +999,12 @@ class _CardFace extends StatelessWidget {
             Color(0xFF060E14),
           ],
         ),
-        border: Border.all(color: const Color(0xFFC8A860), width: 1.8),
+        // Con marco especial, el borde dorado propio estorba (el marco ya lo
+        // aporta): lo hacemos transparente para evitar el doble borde.
+        border: Border.all(
+          color: const Color(0xFFC8A860).withOpacity(especial ? 0.0 : 1.0),
+          width: 1.8,
+        ),
         boxShadow: [
           BoxShadow(
             color: const Color(0xFFC8A860).withOpacity(0.30),
@@ -1098,52 +1166,79 @@ class _CardFace extends StatelessWidget {
                 children: [
                   Expanded(
                     flex: 6,
-                    child: Container(
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: const Color(0xFFC8A860).withOpacity(0.40),
-                            width: 1),
-                        color: const Color(0xFF050C14),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(7),
-                        child: SizedBox.expand(
-                          child: carta.imagen.isNotEmpty
-                              ? Image.network(
-                                  carta.imagen,
-                                  fit: BoxFit.cover,
-                                  width: double.infinity,
-                                  height: double.infinity,
-                                  frameBuilder: (ctx, child, frame, sync) {
-                                    if (sync || frame != null) {
-                                      return AnimatedOpacity(
-                                        opacity: 1.0,
-                                        duration: Duration.zero,
-                                        child: child,
-                                      );
-                                    }
-                                    return Stack(
-                                      fit: StackFit.expand,
-                                      children: [
-                                        _ImagePlaceholder(),
-                                        AnimatedOpacity(
-                                          opacity: frame == null ? 0.0 : 1.0,
-                                          duration:
-                                              const Duration(milliseconds: 250),
-                                          curve: Curves.easeIn,
-                                          child: child,
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                  errorBuilder: (_, __, ___) =>
-                                      _ImagePlaceholder(),
-                                )
-                              : _ImagePlaceholder(),
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Positioned.fill(
+                          child: Container(
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                  color:
+                                      const Color(0xFFC8A860).withOpacity(0.40),
+                                  width: 1),
+                              color: const Color(0xFF050C14),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(7),
+                              child: SizedBox.expand(
+                                child: carta.imagen.isNotEmpty
+                                    ? Image.network(
+                                        carta.imagen,
+                                        fit: BoxFit.cover,
+                                        width: double.infinity,
+                                        height: double.infinity,
+                                        frameBuilder:
+                                            (ctx, child, frame, sync) {
+                                          if (sync || frame != null) {
+                                            return AnimatedOpacity(
+                                              opacity: 1.0,
+                                              duration: Duration.zero,
+                                              child: child,
+                                            );
+                                          }
+                                          return Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              _ImagePlaceholder(),
+                                              AnimatedOpacity(
+                                                opacity:
+                                                    frame == null ? 0.0 : 1.0,
+                                                duration: const Duration(
+                                                    milliseconds: 250),
+                                                curve: Curves.easeIn,
+                                                child: child,
+                                              ),
+                                            ],
+                                          );
+                                        },
+                                        errorBuilder: (_, __, ___) =>
+                                            _ImagePlaceholder(),
+                                      )
+                                    : _ImagePlaceholder(),
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                        // ── MARCO LEGENDARIO (envuelve la ilustración) ──
+                        if (esLegendaria)
+                          Positioned(
+                            left: -cardWidth * _kSangradoLegendariaX,
+                            right: -cardWidth * _kSangradoLegendariaX,
+                            top: -cardWidth * _kSangradoLegendariaY,
+                            bottom: -cardWidth * _kSangradoLegendariaY,
+                            child: IgnorePointer(
+                              child: Image.asset(
+                                _marcoLegendaria(carta.ejercito),
+                                fit: BoxFit.fill,
+                                filterQuality: FilterQuality.medium,
+                                errorBuilder: (_, __, ___) =>
+                                    const SizedBox.shrink(),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -1169,7 +1264,7 @@ class _CardFace extends StatelessWidget {
                                     ? carta.descripcion
                                     : 'Sin descripción.',
                                 style: const TextStyle(
-                                  fontSize: 10,
+                                  fontSize: 12,
                                   color: Color(0xFFB0A090),
                                   height: 1.5,
                                   fontFamily: 'Georgia',
@@ -1219,26 +1314,6 @@ class _CardFace extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(carta.tipoIconData,
-                            size: 9, color: Color(carta.tipoColorValue)),
-                        const SizedBox(width: 4),
-                        Text(
-                          carta.tipoNombre.toUpperCase(),
-                          style: TextStyle(
-                            fontSize: 8,
-                            color: Color(carta.tipoColorValue),
-                            fontFamily: 'Cinzel',
-                            letterSpacing: 2,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -1246,7 +1321,335 @@ class _CardFace extends StatelessWidget {
         ),
       ),
     );
+
+    if (especial) return _buildEspecial(context);
+    return nucleo;
   }
+
+  // ── Layout dedicado a cartas ESPECIALES ────────────────────────────
+  // El marco de ejército es una plantilla completa (título, ilustración, texto
+  // y huecos de esquina). En vez de superponerlo sobre la carta normal (que no
+  // cuadraba), aquí colocamos cada elemento dentro de su ventana del marco.
+  Widget _buildEspecial(BuildContext context) {
+    final double w = cardWidth, h = cardHeight;
+    final double pad =
+        w * _kSangradoEspecial; // sangrado del marco hacia afuera
+    final double fW = w + 2 * pad, fH = h + 2 * pad; // rect completo del marco
+
+    // Inset (izq./sup.) desde el borde de la carta para una fracción del marco.
+    double fx(double f) => -pad + f * fW;
+    double fy(double f) => -pad + f * fH;
+
+    // Coloca [child] exactamente en la ventana [l,t,r,b] (fracciones del marco).
+    Widget ventana(double l, double t, double r, double b, Widget child) =>
+        Positioned(
+          left: fx(l),
+          top: fy(t),
+          width: (r - l) * fW,
+          height: (b - t) * fH,
+          child: child,
+        );
+
+    // Coloca un badge centrado en el hueco de esquina (cx,cy), escalado al hueco.
+    Widget hueco(double cx, double cy, Widget badge) {
+      // Tamaño legible (independiente del hueco decorativo, que puede ser
+      // diminuto). El badge se centra sobre el hueco; si es mayor, desborda un
+      // poco sobre el marco, que es justo el aspecto de carta con stats.
+      final double bw = 0.105 * fW, bh = 0.082 * fH;
+      return Positioned(
+        left: fx(cx) - bw / 2,
+        top: fy(cy) - bh / 2,
+        width: bw,
+        height: bh,
+        child: FittedBox(fit: BoxFit.contain, child: badge),
+      );
+    }
+
+    // Sangrado del marco legendario respecto a la ventana de ilustración.
+    final double legIx = (_kEspImgR - _kEspImgL) * fW * _kSangradoLegendariaX;
+    final double legIy = (_kEspImgB - _kEspImgT) * fH * _kSangradoLegendariaY;
+
+    return SizedBox(
+      width: w,
+      height: h,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Cuerpo oscuro de la carta (el marco no rellena; aporta legibilidad).
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xFF0E1824),
+                    Color(0xFF0A1218),
+                    Color(0xFF060E14),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // Ilustración (con marco legendario encima si la skin es legendaria).
+          ventana(
+            _kEspImgL,
+            _kEspImgT,
+            _kEspImgR,
+            _kEspImgB,
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(child: _ilustracion()),
+                if (esLegendaria)
+                  Positioned(
+                    left: -legIx,
+                    right: -legIx,
+                    top: -legIy,
+                    bottom: -legIy,
+                    child: IgnorePointer(
+                      child: Image.asset(
+                        _marcoLegendaria(carta.ejercito),
+                        fit: BoxFit.fill,
+                        filterQuality: FilterQuality.medium,
+                        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // Texto (descripción + evolución).
+          ventana(_kEspTxtL, _kEspTxtT, _kEspTxtR, _kEspTxtB, _textoPanel()),
+
+          // Título (nombre + chips) en la barra superior del marco.
+          ventana(
+            _kEspTitL,
+            _kEspTitT,
+            _kEspTitR,
+            _kEspTitB,
+            Center(
+              child: FittedBox(fit: BoxFit.scaleDown, child: _tituloWidget()),
+            ),
+          ),
+
+          // Badges en los huecos de esquina.
+          hueco(_kEspSlotTLx, _kEspSlotTLy, _badgeCoste()),
+          hueco(_kEspSlotTRx, _kEspSlotTRy, _badgeFuerza()),
+          hueco(_kEspSlotBLx, _kEspSlotBLy, _badgeMov()),
+          hueco(_kEspSlotBRx, _kEspSlotBRy, _badgeDefensa()),
+
+          // Marco de ejército POR ENCIMA (define bordes; ventanas transparentes).
+          Positioned(
+            left: -pad,
+            top: -pad,
+            width: fW,
+            height: fH,
+            child: IgnorePointer(
+              child: Image.asset(
+                _marcoEspecial(carta.ejercito),
+                fit: BoxFit.fill,
+                filterQuality: FilterQuality.medium,
+                errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Piezas reutilizadas por el layout especial ─────────────────────
+  Widget _ilustracion() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        color: const Color(0xFF060E14), // fondo por si contain deja bandas
+        child: SizedBox.expand(
+          child: carta.imagen.isNotEmpty
+              ? Image.network(
+                  carta.imagen,
+                  fit: _kEspImagenCompleta ? BoxFit.contain : BoxFit.cover,
+                  errorBuilder: (_, __, ___) => _ImagePlaceholder(),
+                )
+              : _ImagePlaceholder(),
+        ),
+      ),
+    );
+  }
+
+  Widget _textoPanel() {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF060E14),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              child: Text(
+                carta.descripcion.isNotEmpty
+                    ? carta.descripcion
+                    : 'Sin descripción.',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFFB0A090),
+                  height: 1.5,
+                  fontFamily: 'Georgia',
+                  decoration: TextDecoration.none,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                'EVOLUCIÓN',
+                style: TextStyle(
+                  fontSize: 8,
+                  color: Color(0xFF7A6A40),
+                  fontFamily: 'Cinzel',
+                  letterSpacing: 1.5,
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFA040C0).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                      color: const Color(0xFFA040C0).withOpacity(0.40),
+                      width: 0.8),
+                ),
+                child: Text(
+                  '${carta.evolucion}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFC060E0),
+                    fontFamily: 'Cinzel',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tituloWidget() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(
+          carta.nombre.toUpperCase(),
+          textAlign: TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            color: Color(0xFFE8C870),
+            fontFamily: 'Cinzel',
+            letterSpacing: 1.2,
+            decoration: TextDecoration.none,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Color(carta.tipoColorValue).withOpacity(0.14),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                    color: Color(carta.tipoColorValue).withOpacity(0.45),
+                    width: 0.8),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(carta.tipoIconData,
+                      size: 11, color: Color(carta.tipoColorValue)),
+                  const SizedBox(width: 4),
+                  Text(
+                    carta.tipoNombre,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Color(carta.tipoColorValue),
+                      fontFamily: 'Cinzel',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (carta.condicion != CondicionCarta.basica) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Color(carta.condicion.colorValue).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                      color:
+                          Color(carta.condicion.colorValue).withOpacity(0.40),
+                      width: 0.8),
+                ),
+                child: Text(
+                  '${carta.condicion.icon} ${carta.condicion.label}',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Color(carta.condicion.colorValue),
+                    fontFamily: 'Cinzel',
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _badgeCoste() => _Badge(
+        value: '${carta.coste}',
+        label: 'COSTE',
+        icon: Icons.monetization_on_outlined,
+        color: const Color(0xFFB08040),
+      );
+  Widget _badgeFuerza() => _Badge(
+        value: '${carta.fuerza}',
+        label: 'FUERZA',
+        icon: Icons.bolt,
+        color: const Color(0xFFC04040),
+      );
+  Widget _badgeMov() => _Badge(
+        value: '${carta.movimiento}',
+        label: 'MOV',
+        icon: Icons.open_with,
+        color: const Color(0xFF4080C0),
+      );
+  Widget _badgeDefensa() => _Badge(
+        value: '${carta.defensa}',
+        label: 'DEFENSA',
+        icon: Icons.shield_outlined,
+        color: const Color(0xFF40B070),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────

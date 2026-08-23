@@ -45,6 +45,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
   late final TextEditingController _costeHabilidadCtrl;
   late final TextEditingController _movimientoCtrl;
   late final TextEditingController _evolucionCosteCtrl;
+  late final TextEditingController _numeroCtrl;
 
   late int _ejercito;
   late int _tipo;
@@ -53,6 +54,9 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
   bool _saving = false;
   bool _loadingEvol = false;
   bool _porDefecto = false;
+
+  /// Peso de aparición en sobres, elegido por rareza (ver `_rarezasProb`).
+  late double _probabilidad;
 
   @override
   void initState() {
@@ -69,6 +73,10 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         TextEditingController(text: '${c?.costeHabilidad ?? 0}');
     _movimientoCtrl = TextEditingController(text: '${c?.movimiento ?? 1}');
     _evolucionCosteCtrl = TextEditingController(text: '${c?.evolucion ?? 0}');
+    _numeroCtrl = TextEditingController(text: '${c?.numero ?? 0}');
+    _probabilidad = c == null
+        ? _rarezasProb.first.peso // nueva carta → Común
+        : _pesoRarezaMasCercana(c.probabilidad);
     _ejercito = c?.ejercito ?? 1;
     _tipo = c?.tipo ?? 1;
     _condicion = c?.condicion ?? CondicionCarta.basica;
@@ -92,6 +100,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
     _costeHabilidadCtrl.dispose();
     _movimientoCtrl.dispose();
     _evolucionCosteCtrl.dispose();
+    _numeroCtrl.dispose();
     super.dispose();
   }
 
@@ -125,6 +134,31 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
     }
   }
 
+  /// Opciones de rareza para la probabilidad de sobre. Cada una es un PESO
+  /// relativo; el servidor lo normaliza sobre la suma de pesos del ejército.
+  ///   Común 100  ·  Rara 20  ·  Épica 5  ·  Legendaria 1
+  static const List<_RarezaProb> _rarezasProb = [
+    _RarezaProb('Común', 100, Color(0xFF9AA5B1)),
+    _RarezaProb('Rara', 20, Color(0xFF3B9EE0)),
+    _RarezaProb('Épica', 5, Color(0xFFB060E0)),
+    _RarezaProb('Legendaria', 1, Color(0xFFE0A020)),
+  ];
+
+  /// Devuelve el peso de la rareza cuyo valor está más cerca de [v] (para
+  /// mapear cartas antiguas con probabilidad numérica libre a una rareza).
+  static double _pesoRarezaMasCercana(double v) {
+    var best = _rarezasProb.first;
+    var bestDist = (v - best.peso).abs();
+    for (final r in _rarezasProb) {
+      final d = (v - r.peso).abs();
+      if (d < bestDist) {
+        bestDist = d;
+        best = r;
+      }
+    }
+    return best.peso;
+  }
+
   Map<String, dynamic> _buildData() => {
         'Nombre': _nombreCtrl.text.trim(),
         'Descripcion': _descripcionCtrl.text.trim(),
@@ -143,6 +177,8 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         'Evolucion': int.tryParse(_evolucionCosteCtrl.text) ?? 0,
         'Condicion': _condicion.value,
         'PorDefecto': _porDefecto,
+        'Numero': int.tryParse(_numeroCtrl.text) ?? 0,
+        'Probabilidad': _probabilidad,
       };
 
   Future<void> _guardar() async {
@@ -507,6 +543,37 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
                       height: 1.5),
                 ),
               ),
+
+            const SizedBox(height: 20),
+
+            // ── COLECCIÓN (número de carta + probabilidad de sobre) ──
+            _SectionLabel('COLECCIÓN'),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(
+                  child: _buildNumberField(
+                      controller: _numeroCtrl,
+                      label: 'Nº de carta',
+                      icon: Icons.tag,
+                      color: const Color(0xFF60A0E0))),
+              const SizedBox(width: 10),
+              Expanded(child: _buildRarezaProb()),
+            ]),
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                'Nº de carta: posición dentro de su ejército para el catálogo. '
+                'Las que un jugador no posea se muestran bloqueadas en ese hueco. '
+                '0 = sin numerar (no cuenta para el % de completado).\n'
+                'Rareza: define cada cuánto sale la carta al abrir sobres '
+                '(Común = muy frecuente … Legendaria = muy rara).',
+                style: TextStyle(
+                    fontSize: 8,
+                    color: Color(0xFF7A8898),
+                    fontFamily: 'Cinzel',
+                    height: 1.5),
+              ),
+            ),
 
             const SizedBox(height: 20),
 
@@ -875,6 +942,7 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
     required String label,
     required IconData icon,
     required Color color,
+    bool allowDecimal = false,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -892,8 +960,12 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         const SizedBox(height: 4),
         TextFormField(
           controller: controller,
-          keyboardType: TextInputType.number,
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          keyboardType: allowDecimal
+              ? const TextInputType.numberWithOptions(decimal: true)
+              : TextInputType.number,
+          inputFormatters: allowDecimal
+              ? [FilteringTextInputFormatter.allow(RegExp(r'[0-9.,]'))]
+              : [FilteringTextInputFormatter.digitsOnly],
           style: TextStyle(
               color: color,
               fontFamily: 'Cinzel',
@@ -914,6 +986,54 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
                 borderRadius: BorderRadius.circular(6),
                 borderSide: BorderSide(color: color, width: 1)),
           ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRarezaProb() {
+    const color = Color(0xFFE0A040);
+    final sel = _rarezasProb.firstWhere((r) => r.peso == _probabilidad,
+        orElse: () => _rarezasProb.first);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          const Icon(Icons.casino_outlined, size: 12, color: color),
+          const SizedBox(width: 5),
+          Text('RAREZA (SOBRES)',
+              style: TextStyle(
+                  fontSize: 8,
+                  fontFamily: 'Cinzel',
+                  letterSpacing: 1,
+                  color: color.withOpacity(0.8))),
+        ]),
+        const SizedBox(height: 4),
+        _buildDropdown<double>(
+          value: sel.peso,
+          items: [
+            for (final r in _rarezasProb)
+              DropdownMenuItem<double>(
+                value: r.peso,
+                child: Row(children: [
+                  Container(
+                    width: 9,
+                    height: 9,
+                    decoration:
+                        BoxDecoration(color: r.color, shape: BoxShape.circle),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(r.nombre,
+                      style: const TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 12,
+                          color: Color(0xFFE0D8C0))),
+                ]),
+              ),
+          ],
+          onChanged: (v) {
+            if (v != null) setState(() => _probabilidad = v);
+          },
         ),
       ],
     );
@@ -944,6 +1064,15 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+/// Opción de rareza para la probabilidad de sobre: nombre + peso relativo.
+class _RarezaProb {
+  final String nombre;
+  final double peso;
+  final Color color;
+  const _RarezaProb(this.nombre, this.peso, this.color);
 }
 
 // ─────────────────────────────────────────────────────────────

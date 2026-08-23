@@ -337,6 +337,116 @@ class WarZeroApi {
     throw Exception('obtenerColeccion HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// Porcentaje de completado por ejército + monedas Zero del jugador, para el
+  /// perfil. Devuelve el mapa con claves `porcentajes` (lista de
+  /// {ejercito, conseguidas, total, porcentaje}) y `zeros` (mapa de las 5
+  /// monedas), o null si no existe.
+  Future<Map<String, dynamic>?> obtenerPorcentajes(String uid) async {
+    final res = await _enviarConReintentos(
+      () => http.get(
+        Uri.parse('$baseUrl/warzero/porcentajes?uid=$uid'),
+        headers: _headers,
+      ),
+      etiqueta: 'porcentajes',
+      intentos: 2,
+      timeout: _getTimeout,
+    );
+    debugPrint('[WZ][api] GET porcentajes status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['existe'] != true) return null;
+      return j;
+    }
+    throw Exception('obtenerPorcentajes HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Reclama la recarga de energía pura (cada 12 h). Devuelve el mapa con
+  /// `concedido` (bool), `cantidad` (si concedido), `zeroPuro` (saldo puro) y
+  /// `proximaMs` (ms hasta la próxima recarga).
+  Future<Map<String, dynamic>> reclamarEnergiaPura(String uid) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/energia/reclamar'),
+        headers: _headers,
+        body: jsonEncode({'uid': uid}),
+      ),
+      etiqueta: 'energia/reclamar',
+      intentos: 1,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST energia/reclamar status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw Exception('reclamarEnergiaPura HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Abre un sobre del ejército indicado. `tipo`: "normal" (10⚡, 4 cartas),
+  /// "especial" (15⚡, 6) o "doble" (18⚡, 8). Devuelve el mapa con `tipo`,
+  /// `coste`, `cantidad`, `energiaRestante`, `moneda`, `cristalesGanados` y
+  /// `cartas` (lista de {cartaId, nombre, imagen, nueva, vecesObtenida,
+  /// skinLegendaria}).
+  Future<Map<String, dynamic>> abrirSobre(String uid, int ejercitoId,
+      {String tipo = 'normal'}) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/sobre/abrir'),
+        headers: _headers,
+        body: jsonEncode({'uid': uid, 'ejercitoId': ejercitoId, 'tipo': tipo}),
+      ),
+      etiqueta: 'sobre/abrir',
+      intentos: 1,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST sobre/abrir status=${res.statusCode}');
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 200 && res.statusCode < 300) return j;
+    throw Exception(j['error']?.toString() ??
+        'abrirSobre HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Compra una skin gastando monedas Zero. Devuelve el mapa con `skinId`,
+  /// `moneda`, `precio` y `saldoRestante`. Lanza excepción con el mensaje del
+  /// servidor si no se cumplen los requisitos (contador, saldo, etc.).
+  Future<Map<String, dynamic>> comprarSkin(String uid, String skinId) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/skin/comprar'),
+        headers: _headers,
+        body: jsonEncode({'uid': uid, 'skinId': skinId}),
+      ),
+      etiqueta: 'skin/comprar',
+      intentos: 1,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST skin/comprar status=${res.statusCode}');
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 200 && res.statusCode < 300) return j;
+    throw Exception(j['error']?.toString() ??
+        'comprarSkin HTTP ${res.statusCode}: ${res.body}');
+  }
+
+  /// Devuelve todas las skins de una carta con su estado de compra. El mapa trae
+  /// `vecesObtenida`, `moneda`, `zeroDisponible` y `skins` (lista de
+  /// {id, nombre, imagen, rareza, numeroCompra, desbloqueada}).
+  Future<Map<String, dynamic>> obtenerSkinsCarta(
+      String uid, String cartaId) async {
+    final res = await _enviarConReintentos(
+      () => http.get(
+        Uri.parse('$baseUrl/warzero/skins-carta?uid=$uid&cartaId=$cartaId'),
+        headers: _headers,
+      ),
+      etiqueta: 'skins-carta',
+      intentos: 2,
+      timeout: _getTimeout,
+    );
+    debugPrint('[WZ][api] GET skins-carta status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw Exception('obtenerSkinsCarta HTTP ${res.statusCode}: ${res.body}');
+  }
+
   /// Skins desbloqueadas del jugador para una carta. Devuelve la lista de skins
   /// (cada una con id/nombre/imagen/rareza), o lista vacía si no hay.
   Future<List<Map<String, dynamic>>> obtenerSkins(

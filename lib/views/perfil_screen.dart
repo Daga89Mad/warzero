@@ -4,7 +4,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:warzero/core/firebaseCrudService.dart';
+import '../models/jugador_model.dart';
+import '../models/lobby_model.dart';
 import '../services/settings_controller.dart';
+import '../services/warzero_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PerfilScreen — Pantalla de perfil del jugador.
@@ -21,6 +24,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
   final _db = FirebaseFirestore.instance;
   final _auth = FirebaseAuth.instance;
   final _svc = FirebaseCrudService();
+  final _api = WarZeroApi();
 
   final _aliasCtrl = TextEditingController();
   final _imagenCtrl = TextEditingController();
@@ -35,6 +39,10 @@ class _PerfilScreenState extends State<PerfilScreen> {
   int _experiencia = 0;
   int _dinero = 0;
   String _fechaRegistro = '';
+
+  // Coleccionismo: % de completado por ejército y saldos de las 5 monedas Zero.
+  Map<int, int> _porcentajes = {};
+  Map<MonedaZero, int> _zeros = {for (final m in MonedaZero.values) m: 0};
 
   String get _uid => _auth.currentUser?.uid ?? '';
 
@@ -66,6 +74,24 @@ class _PerfilScreenState extends State<PerfilScreen> {
             '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
       }
 
+      // Monedas Zero: se leen del propio doc del jugador.
+      final zeros = JugadorDatos.fromMap(_uid, d).zerosPorMoneda;
+
+      // Porcentajes de completado por ejército (best-effort: si falla, 0%).
+      final porcentajes = <int, int>{};
+      try {
+        final pct = await _api.obtenerPorcentajes(_uid);
+        for (final raw in (pct?['porcentajes'] as List? ?? [])) {
+          final m = Map<String, dynamic>.from(raw as Map);
+          final ej = (m['ejercito'] as num?)?.toInt() ?? 0;
+          if (ej != 0) {
+            porcentajes[ej] = (m['porcentaje'] as num?)?.toInt() ?? 0;
+          }
+        }
+      } catch (_) {/* opcional: si falla, se muestran 0% */}
+
+      if (!mounted) return;
+
       setState(() {
         _aliasCtrl.text = d['alias']?.toString() ?? '';
         _imagenCtrl.text = d['imagenPerfil']?.toString() ?? '';
@@ -74,6 +100,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
         _experiencia = (d['experiencia'] as num?)?.toInt() ?? 0;
         _dinero = (d['dinero'] as num?)?.toInt() ?? 0;
         _fechaRegistro = fechaStr;
+        _zeros = zeros;
+        _porcentajes = porcentajes;
         _loading = false;
       });
     } catch (e) {
@@ -252,6 +280,14 @@ class _PerfilScreenState extends State<PerfilScreen> {
                   ),
                   const SizedBox(height: 14),
                   _XpBar(nivel: _nivel, experiencia: _experiencia),
+                  const SizedBox(height: 28),
+                  _SectionLabel('COLECCIÓN POR EJÉRCITO'),
+                  const SizedBox(height: 14),
+                  _ColeccionEjercitos(porcentajes: _porcentajes),
+                  const SizedBox(height: 28),
+                  _SectionLabel('CRISTALES ZERO'),
+                  const SizedBox(height: 14),
+                  _MonedasZero(zeros: _zeros),
                   const SizedBox(height: 28),
                   if (_successMsg != null)
                     _MessageBanner(msg: _successMsg!, isError: false),
@@ -467,6 +503,132 @@ class _ReadOnlyField extends StatelessWidget {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// COLECCIÓN POR EJÉRCITO — 4 barras de % de completado
+// ─────────────────────────────────────────────────────────────
+class _ColeccionEjercitos extends StatelessWidget {
+  final Map<int, int> porcentajes;
+  const _ColeccionEjercitos({required this.porcentajes});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Column(
+      children: [
+        for (final e in kEjercitos) ...[
+          if (e != kEjercitos.first) const SizedBox(height: 10),
+          Builder(builder: (_) {
+            final pct = (porcentajes[e.id] ?? 0).clamp(0, 100);
+            final color = MonedaZeroExt.fromEjercito(e.id).color;
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: war.superficie,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: color.withOpacity(0.35), width: 1),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(e.icono, style: const TextStyle(fontSize: 14)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(e.nombre.toUpperCase(),
+                            style: TextStyle(
+                                fontFamily: 'Cinzel',
+                                fontSize: 11,
+                                letterSpacing: 1,
+                                color: war.texto)),
+                      ),
+                      Text('$pct%',
+                          style: TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: color)),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: pct / 100.0,
+                      minHeight: 5,
+                      backgroundColor: war.borde.withOpacity(0.5),
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MONEDAS ZERO — saldos de las 5 monedas
+// ─────────────────────────────────────────────────────────────
+class _MonedasZero extends StatelessWidget {
+  final Map<MonedaZero, int> zeros;
+  const _MonedasZero({required this.zeros});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        for (final m in MonedaZero.values)
+          Container(
+            width: (MediaQuery.of(context).size.width - 40 - 20) / 3,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+            decoration: BoxDecoration(
+              color: war.superficie,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: m.color.withOpacity(0.5), width: 1),
+            ),
+            child: Column(
+              children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: m.color.withOpacity(0.25),
+                    border: Border.all(color: m.color, width: 1.2),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text('${zeros[m] ?? 0}',
+                    style: TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: m.color)),
+                const SizedBox(height: 3),
+                Text(
+                  m.colorNombre.toUpperCase(),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 7,
+                      letterSpacing: 0.8,
+                      color: war.textoTenue),
+                ),
+              ],
+            ),
+          ),
       ],
     );
   }

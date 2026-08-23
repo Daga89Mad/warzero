@@ -2,6 +2,7 @@
 
 import 'package:flutter/material.dart';
 import '../models/carta_model.dart';
+import '../models/jugador_model.dart';
 import '../services/warzero_api.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -21,7 +22,11 @@ class SkinSelectorResult {
   /// null → diseño original (sin skin)
   final String? skinId;
   final String? imagen;
-  const SkinSelectorResult({this.skinId, this.imagen});
+
+  /// Rareza de la skin aplicada ('comun' | 'rara' | 'epica' | 'legendaria').
+  /// null cuando se vuelve al diseño original.
+  final String? rareza;
+  const SkinSelectorResult({this.skinId, this.imagen, this.rareza});
 }
 
 class CardSkinSelectorScreen extends StatefulWidget {
@@ -54,6 +59,10 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
   List<_SkinItem> _skins = [];
   String? _selectedSkinId;
 
+  // Datos para la compra de skins bloqueadas.
+  int _vecesObtenida = 0;
+  String? _comprandoId;
+
   @override
   void initState() {
     super.initState();
@@ -63,24 +72,22 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
 
   Future<void> _loadSkins() async {
     try {
-      // Si el jugador no tiene ninguna skin desbloqueada, lista vacía directa.
-      if (widget.skinsDesbloqueadas.isEmpty) {
-        if (mounted) setState(() => _loading = false);
-        return;
-      }
+      // El servidor devuelve TODAS las skins de la carta con su estado
+      // (desbloqueada o no) + el contador de veces obtenidas y el saldo Zero,
+      // para poder mostrar el botón de compra en las bloqueadas.
+      final data = await _api.obtenerSkinsCarta(widget.uid, widget.carta.id);
 
-      // El servidor resuelve las skins desbloqueadas de esta carta (lee la
-      // colección y la colección Skins). El cliente ya no toca Firestore.
-      final raw = await _api.obtenerSkins(widget.uid, widget.carta.id);
-
-      final skins = raw
-          .map((d) => _SkinItem(
-                id: d['id']?.toString() ?? '',
-                nombre: d['nombre']?.toString() ?? 'Sin nombre',
-                imagen: d['imagen']?.toString() ?? '',
-                rareza: d['rareza']?.toString() ?? 'comun',
-              ))
-          .toList();
+      final skins = ((data['skins'] as List?) ?? []).map((raw) {
+        final d = Map<String, dynamic>.from(raw as Map);
+        return _SkinItem(
+          id: d['id']?.toString() ?? '',
+          nombre: d['nombre']?.toString() ?? 'Sin nombre',
+          imagen: d['imagen']?.toString() ?? '',
+          rareza: d['rareza']?.toString() ?? 'comun',
+          numeroCompra: (d['numeroCompra'] as num?)?.toInt() ?? 0,
+          desbloqueada: d['desbloqueada'] == true,
+        );
+      }).toList();
 
       skins.sort(
           (a, b) => _rarezaOrder(b.rareza).compareTo(_rarezaOrder(a.rareza)));
@@ -88,6 +95,7 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
       if (mounted) {
         setState(() {
           _skins = skins;
+          _vecesObtenida = (data['vecesObtenida'] as num?)?.toInt() ?? 0;
           _loading = false;
         });
       }
@@ -98,6 +106,38 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
           _loading = false;
         });
       }
+    }
+  }
+
+  Future<void> _comprar(_SkinItem skin) async {
+    if (_comprandoId != null) return;
+    setState(() => _comprandoId = skin.id);
+    try {
+      final res = await _api.comprarSkin(widget.uid, skin.id);
+      final restantes =
+          (res['vecesRestantes'] as num?)?.toInt() ?? _vecesObtenida;
+      if (!mounted) return;
+      setState(() {
+        _vecesObtenida = restantes; // se consumieron las copias
+        _skins = _skins
+            .map((s) => s.id == skin.id ? s.comoDesbloqueada() : s)
+            .toList();
+        _selectedSkinId = skin.id; // auto-selecciona la recién canjeada
+        _comprandoId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('¡Skin desbloqueada!',
+            style: TextStyle(fontFamily: 'Cinzel', fontSize: 10)),
+        backgroundColor: Color(0xFF1A3A0A),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _comprandoId = null);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(e.toString().replaceFirst('Exception: ', ''),
+            style: const TextStyle(fontFamily: 'Cinzel', fontSize: 10)),
+        backgroundColor: const Color(0xFF7A1010),
+      ));
     }
   }
 
@@ -154,16 +194,19 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
       if (!mounted) return;
 
       String? imagenSeleccionada;
+      String? rarezaSeleccionada;
       if (_selectedSkinId != null) {
         try {
           final skin = _skins.firstWhere((s) => s.id == _selectedSkinId);
           imagenSeleccionada = skin.imagen.isNotEmpty ? skin.imagen : null;
+          rarezaSeleccionada = skin.rareza;
         } catch (_) {}
       }
 
       Navigator.of(context).pop(SkinSelectorResult(
         skinId: _selectedSkinId,
         imagen: imagenSeleccionada,
+        rareza: rarezaSeleccionada,
       ));
     } catch (e) {
       if (mounted) {
@@ -264,6 +307,10 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
           )
         : null;
 
+    final desbloqueadas = _skins.where((s) => s.desbloqueada).toList();
+    final enVenta = _skins.where((s) => !s.desbloqueada).toList();
+    final monedaColor = MonedaZeroExt.fromEjercito(widget.carta.ejercito).color;
+
     return Column(
       children: [
         // ── Vista previa ─────────────────────────────────────
@@ -288,34 +335,71 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
 
               const SizedBox(height: 16),
 
-              if (_skins.isEmpty)
+              if (desbloqueadas.isEmpty && enVenta.isEmpty)
                 const _SinSkinsView()
               else ...[
-                const Text('DISEÑOS DESBLOQUEADOS',
-                    style: TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 8,
-                        letterSpacing: 2,
-                        color: Color(0xFF506070))),
-                const SizedBox(height: 10),
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 0.60,
+                if (desbloqueadas.isNotEmpty) ...[
+                  const Text('DISEÑOS DESBLOQUEADOS',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 8,
+                          letterSpacing: 2,
+                          color: Color(0xFF506070))),
+                  const SizedBox(height: 10),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 12,
+                      childAspectRatio: 0.60,
+                    ),
+                    itemCount: desbloqueadas.length,
+                    itemBuilder: (_, i) => _SkinCard(
+                      skin: desbloqueadas[i],
+                      isSelected: _selectedSkinId == desbloqueadas[i].id,
+                      rarezaColor: _rarezaColor(desbloqueadas[i].rareza),
+                      rarezaLabel: _rarezaLabel(desbloqueadas[i].rareza),
+                      onTap: () =>
+                          setState(() => _selectedSkinId = desbloqueadas[i].id),
+                    ),
                   ),
-                  itemCount: _skins.length,
-                  itemBuilder: (_, i) => _SkinCard(
-                    skin: _skins[i],
-                    isSelected: _selectedSkinId == _skins[i].id,
-                    rarezaColor: _rarezaColor(_skins[i].rareza),
-                    rarezaLabel: _rarezaLabel(_skins[i].rareza),
-                    onTap: () => setState(() => _selectedSkinId = _skins[i].id),
-                  ),
-                ),
+                ],
+                if (enVenta.isNotEmpty) ...[
+                  const SizedBox(height: 20),
+                  Row(children: [
+                    const Text('CANJEAR POR COPIAS',
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 8,
+                            letterSpacing: 2,
+                            color: Color(0xFF506070))),
+                    const Spacer(),
+                    Text('$_vecesObtenida copias',
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 8,
+                            color: monedaColor)),
+                  ]),
+                  const SizedBox(height: 10),
+                  for (final skin in enVenta)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _SkinCompraCard(
+                        skin: skin,
+                        rarezaColor: _rarezaColor(skin.rareza),
+                        rarezaLabel: _rarezaLabel(skin.rareza),
+                        acento: monedaColor,
+                        vecesObtenida: _vecesObtenida,
+                        comprando: _comprandoId == skin.id,
+                        bloqueadoPorOtraCompra:
+                            _comprandoId != null && _comprandoId != skin.id,
+                        onComprar: () => _comprar(skin),
+                      ),
+                    ),
+                ],
               ],
             ],
           ),
@@ -640,9 +724,182 @@ class _SkinItem {
   final String nombre;
   final String imagen;
   final String rareza;
-  const _SkinItem(
-      {required this.id,
-      required this.nombre,
-      required this.imagen,
-      required this.rareza});
+
+  /// Veces que debe tocarte la carta para poder comprarla (0 = no comprable).
+  final int numeroCompra;
+
+  /// True si el jugador ya la tiene desbloqueada.
+  final bool desbloqueada;
+
+  const _SkinItem({
+    required this.id,
+    required this.nombre,
+    required this.imagen,
+    required this.rareza,
+    this.numeroCompra = 0,
+    this.desbloqueada = true,
+  });
+
+  bool get esLegendaria => rareza == 'legendaria';
+
+  _SkinItem comoDesbloqueada() => _SkinItem(
+        id: id,
+        nombre: nombre,
+        imagen: imagen,
+        rareza: rareza,
+        numeroCompra: numeroCompra,
+        desbloqueada: true,
+      );
+}
+
+// ─────────────────────────────────────────────────────────────
+// SKIN BLOQUEADA — canje por copias de la carta
+// ─────────────────────────────────────────────────────────────
+class _SkinCompraCard extends StatelessWidget {
+  final _SkinItem skin;
+  final Color rarezaColor;
+  final String rarezaLabel;
+  final Color acento;
+  final int vecesObtenida;
+  final bool comprando;
+  final bool bloqueadoPorOtraCompra;
+  final VoidCallback onComprar;
+
+  const _SkinCompraCard({
+    required this.skin,
+    required this.rarezaColor,
+    required this.rarezaLabel,
+    required this.acento,
+    required this.vecesObtenida,
+    required this.comprando,
+    required this.bloqueadoPorOtraCompra,
+    required this.onComprar,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cumple = skin.numeroCompra > 0 && vecesObtenida >= skin.numeroCompra;
+    final faltan = (skin.numeroCompra - vecesObtenida).clamp(0, 9999);
+    final puedeCanjear = !skin.esLegendaria &&
+        skin.numeroCompra > 0 &&
+        cumple &&
+        !comprando &&
+        !bloqueadoPorOtraCompra;
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A1525),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: rarezaColor.withOpacity(0.3), width: 1),
+      ),
+      child: Row(
+        children: [
+          // Miniatura bloqueada (imagen atenuada + candado).
+          SizedBox(
+            width: 46,
+            height: 62,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: ColorFiltered(
+                    colorFilter: const ColorFilter.mode(
+                        Colors.black54, BlendMode.darken),
+                    child: skin.imagen.isNotEmpty
+                        ? Image.network(skin.imagen,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                const _PlaceholderSmall())
+                        : const _PlaceholderSmall(),
+                  ),
+                ),
+                const Center(
+                    child: Icon(Icons.lock, size: 18, color: Colors.white70)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(rarezaLabel,
+                    style: TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 6,
+                        color: rarezaColor,
+                        letterSpacing: 0.3)),
+                const SizedBox(height: 2),
+                Text(skin.nombre.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 9,
+                        color: Color(0xFFC8A860),
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                if (skin.esLegendaria)
+                  const Text('Solo se consigue en sobres',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 7,
+                          color: Color(0xFFFF9500)))
+                else
+                  Text(
+                    'Copias: $vecesObtenida/${skin.numeroCompra}'
+                    '${cumple ? "  \u00b7  \u00a1listo!" : "  \u00b7  faltan $faltan"}',
+                    style: TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 7,
+                        color: cumple
+                            ? const Color(0xFF4ABB58)
+                            : const Color(0xFF607080)),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (!skin.esLegendaria)
+            GestureDetector(
+              onTap: puedeCanjear ? onComprar : null,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: puedeCanjear
+                      ? acento.withOpacity(0.18)
+                      : const Color(0xFF10202E),
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(
+                      color: puedeCanjear
+                          ? acento.withOpacity(0.7)
+                          : const Color(0xFF203040),
+                      width: 1),
+                ),
+                child: comprando
+                    ? SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.5, color: acento))
+                    : Text(
+                        cumple ? 'CANJEAR' : 'FALTAN $faltan',
+                        style: TextStyle(
+                            fontFamily: 'Cinzel',
+                            fontSize: 8,
+                            letterSpacing: 0.8,
+                            fontWeight: FontWeight.bold,
+                            color: puedeCanjear
+                                ? acento
+                                : const Color(0xFF506070)),
+                      ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

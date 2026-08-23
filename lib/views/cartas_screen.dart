@@ -8,6 +8,7 @@ import '../services/warzero_api.dart';
 import '../services/settings_controller.dart';
 import '../widgets/card_detail_overlay.dart';
 import 'card_skin_selector_screen.dart';
+import 'centro_mando_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CartasScreen — Colección personal del jugador organizada por ejército.
@@ -21,7 +22,7 @@ class CartasScreen extends StatefulWidget {
 }
 
 class _CartasScreenState extends State<CartasScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _api = WarZeroApi();
   final _uid = FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -32,8 +33,26 @@ class _CartasScreenState extends State<CartasScreen>
   Map<String, _ColeccionEntry> _coleccion = {};
   Map<int, List<CartaModel>> _cartasPorEjercito = {};
   final Map<String, String> _skinImageCache = {};
+  final Map<String, String> _skinRarezaCache = {};
+
+  // Coleccionismo:
+  //   _porcentajes        → ejercitoId → {conseguidas, total, porcentaje}
+  //   _numeradoPorEjercito → ejercitoId → slots numerados (poseídos o no)
+  Map<int, _EjercitoPct> _porcentajes = {};
+  Map<int, List<_SlotNumerado>> _numeradoPorEjercito = {};
 
   late TabController _tabController;
+  bool _hasTabController = false;
+
+  /// Crea (o recrea) el TabController liberando el anterior si existía. Evita el
+  /// error de "multiple tickers" al recargar la colección (p. ej. al volver de
+  /// la pantalla de sobres).
+  void _setTabController(int length) {
+    if (_hasTabController) _tabController.dispose();
+    _tabController = TabController(length: length, vsync: this);
+    _hasTabController = true;
+  }
+
   List<EjercitoInfo> _ejercitosConCartas = [];
 
   _JugadorStats? _jugadorStats;
@@ -50,7 +69,7 @@ class _CartasScreenState extends State<CartasScreen>
 
       if (res == null) {
         if (!mounted) return;
-        _tabController = TabController(length: 1, vsync: this);
+        _setTabController(1);
         setState(() {
           _catalogoGlobal = {};
           _coleccion = {};
@@ -65,6 +84,7 @@ class _CartasScreenState extends State<CartasScreen>
       final catalogo = <String, CartaModel>{};
       final coleccion = <String, _ColeccionEntry>{};
       final skinCache = <String, String>{};
+      final rarezaCache = <String, String>{};
 
       for (final raw in (res['cartas'] as List? ?? [])) {
         final m = Map<String, dynamic>.from(raw as Map);
@@ -77,6 +97,7 @@ class _CartasScreenState extends State<CartasScreen>
           skinSeleccionada: m['skinSeleccionada'] as String?,
           skinsDesbloqueadas:
               List<String>.from(m['skinsDesbloqueadas'] as List? ?? []),
+          skinsExtraIds: List<String>.from(m['skinsExtraIds'] as List? ?? []),
           fechaObtenida: m['fechaObtenida'] is num
               ? DateTime.fromMillisecondsSinceEpoch(
                   (m['fechaObtenida'] as num).toInt())
@@ -85,6 +106,9 @@ class _CartasScreenState extends State<CartasScreen>
         final skinImg = m['skinImagen'] as String?;
         if (skinImg != null && skinImg.isNotEmpty)
           skinCache[carta.id] = skinImg;
+        final skinRar = m['skinRareza'] as String?;
+        if (skinRar != null && skinRar.isNotEmpty)
+          rarezaCache[carta.id] = skinRar;
       }
 
       for (final raw in (res['evoluciones'] as List? ?? [])) {
@@ -117,25 +141,63 @@ class _CartasScreenState extends State<CartasScreen>
         list.sort((a, b) => a.nombre.compareTo(b.nombre));
       });
 
+      // Porcentajes de completado por ejército.
+      final porcentajes = <int, _EjercitoPct>{};
+      for (final raw in (res['porcentajes'] as List? ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final ej = (m['ejercito'] as num?)?.toInt() ?? 0;
+        if (ej == 0) continue;
+        porcentajes[ej] = _EjercitoPct(
+          conseguidas: (m['conseguidas'] as num?)?.toInt() ?? 0,
+          total: (m['total'] as num?)?.toInt() ?? 0,
+          porcentaje: (m['porcentaje'] as num?)?.toInt() ?? 0,
+        );
+      }
+
+      // Catálogo NUMERADO por ejército (para pintar huecos bloqueados).
+      final numerado = <int, List<_SlotNumerado>>{};
+      for (final raw in (res['catalogoNumerado'] as List? ?? [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final ej = (m['ejercito'] as num?)?.toInt() ?? 0;
+        if (ej == 0) continue;
+        numerado.putIfAbsent(ej, () => []).add(_SlotNumerado(
+              cartaId: m['cartaId']?.toString() ?? '',
+              numero: (m['numero'] as num?)?.toInt() ?? 0,
+              poseida: m['poseida'] == true,
+            ));
+      }
+      numerado.forEach((_, list) {
+        list.sort((a, b) => a.numero.compareTo(b.numero));
+      });
+
+      // Tabs = ejércitos con cartas poseídas O con catálogo numerado (para que
+      // se muestren las bloqueadas aunque aún no tengas ninguna de ese ejército).
+      final idsConContenido = <int>{
+        ...agrupadas.keys,
+        ...numerado.keys,
+      };
       final ejercitosConCartas =
-          kEjercitos.where((e) => agrupadas.containsKey(e.id)).toList();
+          kEjercitos.where((e) => idsConContenido.contains(e.id)).toList();
 
       if (!mounted) return;
 
-      _tabController = TabController(
-        length: ejercitosConCartas.isEmpty ? 1 : ejercitosConCartas.length,
-        vsync: this,
-      );
+      _setTabController(
+          ejercitosConCartas.isEmpty ? 1 : ejercitosConCartas.length);
 
       setState(() {
         _catalogoGlobal = catalogo;
         _coleccion = coleccion;
         _cartasPorEjercito = agrupadas;
         _ejercitosConCartas = ejercitosConCartas;
+        _porcentajes = porcentajes;
+        _numeradoPorEjercito = numerado;
         _jugadorStats = stats;
         _skinImageCache
           ..clear()
           ..addAll(skinCache);
+        _skinRarezaCache
+          ..clear()
+          ..addAll(rarezaCache);
         _loading = false;
       });
     } catch (e) {
@@ -150,6 +212,10 @@ class _CartasScreenState extends State<CartasScreen>
 
   String _imagenEfectiva(CartaModel carta) =>
       _skinImageCache[carta.id] ?? carta.imagen;
+
+  /// True si la skin actualmente aplicada a la carta es de rareza legendaria.
+  bool _esLegendaria(CartaModel carta) =>
+      (_skinRarezaCache[carta.id] ?? '') == 'legendaria';
 
   Future<CartaModel?> _resolveEvolucion(String idEvolucion) async =>
       _catalogoGlobal[idEvolucion];
@@ -175,6 +241,7 @@ class _CartasScreenState extends State<CartasScreen>
       energiasDisponibles: null,
       onEvolucionar: null,
       onCambiarDiseno: () => _abrirSelectorSkin(carta),
+      esLegendaria: _esLegendaria(carta),
     );
   }
 
@@ -198,20 +265,87 @@ class _CartasScreenState extends State<CartasScreen>
         cantidad: prev.cantidad,
         skinSeleccionada: result.skinId,
         skinsDesbloqueadas: prev.skinsDesbloqueadas,
+        skinsExtraIds: prev.skinsExtraIds,
         fechaObtenida: prev.fechaObtenida,
       );
       if (result.skinId == null) {
         _skinImageCache.remove(carta.id);
-      } else if (result.imagen != null) {
-        _skinImageCache[carta.id] = result.imagen!;
+        _skinRarezaCache.remove(carta.id);
+      } else {
+        if (result.imagen != null) {
+          _skinImageCache[carta.id] = result.imagen!;
+        }
+        if (result.rareza != null && result.rareza!.isNotEmpty) {
+          _skinRarezaCache[carta.id] = result.rareza!;
+        } else {
+          _skinRarezaCache.remove(carta.id);
+        }
       }
     });
   }
 
   @override
   void dispose() {
-    if (!_loading && _ejercitosConCartas.isNotEmpty) _tabController.dispose();
+    if (_hasTabController) _tabController.dispose();
     super.dispose();
+  }
+
+  /// Evolución conocida de una carta (su definición vino en el catálogo porque
+  /// la carta base es poseída), o null si no tiene o no está disponible.
+  CartaModel? _evolucionDe(CartaModel c) {
+    if (c.idEvolucion.isEmpty) return null;
+    return _catalogoGlobal[c.idEvolucion];
+  }
+
+  /// Construye la lista ordenada de celdas para un ejército: cada carta
+  /// numerada aparece en su posición (poseída → carta real; no poseída →
+  /// bloqueada), y al final las poseídas sin numerar. Las evoluciones se
+  /// muestran como celda propia tras su carta base, SIN duplicar: si la
+  /// evolución ya aparece con su propio número, o si dos básicas evolucionan
+  /// a la misma, solo se pinta una vez.
+  List<_GridItem> _itemsDeEjercito(int ejercitoId) {
+    final items = <_GridItem>[];
+    final usados = <String>{};
+
+    // Cartas que YA tienen su propia celda (con su número): huecos numerados
+    // (poseídos o bloqueados) + poseídas sin numerar. Una evolución que sea una
+    // de estas NO se repite como preview.
+    final propios = <String>{
+      for (final slot in (_numeradoPorEjercito[ejercitoId] ?? const []))
+        slot.cartaId,
+      for (final carta in (_cartasPorEjercito[ejercitoId] ?? const []))
+        if (carta.numero == 0) carta.id,
+    };
+
+    final evosPuestas = <String>{};
+    void agregarEvolucion(CartaModel base) {
+      final evo = _evolucionDe(base);
+      if (evo == null) return;
+      if (propios.contains(evo.id)) return; // ya aparece con su número
+      if (!evosPuestas.add(evo.id)) return; // ya la puso otra básica
+      items.add(_GridItem.evolucion(evo));
+    }
+
+    for (final slot in (_numeradoPorEjercito[ejercitoId] ?? const [])) {
+      final carta = _catalogoGlobal[slot.cartaId];
+      final poseida =
+          slot.poseida && carta != null && _coleccion.containsKey(slot.cartaId);
+      if (poseida) {
+        items.add(_GridItem.owned(carta!, slot.numero));
+        usados.add(slot.cartaId);
+        agregarEvolucion(carta);
+      } else {
+        items.add(_GridItem.locked(slot.numero));
+      }
+    }
+
+    // Poseídas sin número (no vienen en el catálogo numerado).
+    for (final carta in (_cartasPorEjercito[ejercitoId] ?? const [])) {
+      if (usados.contains(carta.id) || carta.numero > 0) continue;
+      items.add(_GridItem.owned(carta, 0));
+      agregarEvolucion(carta);
+    }
+    return items;
   }
 
   @override
@@ -244,9 +378,8 @@ class _CartasScreenState extends State<CartasScreen>
               child: TabBarView(
                 controller: _tabController,
                 children: _ejercitosConCartas.map((e) {
-                  final cartas = _cartasPorEjercito[e.id] ?? [];
                   return _CartasGrid(
-                    cartas: cartas,
+                    items: _itemsDeEjercito(e.id),
                     coleccion: _coleccion,
                     imagenEfectiva: _imagenEfectiva,
                     onCardTap: _abrirDetalle,
@@ -283,6 +416,21 @@ class _CartasScreenState extends State<CartasScreen>
                   fontFamily: 'Cinzel', fontSize: 8, color: war.textoTenue)),
         ],
       ),
+      actions: [
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: IconButton(
+            tooltip: 'Sobres',
+            icon: Icon(Icons.card_giftcard, size: 20, color: war.primario),
+            onPressed: () async {
+              await Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const CentroMandoScreen(),
+              ));
+              if (mounted) _loadData(); // refresca colección/monedas al volver
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -310,15 +458,18 @@ class _CartasScreenState extends State<CartasScreen>
                       padding: const EdgeInsets.symmetric(
                           horizontal: 5, vertical: 1),
                       decoration: BoxDecoration(
-                        color: war.borde.withOpacity(0.4),
+                        color: war.primario.withOpacity(0.18),
                         borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                            color: war.primario.withOpacity(0.4), width: 0.6),
                       ),
                       child: Text(
-                        '${_cartasPorEjercito[e.id]?.length ?? 0}',
+                        '${_porcentajes[e.id]?.porcentaje ?? 0}%',
                         style: TextStyle(
                             fontFamily: 'Cinzel',
                             fontSize: 7,
-                            color: war.textoTenue),
+                            fontWeight: FontWeight.bold,
+                            color: war.primario),
                       ),
                     ),
                   ],
@@ -441,46 +592,157 @@ class _JugadorStatsBar extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // GRID 3 COLUMNAS
 // ─────────────────────────────────────────────────────────────
-class _CartasGrid extends StatefulWidget {
-  final List<CartaModel> cartas;
+class _CartasGrid extends StatelessWidget {
+  final List<_GridItem> items;
   final Map<String, _ColeccionEntry> coleccion;
   final String Function(CartaModel) imagenEfectiva;
   final void Function(CartaModel) onCardTap;
 
   const _CartasGrid({
-    required this.cartas,
+    required this.items,
     required this.coleccion,
     required this.imagenEfectiva,
     required this.onCardTap,
   });
 
-  @override
-  State<_CartasGrid> createState() => _CartasGridState();
-}
+  List<bool> _flagsDe(CartaModel carta) {
+    final entry = coleccion[carta.id];
+    final extraIds = entry?.skinsExtraIds ?? const <String>[];
+    final unlocked = (entry?.skinsDesbloqueadas ?? const <String>[]).toSet();
+    // nº 1 = diseño por defecto (poseído al tener la carta); 2..X = extra.
+    return <bool>[true, for (final id in extraIds) unlocked.contains(id)];
+  }
 
-class _CartasGridState extends State<_CartasGrid> {
   @override
   Widget build(BuildContext context) {
+    if (items.isEmpty) return const _ColeccionVaciaView();
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         mainAxisSpacing: 12,
         crossAxisSpacing: 12,
-        childAspectRatio: 0.62,
+        childAspectRatio: 0.54,
       ),
-      itemCount: widget.cartas.length,
+      itemCount: items.length,
       itemBuilder: (_, i) {
-        final carta = widget.cartas[i];
-        final entry = widget.coleccion[carta.id];
-        return _MiniCarta(
-          carta: carta,
-          imagen: widget.imagenEfectiva(carta),
-          cantidad: entry?.cantidad ?? 1,
-          tieneSkin: entry?.skinSeleccionada != null,
-          onTap: () => widget.onCardTap(carta),
+        final item = items[i];
+        if (item.bloqueada) return _LockedCarta(numero: item.numero);
+
+        final carta = item.carta!;
+        final entry = coleccion[carta.id];
+        // Las evoluciones de preview se muestran sin tira de skins.
+        final flags = item.esEvolucion ? null : _flagsDe(carta);
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: _MiniCarta(
+                carta: carta,
+                imagen: imagenEfectiva(carta),
+                cantidad: entry?.cantidad ?? 1,
+                tieneSkin: entry?.skinSeleccionada != null,
+                onTap: () => onCardTap(carta),
+              ),
+            ),
+            const SizedBox(height: 4),
+            flags != null
+                ? _SkinNumeros(flags: flags)
+                : const SizedBox(height: 13),
+          ],
         );
       },
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// TIRA DE NÚMEROS DE SKIN (debajo de cada carta)
+//   nº 1 = diseño por defecto; 2..X = skins extra. Resaltado = desbloqueada.
+// ─────────────────────────────────────────────────────────────
+class _SkinNumeros extends StatelessWidget {
+  final List<bool> flags;
+  const _SkinNumeros({required this.flags});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    const skinPurple = Color(0xFFA040FF);
+    if (flags.isEmpty) return const SizedBox(height: 14);
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 3,
+      runSpacing: 3,
+      children: [
+        for (var i = 0; i < flags.length; i++)
+          Container(
+            width: 13,
+            height: 13,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: flags[i] ? skinPurple.withOpacity(0.9) : war.superficie,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: flags[i] ? skinPurple : war.borde.withOpacity(0.6),
+                width: 0.8,
+              ),
+            ),
+            child: Text(
+              '${i + 1}',
+              style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 6.5,
+                fontWeight: FontWeight.bold,
+                color: flags[i] ? Colors.white : war.textoTenue,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CARTA BLOQUEADA (no poseída): sin imagen ni información
+// ─────────────────────────────────────────────────────────────
+class _LockedCarta extends StatelessWidget {
+  final int numero;
+  const _LockedCarta({required this.numero});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: war.fondo,
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: war.borde.withOpacity(0.4)),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.lock_outline, size: 26, color: war.borde),
+          const SizedBox(height: 8),
+          Text(
+            'Nº $numero',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 9,
+                letterSpacing: 1,
+                color: war.textoTenue),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'BLOQUEADA',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 6,
+                letterSpacing: 1.5,
+                color: war.textoTenue.withOpacity(0.6)),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -704,6 +966,10 @@ class _ColeccionEntry {
   final int cantidad;
   final String? skinSeleccionada;
   final List<String> skinsDesbloqueadas;
+
+  /// Ids (en orden) de las skins EXTRA existentes para esta carta. Sirve para
+  /// pintar los números 1..X bajo la carta y saber cuáles están desbloqueadas.
+  final List<String> skinsExtraIds;
   final DateTime? fechaObtenida;
 
   const _ColeccionEntry({
@@ -711,8 +977,50 @@ class _ColeccionEntry {
     this.cantidad = 1,
     this.skinSeleccionada,
     this.skinsDesbloqueadas = const [],
+    this.skinsExtraIds = const [],
     this.fechaObtenida,
   });
+}
+
+/// Un slot del catálogo numerado de un ejército (poseído o bloqueado).
+class _SlotNumerado {
+  final String cartaId;
+  final int numero;
+  final bool poseida;
+  const _SlotNumerado({
+    required this.cartaId,
+    required this.numero,
+    required this.poseida,
+  });
+}
+
+/// Porcentaje de completado de un ejército.
+class _EjercitoPct {
+  final int conseguidas;
+  final int total;
+  final int porcentaje;
+  const _EjercitoPct({
+    required this.conseguidas,
+    required this.total,
+    required this.porcentaje,
+  });
+}
+
+/// Celda de la rejilla: carta poseída, hueco bloqueado o evolución (preview).
+class _GridItem {
+  final CartaModel? carta; // null → bloqueada
+  final int numero;
+
+  /// True si es la evolución de otra carta (se muestra como celda propia, sin
+  /// tira de skins).
+  final bool esEvolucion;
+
+  const _GridItem._(this.carta, this.numero, this.esEvolucion);
+  factory _GridItem.owned(CartaModel c, int numero) =>
+      _GridItem._(c, numero, false);
+  factory _GridItem.locked(int numero) => _GridItem._(null, numero, false);
+  factory _GridItem.evolucion(CartaModel c) => _GridItem._(c, 0, true);
+  bool get bloqueada => carta == null;
 }
 
 class _JugadorStats {
