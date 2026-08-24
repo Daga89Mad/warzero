@@ -2014,15 +2014,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return result;
   }
 
-  int _tipoEfectivo(List<int> validIndices, CeldaState celda) {
-    final tipos = validIndices.map((i) => celda.cartas[i].carta.tipo).toSet();
-    if (tipos.length == 1) return tipos.first;
-    if (tipos.contains(1) && tipos.contains(3)) return -1;
-    if (tipos.contains(1)) return 1;
-    if (tipos.contains(3)) return 3;
-    return 2;
-  }
-
   // ─────────────────────────────────────────────────────────
   // LÓGICA DE INTERACCIÓN
   // ─────────────────────────────────────────────────────────
@@ -2804,6 +2795,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Entra en modo movimiento con las cartas [validIndices] de [celda]: calcula
   /// el alcance (BFS) y resalta las celdas destino válidas. Extraído de
   /// [_onMoveSelected] para poder reutilizarlo tras confirmar un aviso.
+  /// Entra en modo movimiento con las cartas [validIndices] de [celda]: calcula
+  /// el alcance (BFS) y resalta las celdas destino válidas. Extraído de
+  /// [_onMoveSelected] para poder reutilizarlo tras confirmar un aviso.
   void _entrarModoMovimiento(CeldaState celda, List<int> validIndices) {
     if (validIndices.isEmpty || _sidebarCoord == null) return;
 
@@ -2819,16 +2813,41 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final minMov = validIndices
         .map((i) => celda.cartas[i].movimientoEfectivo)
         .reduce((a, b) => a < b ? a : b);
-    final tipo = _tipoEfectivo(validIndices, celda);
-    if (tipo == -1) {
+
+    // Tipos distintos presentes en la selección (1=tierra, 2=aire, 3=mar).
+    final tipos = validIndices.map((i) => celda.cartas[i].carta.tipo).toSet();
+
+    // Regla de diseño: terrestres y marinas nunca se mueven juntas.
+    if (tipos.contains(1) && tipos.contains(3)) {
       _toast('No puedes mover unidades terrestres y marinas juntas',
           error: true);
       return;
     }
+
+    // Destinos válidos = INTERSECCIÓN del alcance de cada tipo seleccionado.
+    // Como todas las cartas del grupo acaban en la MISMA celda, el destino solo
+    // es válido si TODAS pueden atravesar el camino y aterrizar allí. Así, al
+    // mezclar mar (tipo 3) + aire (tipo 2) solo se permiten casillas anfibias:
+    // una unidad de aire no puede quedarse en agua aunque viaje junto a una
+    // marina (antes se colaba porque el grupo tomaba el tipo de la marina).
+    Set<String>? destinos;
+    for (final t in tipos) {
+      final alcance = _computeMovableBFS(_sidebarCoord!, minMov, t);
+      destinos = destinos == null ? alcance : destinos.intersection(alcance);
+    }
+    destinos ??= <String>{};
+
+    if (destinos.isEmpty && tipos.length > 1) {
+      _toast(
+          '🌊 Esas cartas no comparten ninguna casilla de destino compatible',
+          error: true);
+      return;
+    }
+
     setState(() {
       _moveFromCoord = _sidebarCoord;
       _moveCardIndices = validIndices;
-      _movableCoords = _computeMovableBFS(_sidebarCoord!, minMov, tipo);
+      _movableCoords = destinos!;
       _sidebarOpen = false;
     });
   }
