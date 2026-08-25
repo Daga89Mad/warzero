@@ -25,12 +25,14 @@ import '../services/settings_controller.dart';
 import '../models/game_config.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
+import '../models/lobby_model.dart';
 import '../widgets/board_widget.dart';
+import '../widgets/cell_sidebar.dart';
 import '../models/jugador_model.dart';
 import '../widgets/player_hud.dart';
 import '../widgets/hand_widget.dart';
-import '../widgets/carta_rota_animation.dart';
 import '../widgets/card_detail_overlay.dart';
+import 'informe_batalla_screen.dart';
 
 // ─────────────────────────────────────────────────────────────
 // COLORES DE JUGADOR (fijos).
@@ -144,6 +146,25 @@ class _Placed {
   const _Placed(this.card, this.owner);
 }
 
+/// Combate pendiente de resolver: tu carta ha entrado en la celda [coord] que
+/// ocupa la carta enemiga. Ambas conviven en la celda (mostrando el poder neto)
+/// hasta que se cierra el turno; entonces la enemiga se destruye y tú conquistas
+/// la celda ganando [premio] Ø.
+class _CombatePendiente {
+  final String coord; // celda enemiga donde entra tu carta
+  final String origen; // de dónde vino tu carta
+  final _TCard aliada; // tu carta
+  final _TCard enemiga; // carta enemiga
+  final int premio; // Ø que ganas al resolver
+  const _CombatePendiente({
+    required this.coord,
+    required this.origen,
+    required this.aliada,
+    required this.enemiga,
+    required this.premio,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // PASOS DEL TUTORIAL
 // ─────────────────────────────────────────────────────────────
@@ -156,6 +177,7 @@ enum _Step {
   mover,
   evolucion,
   batalla,
+  informe,
   estatica,
   teletransporte,
   misil,
@@ -171,6 +193,7 @@ const List<_Step> _orden = [
   _Step.mover,
   _Step.evolucion,
   _Step.batalla,
+  _Step.informe,
   _Step.estatica,
   _Step.teletransporte,
   _Step.misil,
@@ -333,6 +356,21 @@ class _TutorialScreenState extends State<TutorialScreen>
   String? _selBoard;
   Set<String> _targets = {};
 
+  // ── Menú lateral (igual que en la partida real) ──────────────
+  // En el paso "mover" tocar tu unidad abre el CellSidebar; desde ahí se
+  // selecciona la carta y se pulsa MOVER para resaltar las celdas alcanzables.
+  bool _sidebarOpen = false;
+  String? _sidebarCoord;
+
+  // ── Cierre de turno + informe de fin de turno ────────────────
+  // Tras mover tu carta sobre la enemiga (paso "batalla") ambas quedan en la
+  // MISMA celda y esta muestra el poder neto (⚡ = fuerza − defensa del rival),
+  // igual que en el juego. La carta enemiga NO desaparece hasta que pulses FIN
+  // TURNO: en ese momento se resuelve el combate y se abre el informe.
+  bool _batallaResuelta = false;
+  Map<String, dynamic>? _combateInforme;
+  _CombatePendiente? _combatePendiente;
+
   late final AnimationController _pulse;
 
   _Step get _step => _orden[_paso];
@@ -365,6 +403,14 @@ class _TutorialScreenState extends State<TutorialScreen>
     _selHand = null;
     _selBoard = null;
     _targets = {};
+    _sidebarOpen = false;
+    _sidebarCoord = null;
+    if (_step != _Step.batalla && _step != _Step.informe) {
+      // El resultado del combate y el flag de "batalla resuelta" solo viven
+      // durante los pasos de batalla e informe.
+      _batallaResuelta = false;
+      _combatePendiente = null;
+    }
     if (_step == _Step.batalla) {
       _spawnDron();
     } else if (_step == _Step.misil) {
@@ -566,11 +612,48 @@ class _TutorialScreenState extends State<TutorialScreen>
     setState(() {
       _selHand = c;
       _selBoard = null;
+      _sidebarOpen = false;
+      _sidebarCoord = null;
       _recalcTargets();
     });
   }
 
-  void _onCellTap(String coord) {
+  // ── Menú lateral (CellSidebar real) ─────────────────────────
+  /// Abre el menú lateral sobre [coord] mostrando la ficha de la unidad, tal y
+  /// como ocurre en la partida real al tocar una celda propia.
+  void _abrirSidebar(String coord) {
+    setState(() {
+      _sidebarCoord = coord;
+      _sidebarOpen = true;
+      _selBoard = null;
+      _targets = {};
+    });
+  }
+
+  void _cerrarSidebar() {
+    if (!_sidebarOpen) return;
+    setState(() {
+      _sidebarOpen = false;
+      _sidebarCoord = null;
+    });
+  }
+
+  /// Callback del botón MOVER del menú lateral: con la carta seleccionada,
+  /// calcula el alcance (BFS) y resalta las celdas destino válidas, cerrando el
+  /// menú. Reproduce el flujo real "selecciona la carta → marca MOVER".
+  void _onSidebarMove(List<int> indices) {
+    final coord = _sidebarCoord;
+    if (coord == null || indices.isEmpty) return;
+    final placed = _board[coord];
+    if (placed == null || placed.card.movimiento <= 0) return;
+    setState(() {
+      _selBoard = coord;
+      _targets = _alcanzablesMov(coord, placed.card.movimiento);
+      _sidebarOpen = false;
+    });
+  }
+
+  void _onCellTap(String coord, int ri, int ci) {
     final placed = _board[coord];
     switch (_step) {
       case _Step.sacarCuartel:
@@ -584,11 +667,13 @@ class _TutorialScreenState extends State<TutorialScreen>
         }
         break;
       case _Step.mover:
-        if (placed?.owner == 'yo' && placed!.card.movimiento > 0) {
-          setState(() {
-            _selBoard = coord;
-            _recalcTargets();
-          });
+        // Igual que en la partida real: tocar tu unidad abre el MENÚ LATERAL
+        // con su ficha. Allí seleccionas la carta y pulsas MOVER; solo entonces
+        // se iluminan las celdas alcanzables. Después tocas la celda destino.
+        if (_selBoard == null &&
+            placed?.owner == 'yo' &&
+            placed!.card.movimiento > 0) {
+          _abrirSidebar(coord);
         } else if (_selBoard != null && _targets.contains(coord)) {
           _moverSoldado(coord);
         }
@@ -600,6 +685,9 @@ class _TutorialScreenState extends State<TutorialScreen>
         }
         break;
       case _Step.batalla:
+        // Con el combate ya pendiente (esperando cierre de turno) el tablero
+        // queda bloqueado: solo falta pulsar FIN TURNO.
+        if (_batallaResuelta) break;
         if (placed?.owner == 'yo') {
           setState(() {
             _selBoard = coord;
@@ -687,17 +775,148 @@ class _TutorialScreenState extends State<TutorialScreen>
     _advance();
   }
 
+  /// Tu carta entra en la celda enemiga. NO se resuelve el combate todavía:
+  /// ambas cartas quedan en la misma celda (la celda muestra el poder neto ⚡) y
+  /// solo al pulsar FIN TURNO se destruye la enemiga y conquistas la celda.
   void _atacar(String coordEnemigo) {
     final origen = _selBoard ?? _friendlyCoords().first;
     final enemigo = _board[coordEnemigo];
     final yo = _board[origen];
+    final atacante = yo?.card ?? _soldado;
+    final defensor = enemigo?.card ?? _dron;
+    final premio = defensor.coste;
     setState(() {
-      final movida = _board.remove(origen)!;
-      _board[coordEnemigo] = movida;
-      _zero += enemigo?.card.coste ?? 0;
+      // Saca tu carta de su celda de origen, pero deja la enemiga en la suya:
+      // el combate queda PENDIENTE y ambas conviven en la celda enemiga.
+      _board.remove(origen);
+      _combatePendiente = _CombatePendiente(
+        coord: coordEnemigo,
+        origen: origen,
+        aliada: atacante,
+        enemiga: defensor,
+        premio: premio,
+      );
+      // Prepara la entrada del INFORME DE BATALLA con este combate, para poder
+      // mostrarla al cerrar el turno (mismo formato que el informe real).
+      _combateInforme =
+          _construirEntradaCombate(atacante, defensor, premio, coordEnemigo);
+      // Ahora toca CERRAR TURNO para resolver el combate y ver el informe.
+      _batallaResuelta = true;
+      _selBoard = null;
+      _targets = {};
     });
-    _mostrarResultadoCombate(yo?.card ?? _soldado, enemigo?.card ?? _dron,
-        enemigo?.card.coste ?? 0, coordEnemigo);
+    _toast('Tu carta entra en $coordEnemigo. Cierra el turno para resolver.');
+  }
+
+  /// Construye una entrada de `combateLog` con el formato que consume
+  /// [InformeBatallaScreen] (ganador, derrotados, recompensa y desglose por
+  /// ejército con sus cartas).
+  Map<String, dynamic> _construirEntradaCombate(
+      _TCard atacante, _TCard defensor, int premio, String coord) {
+    Map<String, dynamic> carta(_TCard c, String uid, String zone) => {
+          'nombre': c.nombre,
+          'fuerza': c.fuerza,
+          'defensa': c.defensa,
+          // Claves en mayúscula que usa la animación de carta rota.
+          'Nombre': c.nombre,
+          'Fuerza': c.fuerza,
+          'Defensa': c.defensa,
+          'Imagen': '',
+          'ownerUid': uid,
+          'ownerZone': zone,
+        };
+    return {
+      'coord': coord,
+      'ganadorUid': 'yo',
+      'ganadorZone': 'south',
+      'derrotadosUid': const ['rojo'],
+      'energiesGanadas': {'yo': premio},
+      'pcGanados': const {'yo': 3},
+      'detalle': [
+        {
+          'ownerUid': 'yo',
+          'ownerZone': 'south',
+          'totalFuerza': atacante.fuerza,
+          'totalDefensa': atacante.defensa,
+          'poderNeto': atacante.fuerza - defensor.defensa,
+          'numCartas': 1,
+          'cartas': [carta(atacante, 'yo', 'south')],
+        },
+        {
+          'ownerUid': 'rojo',
+          'ownerZone': 'north',
+          'totalFuerza': defensor.fuerza,
+          'totalDefensa': defensor.defensa,
+          'poderNeto': defensor.fuerza - atacante.defensa,
+          'numCartas': 1,
+          'cartas': [carta(defensor, 'rojo', 'north')],
+        },
+      ],
+    };
+  }
+
+  // ── Cierre de turno + informe de fin de turno ───────────────
+  /// Cierra el turno del tutorial: RESUELVE el combate pendiente (la carta
+  /// enemiga se destruye y conquistas la celda ganando su premio), abre el
+  /// INFORME DE BATALLA con el resultado y, al volver, avanza a la explicación.
+  Future<void> _cerrarTurnoTutorial() async {
+    final p = _combatePendiente;
+    if (p != null) {
+      setState(() {
+        // La enemiga desaparece; tu carta ocupa la celda en solitario.
+        _board[p.coord] = _Placed(p.aliada, 'yo');
+        _zero += p.premio;
+        _combatePendiente = null;
+      });
+    }
+    await _abrirInforme();
+    if (!mounted) return;
+    _advance();
+  }
+
+  /// Abre el informe de batalla real (misma pantalla que en la partida),
+  /// posicionado en la pestaña ZERO y con una nota explicativa del tutorial
+  /// para explicar cómo se farmea energía.
+  Future<void> _abrirInforme() async {
+    final combate = _combateInforme;
+    // Entrada de farmeo de ejemplo: +10 Zero del cristal (rayo) de C8, para que
+    // la pestaña ZERO muestre un ingreso real que explicar.
+    const farmeo = <Map<String, dynamic>>[
+      {
+        'uid': 'yo',
+        'zona': 'south',
+        'totalEnergies': 10,
+        'detalle': {'rayo': 10},
+      },
+    ];
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => InformeBatallaScreen(
+          combateLog: combate != null ? [combate] : const [],
+          movimientosLog: const [],
+          farmeoLog: farmeo,
+          accionesLog: const [],
+          rayoCoords: const [_rayo],
+          historial: const [],
+          localUid: 'yo',
+          jugadores: const [
+            LobbyJugador(uid: 'yo', alias: 'TÚ'),
+            LobbyJugador(uid: 'rojo', alias: 'Rojo'),
+          ],
+          turno: 1,
+          // La carta nueva del turno: la Torreta que usarás en el paso siguiente.
+          ultimaCartaRepartida: _torreta.aModelo(),
+          // Abre en COMBATES (índice 0) y muestra la nota guía del tutorial.
+          initialTabIndex: 0,
+          notaTutorial:
+              'Este es el informe de fin de turno. Aquí ves el COMBATE que acabas '
+              'de ganar. Ahora toca la pestaña ZERO (arriba) para ver cómo se '
+              'farmea la ENERGÍA ZERO (Ø): cada CRISTAL ZERO (celdas con el icono '
+              'Ø, como C8) da +10 Ø por turno a quien tenga una carta encima, y '
+              'también ganas Ø al vencer combates.',
+        ),
+      ),
+    );
   }
 
   void _desplegarTorreta(String coord) {
@@ -750,6 +969,22 @@ class _TutorialScreenState extends State<TutorialScreen>
       );
       celdas[coord] = CeldaState(coord: coord, cartas: [ec]);
     });
+
+    // Combate pendiente: tu carta convive con la enemiga en la misma celda. Al
+    // haber dos dueños distintos, la celda pinta el poder neto (⚡ = fuerza −
+    // defensa del rival) automáticamente, igual que en la partida real.
+    final p = _combatePendiente;
+    if (p != null) {
+      final aliada = CartaEnCelda(
+        carta: p.aliada.aModelo(),
+        ownerUid: 'yo',
+        ownerZone: 'se',
+      );
+      final existentes = celdas[p.coord]?.cartas ?? const <CartaEnCelda>[];
+      celdas[p.coord] =
+          CeldaState(coord: p.coord, cartas: [...existentes, aliada]);
+    }
+
     return BoardState(celdas: celdas, rayoCoords: const {_rayo});
   }
 
@@ -758,87 +993,135 @@ class _TutorialScreenState extends State<TutorialScreen>
   Widget build(BuildContext context) {
     final war = context.war;
     final resaltarEnergia = _step == _Step.energiaZero;
+    // BoardState construido una sola vez por frame: lo comparten el tablero y el
+    // menú lateral, para que la ficha del sidebar coincida con la del tablero.
+    final board = _buildBoardState();
+
+    // ── Estado de fin de turno ──
+    // El botón FIN TURNO solo se activa cuando el combate del paso "batalla" ya
+    // se ha resuelto: al pulsarlo se abre el informe de fin de turno.
+    final puedeCerrarTurno = _step == _Step.batalla && _batallaResuelta;
+    // El botón de informe (📜) del menú superior se habilita en el paso de
+    // explicación para poder reabrir el informe cuando se quiera.
+    final puedeVerInforme = _step == _Step.informe;
+
     return Scaffold(
       backgroundColor: war.fondo,
       body: SafeArea(
-        child: Column(
+        child: Stack(
           children: [
-            // ── Menú superior REAL de la partida (jugadores + salir) ──
-            PartidaTopBar(
-              nombrePartida: 'TUTORIAL',
-              colorAsignado: _cYo,
-              jugadores: _hudJugadores,
-              onSalir: () => Navigator.of(context).maybePop(),
-              // En el tutorial estas acciones se muestran atenuadas (inertes).
-              puedeCuartel: false,
-              onCuartel: () {},
-              puedeInforme: false,
-              onInforme: () {},
-              puedePuntuaciones: false,
-              onPuntuaciones: () {},
-              puedeAlianza: false,
-              onAlianza: () {},
-              puedeDeshacer: false,
-              onDeshacer: () {},
+            Column(
+              children: [
+                // ── Menú superior REAL de la partida (jugadores + salir) ──
+                PartidaTopBar(
+                  nombrePartida: 'TUTORIAL',
+                  colorAsignado: _cYo,
+                  jugadores: _hudJugadores,
+                  onSalir: () => Navigator.of(context).maybePop(),
+                  // En el tutorial el resto de acciones se muestran atenuadas.
+                  puedeCuartel: false,
+                  onCuartel: () {},
+                  puedeInforme: puedeVerInforme,
+                  onInforme: puedeVerInforme ? () => _abrirInforme() : () {},
+                  puedePuntuaciones: false,
+                  onPuntuaciones: () {},
+                  puedeAlianza: false,
+                  onAlianza: () {},
+                  puedeDeshacer: false,
+                  onDeshacer: () {},
+                ),
+                // Tablero REAL (respeta el ajuste 3D/plano de Ajustes).
+                Expanded(
+                  child: BoardWidget(
+                    config: _config,
+                    boardState: board,
+                    selectedCellCoord: _sidebarOpen ? _sidebarCoord : _selBoard,
+                    highlightEmpty: _usaDeploy,
+                    deployCoords: _usaDeploy ? _targets : const {},
+                    movableCoords: _usaDeploy ? const {} : _targets,
+                    obeliscoLocal: _hqYo,
+                    obeliscoCoords: _obeliscoCoords,
+                    obeliscoColores: _obeliscoColores,
+                    playerColors: _playerColors,
+                    localPlayerUid: 'yo',
+                    onBackgroundTap: () {
+                      if (_sidebarOpen) {
+                        _cerrarSidebar();
+                      } else if (_selBoard != null) {
+                        setState(() {
+                          _selBoard = null;
+                          _recalcTargets();
+                        });
+                      }
+                    },
+                    onCellTap: (coord, ri, ci) => _onCellTap(coord, ri, ci),
+                  ),
+                ),
+                // ── Barra de jugador REAL: inicial + Energía Zero + FIN TURNO ──
+                // En el paso de Energía se resalta con un glow para guiar la vista.
+                Container(
+                  decoration: resaltarEnergia
+                      ? BoxDecoration(
+                          border: Border.all(color: _cRayo, width: 2),
+                          boxShadow: [
+                            BoxShadow(
+                                color: _cRayo.withOpacity(0.4), blurRadius: 14),
+                          ],
+                        )
+                      : null,
+                  child: BottomHudBar(
+                    player: _sesionYo,
+                    isMyTurn: true,
+                    colorOverride: _cYo,
+                    mazoCount: _mano.length,
+                    endTurnLabel: 'FIN TURNO',
+                    // Solo activo cuando toca cerrar el turno tras el combate.
+                    onEndTurn: puedeCerrarTurno ? _cerrarTurnoTutorial : null,
+                    onVerMazo: null,
+                  ),
+                ),
+                // ── Mano inferior REAL ──
+                HandWidget(
+                  cartas: _mano.map((c) => c.aModelo()).toList(),
+                  selectedIndex: _selHand == null
+                      ? null
+                      : _mano.indexWhere((c) => c.id == _selHand!.id),
+                  onCardTap: (i) => _onHandTap(_mano[i]),
+                  energiesDisponibles: _zero,
+                ),
+                _panelCoach(war),
+              ],
             ),
-            // Tablero REAL (respeta el ajuste 3D/plano de Ajustes).
-            Expanded(
-              child: BoardWidget(
-                config: _config,
-                boardState: _buildBoardState(),
-                selectedCellCoord: _selBoard,
-                highlightEmpty: _usaDeploy,
-                deployCoords: _usaDeploy ? _targets : const {},
-                movableCoords: _usaDeploy ? const {} : _targets,
-                obeliscoLocal: _hqYo,
-                obeliscoCoords: _obeliscoCoords,
-                obeliscoColores: _obeliscoColores,
+
+            // ── Scrim para cerrar el menú lateral tocando fuera ──
+            if (_sidebarOpen)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _cerrarSidebar,
+                ),
+              ),
+
+            // ── MENÚ LATERAL REAL (CellSidebar) ──
+            // Se desliza desde la derecha en el paso "mover": muestra la ficha
+            // de la unidad y el botón MOVER, igual que en la partida.
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: 0,
+              child: CellSidebar(
+                celda: _sidebarCoord != null
+                    ? board.getCelda(_sidebarCoord!)
+                    : null,
+                coord: _sidebarCoord,
+                terrain: TerrainType.land,
+                isOpen: _sidebarOpen,
+                onClose: _cerrarSidebar,
+                localUid: 'yo',
                 playerColors: _playerColors,
-                localPlayerUid: 'yo',
-                onBackgroundTap: () {
-                  if (_selBoard != null) {
-                    setState(() {
-                      _selBoard = null;
-                      _recalcTargets();
-                    });
-                  }
-                },
-                onCellTap: (coord, ri, ci) => _onCellTap(coord),
+                onMoveSelected: _onSidebarMove,
               ),
             ),
-            // ── Barra de jugador REAL: inicial + Energía Zero + FIN TURNO ──
-            // En el paso de Energía se resalta con un glow para guiar la vista.
-            Container(
-              decoration: resaltarEnergia
-                  ? BoxDecoration(
-                      border: Border.all(color: _cRayo, width: 2),
-                      boxShadow: [
-                        BoxShadow(
-                            color: _cRayo.withOpacity(0.4), blurRadius: 14),
-                      ],
-                    )
-                  : null,
-              child: BottomHudBar(
-                player: _sesionYo,
-                isMyTurn: true,
-                colorOverride: _cYo,
-                mazoCount: _mano.length,
-                endTurnLabel: 'FIN TURNO',
-                // Inertes en el tutorial: se avanza con el panel de abajo.
-                onEndTurn: null,
-                onVerMazo: null,
-              ),
-            ),
-            // ── Mano inferior REAL ──
-            HandWidget(
-              cartas: _mano.map((c) => c.aModelo()).toList(),
-              selectedIndex: _selHand == null
-                  ? null
-                  : _mano.indexWhere((c) => c.id == _selHand!.id),
-              onCardTap: (i) => _onHandTap(_mano[i]),
-              energiesDisponibles: _zero,
-            ),
-            _panelCoach(war),
           ],
         ),
       ),
@@ -998,167 +1281,6 @@ class _TutorialScreenState extends State<TutorialScreen>
     );
   }
 
-  // ── Resultado de combate (igual que en el juego) ────────────
-  /// Presenta el combate con la MISMA animación de carta rota que usa el
-  /// informe de batalla del juego (`CartaRotaStrip`), más el desglose de
-  /// fuerza/defensa/poder neto y la recompensa.
-  void _mostrarResultadoCombate(
-      _TCard atacante, _TCard defensor, int premio, String coord) {
-    final war = context.war;
-    const verde = Color(0xFF4ABB58);
-    final poderNeto = atacante.fuerza - defensor.defensa;
-    final pnTxt = poderNeto >= 0 ? '+$poderNeto' : '$poderNeto';
-
-    Widget stat(String icon, String value, Color color) => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: color.withOpacity(0.35), width: 0.6),
-          ),
-          child: Text('$icon $value',
-              style:
-                  TextStyle(fontFamily: 'Cinzel', fontSize: 10, color: color)),
-        );
-
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => Dialog(
-        backgroundColor: war.superficie,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 360),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Cabecera ⚔ CELDA — como el informe de batalla del juego.
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: verde.withOpacity(0.10),
-                  borderRadius:
-                      const BorderRadius.vertical(top: Radius.circular(14)),
-                ),
-                child: Row(children: [
-                  Text('⚔  COMBATE EN $coord',
-                      style: TextStyle(
-                          fontFamily: 'Cinzel',
-                          fontSize: 11,
-                          letterSpacing: 1.5,
-                          color: war.primario)),
-                  const Spacer(),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: verde.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: const Text('TU COMBATE',
-                        style: TextStyle(
-                            fontFamily: 'Cinzel',
-                            fontSize: 8,
-                            letterSpacing: 1,
-                            color: verde)),
-                  ),
-                ]),
-              ),
-              Flexible(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(children: [
-                        const Icon(Icons.emoji_events, size: 15, color: verde),
-                        const SizedBox(width: 6),
-                        const Text('VICTORIA: TÚ',
-                            style: TextStyle(
-                                fontFamily: 'Cinzel',
-                                fontSize: 10,
-                                letterSpacing: 1,
-                                color: verde)),
-                      ]),
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4, left: 21),
-                        child: Text('+$premio Ø  ·  +3 PC',
-                            style: TextStyle(
-                                fontFamily: 'Cinzel',
-                                fontSize: 9,
-                                color: war.textoTenue)),
-                      ),
-                      const SizedBox(height: 10),
-                      // Desglose fuerza (tú) vs defensa (rival) y poder neto.
-                      Row(children: [
-                        stat('⚔', '${atacante.fuerza}', _cYo),
-                        const SizedBox(width: 8),
-                        Text('vs',
-                            style: TextStyle(
-                                color: war.textoTenue,
-                                fontFamily: 'Cinzel',
-                                fontSize: 9)),
-                        const SizedBox(width: 8),
-                        stat('🛡', '${defensor.defensa}', _cRojo),
-                        const Spacer(),
-                        stat('⚡', pnTxt, verde),
-                      ]),
-                      const SizedBox(height: 16),
-                      // Animación de carta rota — EXACTAMENTE la del juego.
-                      Center(
-                        child: CartaRotaStrip(
-                          cartas: [
-                            {
-                              'Nombre': defensor.nombre,
-                              'Fuerza': defensor.fuerza,
-                              'Defensa': defensor.defensa,
-                              'Imagen': '',
-                              'ownerUid': 'rojo',
-                              'ownerZone': 'nw',
-                            }
-                          ],
-                          localUid: 'yo',
-                          colorZona: (z) =>
-                              (z == 'se' || z == 'yo') ? _cYo : _cRojo,
-                          titulo: 'CARTA ENEMIGA DESTRUIDA',
-                          cardWidth: 116,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Tu fuerza (${atacante.fuerza}) supera la defensa '
-                        'enemiga (${defensor.defensa}): la unidad rival es '
-                        'destruida y conquistas la celda.',
-                        style: TextStyle(
-                            fontSize: 11, height: 1.4, color: war.textoTenue),
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            _advance();
-                          },
-                          child: const Text('CONTINUAR',
-                              style: TextStyle(
-                                  fontFamily: 'Cinzel', letterSpacing: 1)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   // ── Panel guía inferior (coach) ─────────────────────────────
   _Coach get _coach {
     switch (_step) {
@@ -1213,15 +1335,22 @@ class _TutorialScreenState extends State<TutorialScreen>
               : 'Selecciona el Soldado en tu mano',
         );
       case _Step.mover:
+        String hint;
+        if (_sidebarOpen) {
+          hint = 'Selecciona el Soldado y pulsa MOVER';
+        } else if (_selBoard == null) {
+          hint = 'Toca tu Soldado para abrir su menú';
+        } else {
+          hint = 'Toca una celda resaltada';
+        }
         return _Coach(
           titulo: '5 · Mover la carta',
           cuerpo:
               'Las unidades avanzan según su Movimiento. Toca tu Soldado en el '
-              'tablero para seleccionarlo y luego una de las celdas resaltadas '
-              'a las que puede llegar.',
-          hint: _selBoard == null
-              ? 'Toca tu Soldado en el tablero'
-              : 'Toca una celda resaltada',
+              'tablero: se abrirá el MENÚ LATERAL con su ficha. Marca la carta '
+              'y pulsa MOVER; entonces se iluminan las celdas a las que puede '
+              'llegar. Toca una para desplazarte.',
+          hint: hint,
         );
       case _Step.evolucion:
         return _Coach(
@@ -1229,11 +1358,27 @@ class _TutorialScreenState extends State<TutorialScreen>
           cuerpo: 'Algunas cartas pueden EVOLUCIONAR a una versión más potente '
               'pagando Energía Zero. Toca tu Soldado en el tablero para abrir su '
               'ficha: pulsa la FLECHA de evolución para ver en qué se convierte y '
-              'luego EVOLUCIONAR (−${_soldado.evolucion}Ø). Una carta recién '
-              'evolucionada no puede moverse ese turno.',
+              'luego EVOLUCIONAR (−${_soldado.evolucion}Ø). En una partida real, '
+              'si EVOLUCIONAS una carta no puedes MOVERLA ese turno, y si ya la '
+              'has movido no puedes evolucionarla. Para agilizar el tutorial nos '
+              'saltamos esa condición.',
           hint: 'Toca tu Soldado y pulsa la flecha de evolución',
         );
       case _Step.batalla:
+        if (_batallaResuelta) {
+          // Segunda fase del paso: cerrar el turno para ver el informe.
+          return const _Coach(
+            titulo: '7 · Cierra el turno',
+            cuerpo:
+                'Tu carta ha entrado en la celda del Dron: ahora la celda muestra '
+                'el ⚡ de cada bando (tu fuerza menos la defensa rival, y al revés). '
+                'El combate NO se resuelve todavía y el Dron sigue ahí. Pulsa FIN '
+                'TURNO (abajo a la derecha): al cerrar el turno se resuelven los '
+                'combates, la carta enemiga es destruida y se genera el INFORME '
+                'DE FIN DE TURNO.',
+            hint: 'Pulsa FIN TURNO para resolver y ver el informe',
+          );
+        }
         return _Coach(
           titulo: '7 · ¡Batalla!',
           cuerpo:
@@ -1244,10 +1389,22 @@ class _TutorialScreenState extends State<TutorialScreen>
               ? 'Toca tu unidad para seleccionarla'
               : 'Toca la celda del Dron Rival',
         );
+      case _Step.informe:
+        return const _Coach(
+          titulo: '8 · Informe de fin de turno',
+          cuerpo:
+              'El informe se abre en COMBATES con el combate que ganaste. Cambia '
+              'a la pestaña ZERO para ver cómo se farmea la energía: los CRISTALES '
+              'ZERO (celdas con el icono Ø, como C8) dan +10 Ø por turno a quien '
+              'tenga una carta encima, y también ganas Ø al vencer combates. El '
+              'informe reúne además ACCIONES, CARTA (la nueva carta del turno) y '
+              'MOVIMIENTOS. Puedes reabrirlo con el botón 📜 de la barra superior.',
+          boton: 'SIGUIENTE',
+        );
       case _Step.estatica:
         final tieneSel = _selHand?.id == 'torreta';
         return _Coach(
-          titulo: '8 · Cartas estáticas',
+          titulo: '9 · Cartas estáticas',
           cuerpo: 'La "Torreta Búnker" es ESTÁTICA: no se mueve (Mov 0). '
               'Selecciónala en tu mano y colócala sobre una '
               'celda que controlas.',
@@ -1265,7 +1422,7 @@ class _TutorialScreenState extends State<TutorialScreen>
           hint = 'Toca la celda de destino';
         }
         return _Coach(
-          titulo: '9 · Acción: Teletransporte',
+          titulo: '10 · Acción: Teletransporte',
           cuerpo: 'Las cartas de ACCIÓN lanzan efectos y se descartan. El '
               'Teletransporte mueve una carta tuya a cualquier celda libre: '
               'selecciona la acción, elige tu carta y luego el destino.',
@@ -1274,7 +1431,7 @@ class _TutorialScreenState extends State<TutorialScreen>
       case _Step.misil:
         final tieneSel = _selHand?.id == 'misil';
         return _Coach(
-          titulo: '10 · Acción: Misil',
+          titulo: '11 · Acción: Misil',
           cuerpo: 'Ha aparecido un Tanque Rival. El Misil Zero es una acción '
               'ofensiva: destruye una carta enemiga a distancia. Selecciónalo '
               'en tu mano y apunta al Tanque.',

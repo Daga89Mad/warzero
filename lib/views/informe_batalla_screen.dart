@@ -33,6 +33,13 @@ class InformeBatallaScreen extends StatefulWidget {
   /// Carta nueva recibida este turno (null si aún no se ha repartido).
   final CartaModel? ultimaCartaRepartida;
 
+  /// Pestaña inicial: 0 COMBATES · 1 ACCIONES · 2 ZERO · 3 CARTA · 4 MOVIMIENTOS.
+  final int initialTabIndex;
+
+  /// Nota guía opcional (tutorial). Si se indica, se muestra un banner bajo las
+  /// pestañas con este texto explicativo.
+  final String? notaTutorial;
+
   const InformeBatallaScreen({
     super.key,
     required this.combateLog,
@@ -45,6 +52,8 @@ class InformeBatallaScreen extends StatefulWidget {
     this.accionesLog = const [],
     this.rayoCoords = const [],
     this.ultimaCartaRepartida,
+    this.initialTabIndex = 0,
+    this.notaTutorial,
   });
 
   @override
@@ -167,6 +176,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
 
     return DefaultTabController(
       length: 5,
+      initialIndex: widget.initialTabIndex.clamp(0, 4),
       child: Scaffold(
         backgroundColor: war.fondo,
         appBar: AppBar(
@@ -237,34 +247,42 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
             ],
           ),
         ),
-        body: TabBarView(
+        body: Column(
           children: [
-            _CombatesTab(
-              combateLog: _combateActual,
-              accionesLog: _accionesActual,
-              localUid: widget.localUid,
-              alias: _alias,
-              colorZona: _colorZona,
-            ),
-            _AccionesTab(
-              accionesLog: _accionesActual,
-              localUid: widget.localUid,
-              alias: _alias,
-              colorZona: _colorZona,
-            ),
-            _EnergiesTab(
-              farmeoLog: _farmeoActual,
-              rayoCoords: _rayoActual,
-              localUid: widget.localUid,
-              alias: _alias,
-              colorZona: _colorZona,
-            ),
-            _CartaTab(carta: widget.ultimaCartaRepartida),
-            _MovimientosTab(
-              movimientosLog: _movActual,
-              localUid: widget.localUid,
-              alias: _alias,
-              colorZona: _colorZona,
+            if (widget.notaTutorial != null)
+              _NotaTutorialBanner(texto: widget.notaTutorial!),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _CombatesTab(
+                    combateLog: _combateActual,
+                    accionesLog: _accionesActual,
+                    localUid: widget.localUid,
+                    alias: _alias,
+                    colorZona: _colorZona,
+                  ),
+                  _AccionesTab(
+                    accionesLog: _accionesActual,
+                    localUid: widget.localUid,
+                    alias: _alias,
+                    colorZona: _colorZona,
+                  ),
+                  _EnergiesTab(
+                    farmeoLog: _farmeoActual,
+                    rayoCoords: _rayoActual,
+                    localUid: widget.localUid,
+                    alias: _alias,
+                    colorZona: _colorZona,
+                  ),
+                  _CartaTab(carta: widget.ultimaCartaRepartida),
+                  _MovimientosTab(
+                    movimientosLog: _movActual,
+                    localUid: widget.localUid,
+                    alias: _alias,
+                    colorZona: _colorZona,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1986,6 +2004,48 @@ class _MovimientoTile extends StatelessWidget {
                 }).toList(),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BANNER DE NOTA GUÍA (TUTORIAL)
+// Franja explicativa opcional bajo las pestañas del informe. Solo se usa desde
+// el tutorial para guiar al jugador (p. ej. "ahora mira la pestaña ZERO").
+// ─────────────────────────────────────────────────────────────────────────────
+class _NotaTutorialBanner extends StatelessWidget {
+  final String texto;
+  const _NotaTutorialBanner({required this.texto});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: war.primario.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: war.primario.withOpacity(0.45), width: 1),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.school, size: 16, color: war.primario),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              texto,
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.4,
+                color: war.texto,
+              ),
+            ),
+          ),
         ],
       ),
     );
