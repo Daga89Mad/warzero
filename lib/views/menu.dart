@@ -7,7 +7,7 @@ import 'package:warzero/services/settings_controller.dart';
 import 'package:warzero/services/permisos.dart';
 import 'package:warzero/views/loginBody.dart';
 import 'package:warzero/views/settingsScreen.dart';
-import 'package:warzero/views/lobby_screen.dart';
+import 'package:warzero/views/modo_juego_screen.dart';
 import 'package:warzero/views/mazo_screen.dart';
 import 'package:warzero/views/cartas_screen.dart';
 import 'package:warzero/views/centro_mando_screen.dart';
@@ -131,10 +131,11 @@ class MenuScreen extends StatelessWidget {
                     _MenuTile(
                       icon: Icons.public,
                       label: 'JUGAR',
-                      sublabel: 'Unirse o crear\nuna partida',
+                      sublabel: 'Modo historia\no partida',
                       accent: const Color(0xFF4ABB58),
                       onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const LobbyScreen()),
+                        MaterialPageRoute(
+                            builder: (_) => const ModoJuegoScreen()),
                       ),
                     ),
                     _MenuTile(

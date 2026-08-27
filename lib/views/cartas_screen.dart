@@ -164,6 +164,7 @@ class _CartasScreenState extends State<CartasScreen>
               cartaId: m['cartaId']?.toString() ?? '',
               numero: (m['numero'] as num?)?.toInt() ?? 0,
               poseida: m['poseida'] == true,
+              idEvolucion: m['idEvolucion']?.toString() ?? '',
             ));
       }
       numerado.forEach((_, list) {
@@ -290,19 +291,16 @@ class _CartasScreenState extends State<CartasScreen>
     super.dispose();
   }
 
-  /// Evolución conocida de una carta (su definición vino en el catálogo porque
-  /// la carta base es poseída), o null si no tiene o no está disponible.
-  CartaModel? _evolucionDe(CartaModel c) {
-    if (c.idEvolucion.isEmpty) return null;
-    return _catalogoGlobal[c.idEvolucion];
-  }
-
   /// Construye la lista ordenada de celdas para un ejército: cada carta
   /// numerada aparece en su posición (poseída → carta real; no poseída →
-  /// bloqueada), y al final las poseídas sin numerar. Las evoluciones se
-  /// muestran como celda propia tras su carta base, SIN duplicar: si la
-  /// evolución ya aparece con su propio número, o si dos básicas evolucionan
-  /// a la misma, solo se pinta una vez.
+  /// bloqueada) y, JUSTO DETRÁS, su evolución si la tiene. Las evoluciones se
+  /// muestran como celda propia SIN duplicar: si dos básicas evolucionan a la
+  /// misma, o si ya aparece con su propio número, solo se pinta una vez.
+  ///
+  /// La evolución se revela (con imagen/datos) solo cuando su base es poseída
+  /// —su definición llega en `evoluciones` y por tanto está en el catálogo—; en
+  /// caso contrario se pinta como celda de evolución BLOQUEADA (igual que una
+  /// básica bloqueada, sin revelar nada).
   List<_GridItem> _itemsDeEjercito(int ejercitoId) {
     final items = <_GridItem>[];
     final usados = <String>{};
@@ -317,13 +315,17 @@ class _CartasScreenState extends State<CartasScreen>
         if (carta.numero == 0) carta.id,
     };
 
+    // Evoluciones ya colocadas (reveladas o bloqueadas): evita duplicar cuando
+    // varias básicas comparten la misma evolución.
     final evosPuestas = <String>{};
-    void agregarEvolucion(CartaModel base) {
-      final evo = _evolucionDe(base);
-      if (evo == null) return;
-      if (propios.contains(evo.id)) return; // ya aparece con su número
-      if (!evosPuestas.add(evo.id)) return; // ya la puso otra básica
-      items.add(_GridItem.evolucion(evo));
+
+    void agregarEvolucion(String idEvo) {
+      if (idEvo.isEmpty) return;
+      if (propios.contains(idEvo)) return; // ya aparece con su propio número
+      if (!evosPuestas.add(idEvo)) return; // ya la puso otra básica
+      final evo = _catalogoGlobal[idEvo];
+      items.add(
+          evo != null ? _GridItem.evolucion(evo) : _GridItem.evolucionLocked());
     }
 
     for (final slot in (_numeradoPorEjercito[ejercitoId] ?? const [])) {
@@ -333,9 +335,12 @@ class _CartasScreenState extends State<CartasScreen>
       if (poseida) {
         items.add(_GridItem.owned(carta!, slot.numero));
         usados.add(slot.cartaId);
-        agregarEvolucion(carta);
+        agregarEvolucion(carta.idEvolucion);
       } else {
         items.add(_GridItem.locked(slot.numero));
+        // Aunque la base esté bloqueada, si el catálogo indica que tiene
+        // evolución la mostramos como celda de evolución bloqueada a su lado.
+        agregarEvolucion(slot.idEvolucion);
       }
     }
 
@@ -343,7 +348,7 @@ class _CartasScreenState extends State<CartasScreen>
     for (final carta in (_cartasPorEjercito[ejercitoId] ?? const [])) {
       if (usados.contains(carta.id) || carta.numero > 0) continue;
       items.add(_GridItem.owned(carta, 0));
-      agregarEvolucion(carta);
+      agregarEvolucion(carta.idEvolucion);
     }
     return items;
   }
@@ -627,7 +632,10 @@ class _CartasGrid extends StatelessWidget {
       itemCount: items.length,
       itemBuilder: (_, i) {
         final item = items[i];
-        if (item.bloqueada) return _LockedCarta(numero: item.numero);
+        if (item.bloqueada) {
+          return _LockedCarta(
+              numero: item.numero, esEvolucion: item.esEvolucion);
+        }
 
         final carta = item.carta!;
         final entry = coleccion[carta.id];
@@ -708,29 +716,43 @@ class _SkinNumeros extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _LockedCarta extends StatelessWidget {
   final int numero;
-  const _LockedCarta({required this.numero});
+
+  /// True si esta celda representa una EVOLUCIÓN bloqueada (aún no revelada).
+  /// Se pinta con el acento morado de evolución y sin número de colección.
+  final bool esEvolucion;
+
+  const _LockedCarta({required this.numero, this.esEvolucion = false});
 
   @override
   Widget build(BuildContext context) {
     final war = context.war;
+    const evoPurple = Color(0xFFC060E0);
+    final acento = esEvolucion ? evoPurple : war.borde;
+
     return DecoratedBox(
       decoration: BoxDecoration(
         color: war.fondo,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: war.borde.withOpacity(0.4)),
+        border: Border.all(
+          color: esEvolucion
+              ? evoPurple.withOpacity(0.4)
+              : war.borde.withOpacity(0.4),
+        ),
       ),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.lock_outline, size: 26, color: war.borde),
+          Icon(esEvolucion ? Icons.auto_awesome : Icons.lock_outline,
+              size: 26, color: acento),
           const SizedBox(height: 8),
           Text(
-            'Nº $numero',
+            esEvolucion ? 'EVOLUCIÓN' : 'Nº $numero',
             style: TextStyle(
                 fontFamily: 'Cinzel',
-                fontSize: 9,
+                fontSize: esEvolucion ? 8 : 9,
                 letterSpacing: 1,
-                color: war.textoTenue),
+                fontWeight: esEvolucion ? FontWeight.bold : FontWeight.normal,
+                color: esEvolucion ? evoPurple : war.textoTenue),
           ),
           const SizedBox(height: 2),
           Text(
@@ -987,10 +1009,16 @@ class _SlotNumerado {
   final String cartaId;
   final int numero;
   final bool poseida;
+
+  /// Id de la evolución de esta carta (vacío si no tiene). Permite pintar una
+  /// celda de "evolución bloqueada" junto a las básicas que aún no posees.
+  final String idEvolucion;
+
   const _SlotNumerado({
     required this.cartaId,
     required this.numero,
     required this.poseida,
+    this.idEvolucion = '',
   });
 }
 
@@ -1020,6 +1048,9 @@ class _GridItem {
       _GridItem._(c, numero, false);
   factory _GridItem.locked(int numero) => _GridItem._(null, numero, false);
   factory _GridItem.evolucion(CartaModel c) => _GridItem._(c, 0, true);
+
+  /// Evolución de una base bloqueada: se sabe que existe pero no se revela.
+  factory _GridItem.evolucionLocked() => _GridItem._(null, 0, true);
   bool get bloqueada => carta == null;
 }
 

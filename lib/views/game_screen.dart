@@ -201,6 +201,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// primero, se roba una de estas al azar (con repetición).
   List<CartaModel> _mazoCompleto = [];
 
+  /// IDs de las cartas de EVOLUCIÓN que el jugador local POSEE en su colección.
+  /// Regla: una carta base solo puede evolucionar si su evolución está aquí
+  /// (poseer la base NO implica poseer la evolución). Se rellena en initState.
+  final Set<String> _evolucionesPoseidas = {};
+  bool _evolucionesPoseidasCargadas = false;
+
   /// Última carta robada (para mostrarla en el informe del turno).
   CartaModel? _ultimaCartaRepartida;
   int? _selectedHandIndex;
@@ -428,6 +434,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (widget.lobbyId != null) {
       _api.despertar();
     }
+    _cargarEvolucionesPoseidas();
+    _loadGame();
     _loadGame();
   }
 
@@ -543,6 +551,32 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
+  // ── Evoluciones que el jugador POSEE (regla de evolución) ──
+  /// Carga desde el servidor las evoluciones que el jugador tiene en su
+  /// colección. Se usa para permitir/impedir evolucionar en el tablero: tener
+  /// la carta base NO implica tener su evolución. Hace setState para refrescar
+  /// los botones de evolución del sidebar.
+  Future<void> _cargarEvolucionesPoseidas() async {
+    try {
+      final data = await _api.obtenerColeccion(widget.localPlayerUid);
+      final ids = ((data?['evolucionesPoseidas'] as List?) ?? const [])
+          .map((e) => e.toString())
+          .where((s) => s.isNotEmpty)
+          .toSet();
+      if (!mounted) return;
+      setState(() {
+        _evolucionesPoseidas
+          ..clear()
+          ..addAll(ids);
+        _evolucionesPoseidasCargadas = true;
+      });
+    } catch (_) {
+      // Sin bloqueo permanente ante fallos de red: se reintenta de forma
+      // perezosa la primera vez que se intente evolucionar.
+      _evolucionesPoseidasCargadas = false;
+    }
+  }
+
   // ── Resolver carta de evolución desde el catálogo vía API ─
   Future<CartaModel?> _resolveEvolucion(String idEvolucion) async {
     if (idEvolucion.isEmpty) return null;
@@ -561,7 +595,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _toast('Ya has cerrado el turno. Espera al siguiente.', error: true);
       return;
     }
-
+    // ── Regla de colección: solo puedes evolucionar si POSEES la evolución.
+    //    Tener la carta base no implica tenerla. Si aún no se cargó la lista
+    //    (p. ej. fallo de red al entrar), se pide ahora antes de decidir.
+    if (!_evolucionesPoseidasCargadas) {
+      await _cargarEvolucionesPoseidas();
+    }
+    if (!mounted) return;
+    if (_evolucionesPoseidasCargadas &&
+        !_evolucionesPoseidas.contains(evolucion.id)) {
+      _toast('No posees la evolución de esta carta.', error: true);
+      return;
+    }
     final celda = _boardState.getCelda(coord);
     if (indice < 0 || indice >= celda.cartas.length) return;
 
@@ -691,7 +736,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final result = <CartaModel>[];
     for (final id in ids) {
       final c = porId[id];
-      if (c != null) result.add(c);
+      // copyWith() por cada aparición: cada carta de la mano es una INSTANCIA
+      // propia aunque varias compartan id (p. ej. 4 parálisis divina). Así el
+      // rastreo por referencia (robada/sacrificio) distingue copias en vez de
+      // compartir un único objeto entre todas.
+      if (c != null) result.add(c.copyWith());
     }
     return result;
   }
@@ -1730,6 +1779,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _cartasQueSeMovieron.clear();
           _origenTurnoPorId.clear();
           _cartasQueUsaronHabilidad.clear();
+          // FALTABA en la ruta del stream (sí estaba en _aplicarEstado): las
+          // acciones y fantasmas del turno que acaba de resolverse deben limpiarse
+          // aquí también. Si no, el jugador que NO resolvió el turno se queda con
+          // los marcadores locales de sus disparos/escudos pegados varios turnos.
+          _accionesPendientes.clear();
+          _accionController.cancelar();
+          _fantasmasAccion.clear();
           _energiaGastadaDespliegue = 0;
           _especialesCompradasEsteTurno.clear();
           _revisionFantasmas = const [];
@@ -2646,7 +2702,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final pool =
         _mazoCompleto.where((c) => !c.esEvolucion && !c.esEspecial).toList();
     if (pool.isEmpty) return fallo('No hay cartas disponibles para robar.');
-    final carta = pool[math.Random().nextInt(pool.length)];
+    // Clonar la robada a una INSTANCIA propia. Las copias del mismo tipo comparten
+    // el mismo objeto en el mazo, así que sin clonar identical() marcaría como
+    // "robada este turno" a TODAS las copias (tus 4 parálisis divina) y no dejaría
+    // sacrificar ninguna. Con el clon, solo la robada queda bloqueada.
+    final carta = pool[math.Random().nextInt(pool.length)].copyWith();
 
     setState(() {
       // Carta REVERTIBLE: solo en _hand (no en _handInicial).
@@ -4158,6 +4218,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _accionController.cancelar();
           _fantasmasAccion.clear();
           _energiaGastadaDespliegue = 0;
+          _robosComprados =
+              0; // el precio de robar vuelve a 100 al empezar el turno
           _especialesCompradasEsteTurno.clear();
           _revisionFantasmas = const [];
           _revisionAcciones = const {};
@@ -4701,6 +4763,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 resolveEvolucion: _resolveEvolucion,
                 onEvolucionar:
                     _estoyEliminado ? (_, __, ___) async {} : _evolucionarCarta,
+                evolucionesPoseidas: _evolucionesPoseidas,
                 turnoActual: _boardState.turnoActual, // NUEVO
                 onLanzarHabilidad: // NUEVO
                     _estoyEliminado ? null : _iniciarAccionDesdeTablero,

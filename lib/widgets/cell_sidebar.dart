@@ -55,6 +55,10 @@ class CellSidebar extends StatefulWidget {
   final Future<void> Function(String coord, int indice, CartaModel evolucion)?
       onEvolucionar;
 
+  /// IDs de las cartas de EVOLUCIÓN que el jugador posee. `null` = sin
+  /// restricción; si se pasa, solo se ofrece EVOLUCIONAR cuando la evolución de
+  /// la carta está en el conjunto (poseer la base no implica la evolución).
+  final Set<String>? evolucionesPoseidas;
   static const double width = 220;
 
   /// Turno actual de la partida (para calcular enfriamiento de habilidades).
@@ -95,6 +99,7 @@ class CellSidebar extends StatefulWidget {
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
+    this.evolucionesPoseidas,
     this.turnoActual = 1, // NUEVO
     this.onLanzarHabilidad, // NUEVO
     this.onDescarga,
@@ -264,6 +269,7 @@ class _CellSidebarState extends State<CellSidebar> {
               energiasDisponibles: widget.energiasDisponibles,
               resolveEvolucion: widget.resolveEvolucion,
               onEvolucionar: widget.onEvolucionar,
+              evolucionesPoseidas: widget.evolucionesPoseidas,
               turnoActual: widget.turnoActual, // NUEVO
               onLanzarHabilidad: widget.onLanzarHabilidad, // NUEVO
             ),
@@ -649,7 +655,7 @@ class _Body extends StatelessWidget {
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
   final Future<void> Function(String coord, int indice, CartaModel evolucion)?
       onEvolucionar;
-
+  final Set<String>? evolucionesPoseidas;
   // Habilidad
   final int turnoActual;
   final Future<void> Function(CartaEnCelda carta, String coord, int indice)?
@@ -671,6 +677,7 @@ class _Body extends StatelessWidget {
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
+    this.evolucionesPoseidas,
     this.turnoActual = 1,
     this.onLanzarHabilidad,
   });
@@ -856,6 +863,7 @@ class _CardTile extends StatelessWidget {
   final Future<CartaModel?> Function(String idEvolucion)? resolveEvolucion;
   final Future<void> Function(String coord, int indice, CartaModel evolucion)?
       onEvolucionar;
+  final Set<String>? evolucionesPoseidas;
 
   const _CardTile({
     required this.entry,
@@ -870,15 +878,20 @@ class _CardTile extends StatelessWidget {
     this.energiasDisponibles,
     this.resolveEvolucion,
     this.onEvolucionar,
+    this.evolucionesPoseidas,
     this.turnoActual = 1,
     this.onLanzarHabilidad,
   });
 
   void _abrirDetalle(BuildContext ctx) {
+    // No basta con que la carta TENGA evolución: el jugador debe POSEERLA.
+    final poseeEvolucion = evolucionesPoseidas == null ||
+        evolucionesPoseidas!.contains(entry.carta.idEvolucion);
     final puedeEvolucionar = isLocal &&
         onEvolucionar != null &&
         coord != null &&
-        entry.carta.puedeEvolucionar;
+        entry.carta.puedeEvolucionar &&
+        poseeEvolucion;
 
     // ── Habilidad: visible solo si la carta es propia, tiene habilidad
     //     en el catálogo y se ha pasado un callback. El cooldown se
