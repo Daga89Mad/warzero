@@ -197,6 +197,22 @@ class _BoardWidgetState extends State<BoardWidget>
   }
 
   @override
+  void didUpdateWidget(BoardWidget old) {
+    super.didUpdateWidget(old);
+    // Si cambian las dimensiones lógicas del tablero —al cargar el terreno del
+    // mapa o al EXPANDIR la rejilla para que quepan los cuarteles/obeliscos que
+    // llegan del servidor tras el primer render— el centrado calculado en
+    // initState ya no sirve y los cuarteles quedan descolocados. Reaccionamos
+    // SOLO al cambio de tamaño (no a otros rebuilds) para no pelear con el
+    // paneo del usuario, y recolocamos.
+    if (old.config.cols != widget.config.cols ||
+        old.config.rows != widget.config.rows) {
+      _centered = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _centerBoard());
+    }
+  }
+
+  @override
   void dispose() {
     _momentumCtrl.dispose();
     super.dispose();
@@ -205,10 +221,17 @@ class _BoardWidgetState extends State<BoardWidget>
   void _centerBoard() {
     if (_centered) return;
     final size = context.size;
-    if (size == null) return;
+    if (size == null) {
+      // El tablero aún no tiene tamaño en este frame. En vez de abandonar el
+      // centrado para siempre (lo que dejaba los cuarteles descolocados hasta
+      // salir y reentrar), lo reintentamos en el siguiente frame.
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _centerBoard());
+      }
+      return;
+    }
     _centered = true;
     setState(() {
-      final targetY = _logicalW * _scale - size.height * 0.3;
       _panOffset = Offset(
         -((_logicalW * _scale) - size.width).clamp(0.0, double.infinity) / 2,
         -((_logicalH * _scale) - size.height * 0.75)

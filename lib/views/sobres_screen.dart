@@ -6,6 +6,7 @@ import '../models/jugador_model.dart';
 import '../models/lobby_model.dart';
 import '../services/settings_controller.dart';
 import '../services/warzero_api.dart';
+import 'tienda_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SobresScreen
@@ -14,6 +15,13 @@ import '../services/warzero_api.dart';
 // (ponderada por su Probabilidad), otorga Zero del ejército y, con baja
 // probabilidad, puede soltar una skin legendaria. Los saldos de las 5 monedas
 // se muestran arriba y se refrescan tras cada apertura.
+//
+// Optimizaciones de rendimiento:
+//   • La carta del diálogo de resultado se decodifica al tamaño REAL del cuadro
+//     (ResizeImage) en vez de a la resolución original del arte.
+//   • La imagen se PRECARGA antes de abrir el diálogo, así aparece ya lista y no
+//     en blanco (mientras tanto el botón sigue mostrando su spinner).
+//   • El refresco de saldos tras abrir no bloquea el cierre del diálogo.
 // ─────────────────────────────────────────────────────────────────────────────
 class SobresScreen extends StatefulWidget {
   const SobresScreen({super.key});
@@ -65,6 +73,21 @@ class _SobresScreenState extends State<SobresScreen> {
     try {
       final res = await _api.abrirSobre(_uid, ejercitoId);
       if (!mounted) return;
+
+      // Precargamos la imagen (ya redimensionada al tamaño del cuadro) antes de
+      // abrir el diálogo, para que aparezca al instante y no en blanco. Se hace
+      // con la misma "key" que usará el diálogo. precacheImage también completa
+      // si hay error, así que no puede quedarse colgado por una imagen rota.
+      final imagen = res['imagen']?.toString() ?? '';
+      if (imagen.isNotEmpty) {
+        final dpr = MediaQuery.of(context).devicePixelRatio;
+        await precacheImage(
+          ResizeImage(NetworkImage(imagen), width: (130 * dpr).round()),
+          context,
+        );
+        if (!mounted) return;
+      }
+
       await showDialog(
         context: context,
         barrierDismissible: true,
@@ -101,6 +124,16 @@ class _SobresScreenState extends State<SobresScreen> {
                 fontSize: 13,
                 letterSpacing: 3,
                 color: war.primario)),
+        actions: [
+          IconButton(
+            tooltip: 'Tienda',
+            icon:
+                Icon(Icons.storefront_outlined, size: 20, color: war.primario),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const TiendaScreen()),
+            ),
+          ),
+        ],
       ),
       body: _loading
           ? Center(child: CircularProgressIndicator(color: war.primario))
@@ -327,9 +360,7 @@ class _ResultadoSobreDialog extends StatelessWidget {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(9),
                 child: imagen.isNotEmpty
-                    ? Image.network(imagen,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => _ph(war))
+                    ? _imagen(war, context, imagen)
                     : _ph(war),
               ),
             ),
@@ -377,6 +408,29 @@ class _ResultadoSobreDialog extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  // Carta decodificada al tamaño real del cuadro (130 lógicos de ancho) con un
+  // fundido suave al aparecer. La "key" coincide con la de precacheImage en
+  // _SobresScreenState._abrir, así que normalmente ya está lista.
+  Widget _imagen(dynamic war, BuildContext context, String url) {
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    return Image(
+      image: ResizeImage(NetworkImage(url), width: (130 * dpr).round()),
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.low,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded) return child;
+        return AnimatedOpacity(
+          opacity: frame == null ? 0 : 1,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          child: child,
+        );
+      },
+      errorBuilder: (_, __, ___) => _ph(war),
     );
   }
 

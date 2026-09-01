@@ -62,8 +62,12 @@ class AccionPendiente {
   /// recuperándose +25%/turno. No usa `habilidadId` (es una acción especial).
   final bool esDescarga;
 
-  /// Coste en energías pagado al declarar la acción (se descuenta localmente
-  /// y se sincroniza al cerrar turno).
+  /// Coste reservado visualmente al declarar la acción.
+  ///
+  /// Para DESCARGA el servidor NO confía en este valor para cobrar:
+  /// WarZeroService aplica su coste fijo autoritativo cuando la descarga
+  /// válida se resuelve. Este valor se utiliza en cliente principalmente
+  /// para mostrar el coste y devolverlo si se cancela antes de cerrar turno.
   final int costePagado;
 
   const AccionPendiente({

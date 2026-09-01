@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/settings_controller.dart';
 import '../services/warzero_api.dart'; // ajusta la ruta si tu api está en otra carpeta
+import 'perfil_publico_screen.dart';
 
 /// Criterio de ordenación del ranking.
 enum RankingOrden { experiencia, victorias }
@@ -269,79 +270,90 @@ class _RankRow extends StatelessWidget {
     final nivel = (fila['nivel'] as num?)?.toInt() ?? 1;
     final exp = (fila['experiencia'] as num?)?.toInt() ?? 0;
     final vic = (fila['victorias'] as num?)?.toInt() ?? 0;
-    final der = (fila['derrotas'] as num?)?.toInt() ?? 0;
     final img = (fila['imagenPerfil'] as String?) ?? '';
 
     final primario = war.primario;
     final tenue = war.textoTenue;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-      decoration: BoxDecoration(
-        color:
-            esYo ? primario.withOpacity(0.14) : war.superficie.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: esYo ? primario : primario.withOpacity(0.15),
-          width: esYo ? 2 : 1,
+    final uid = (fila['uid'] as String?) ?? '';
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: uid.isEmpty
+          ? null
+          : () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => PerfilPublicoScreen(
+                  uid: uid,
+                  alias: nombre,
+                  imagen: img,
+                  nivel: nivel,
+                  experiencia: exp,
+                  victorias: vic,
+                ),
+              )),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: esYo
+              ? primario.withOpacity(0.14)
+              : war.superficie.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: esYo ? primario : primario.withOpacity(0.15),
+            width: esYo ? 2 : 1,
+          ),
         ),
-      ),
-      child: Row(
-        children: [
-          // Posición.
-          SizedBox(
-            width: 38,
-            child: Text(
-              '#$pos',
-              style: TextStyle(
-                fontFamily: 'Cinzel',
-                fontWeight: FontWeight.bold,
-                fontSize: 15,
-                color: pos <= 3 ? primario : tenue,
+        child: Row(
+          children: [
+            // Posición.
+            SizedBox(
+              width: 38,
+              child: Text(
+                '#$pos',
+                style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                  color: pos <= 3 ? primario : tenue,
+                ),
               ),
             ),
-          ),
-          // Avatar.
-          _Avatar(url: img, color: primario),
-          const SizedBox(width: 10),
-          // Alias + nivel.
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  nombre,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: war.texto,
+            // Avatar.
+            _Avatar(url: img, color: primario),
+            const SizedBox(width: 10),
+            // Alias + nivel.
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    nombre,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: war.texto,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text('Nivel $nivel · $exp XP',
-                    style: TextStyle(fontSize: 12, color: tenue)),
+                  const SizedBox(height: 2),
+                  Text('Nivel $nivel · $exp XP',
+                      style: TextStyle(fontSize: 12, color: tenue)),
+                ],
+              ),
+            ),
+            // Victorias.
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text('$vic V',
+                    style: const TextStyle(
+                        color: Color(0xFF4ABB58),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13)),
               ],
             ),
-          ),
-          // Victorias / derrotas.
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text('$vic V',
-                  style: const TextStyle(
-                      color: Color(0xFF4ABB58),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13)),
-              Text('$der D',
-                  style: const TextStyle(
-                      color: Color(0xFFC04040),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13)),
-            ],
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

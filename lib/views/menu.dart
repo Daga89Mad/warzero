@@ -14,11 +14,14 @@ import 'package:warzero/views/centro_mando_screen.dart';
 import 'package:warzero/views/historias_screen.dart';
 import 'package:warzero/views/perfil_screen.dart';
 import 'package:warzero/views/ranking_screen.dart';
+import 'package:warzero/views/tienda_screen.dart';
+import 'package:warzero/views/amigos_screen.dart';
 import 'package:warzero/views/edicion_cartas_screen.dart';
 import 'package:warzero/views/edicion_historias_screen.dart';
 import 'package:warzero/views/edicion_skins_screen.dart';
 import 'package:warzero/views/edicion_mapas_screen.dart';
 import 'package:warzero/views/edicion_bots_screen.dart';
+import 'package:warzero/views/edicion_tienda_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -157,6 +160,22 @@ class MenuScreen extends StatelessWidget {
                       ),
                     ),
                     _MenuTile(
+                      icon: Icons.hexagon_outlined,
+                      label: 'NEXO',
+                      sublabel: 'Tu red de\nNexos',
+                      accent: const Color(0xFF9B5CFF),
+                      enabled: false,
+                    ),
+                    _MenuTile(
+                      icon: Icons.storefront_outlined,
+                      label: 'TIENDA',
+                      sublabel: 'Marcos, iconos,\nofertas y packs',
+                      accent: const Color(0xFFE0B040),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const TiendaScreen()),
+                      ),
+                    ),
+                    _MenuTile(
                       icon: Icons.auto_stories_outlined,
                       label: 'HISTORIAS',
                       sublabel: 'Relatos por\nejército',
@@ -173,6 +192,35 @@ class MenuScreen extends StatelessWidget {
                       accent: const Color(0xFF40C0D0),
                       onTap: () => Navigator.of(context).push(
                         MaterialPageRoute(builder: (_) => const PerfilScreen()),
+                      ),
+                    ),
+                    _MenuTile(
+                      icon: Icons.emoji_events_outlined,
+                      label: 'RANKINGS',
+                      sublabel: 'Clasificaciones\nglobales',
+                      accent: const Color(0xFFD06040),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const RankingScreen()),
+                      ),
+                    ),
+                    _MenuTile(
+                      icon: Icons.group_outlined,
+                      label: 'AMIGOS',
+                      sublabel: 'Tu lista de\namigos',
+                      accent: const Color(0xFF40C08A),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const AmigosScreen()),
+                      ),
+                    ),
+                    _MenuTile(
+                      icon: Icons.settings_outlined,
+                      label: 'AJUSTES',
+                      sublabel: 'Configuración\ny cuenta',
+                      accent: const Color(0xFF4060D0),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const SettingsScreen()),
                       ),
                     ),
                     if (puedeEditar)
@@ -230,26 +278,17 @@ class MenuScreen extends StatelessWidget {
                               builder: (_) => const EdicionBotsScreen()),
                         ),
                       ),
-                    _MenuTile(
-                      icon: Icons.emoji_events_outlined,
-                      label: 'RANKINGS',
-                      sublabel: 'Clasificaciones\nglobales',
-                      accent: const Color(0xFFD06040),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const RankingScreen()),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.storefront,
+                        label: 'ED. TIENDA',
+                        sublabel: 'Editar artículos\nde la tienda',
+                        accent: const Color(0xFFD0A020),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionTiendaScreen()),
+                        ),
                       ),
-                    ),
-                    _MenuTile(
-                      icon: Icons.settings_outlined,
-                      label: 'AJUSTES',
-                      sublabel: 'Configuración\ny cuenta',
-                      accent: const Color(0xFF4060D0),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const SettingsScreen()),
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -301,82 +340,129 @@ class _MenuTile extends StatelessWidget {
   final String label;
   final String sublabel;
   final Color accent;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final bool enabled;
 
   const _MenuTile({
     required this.icon,
     required this.label,
     required this.sublabel,
     required this.accent,
-    required this.onTap,
+    this.onTap,
+    this.enabled = true,
     Key? key,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     final war = context.war;
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: war.superficie,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: accent.withOpacity(0.25), width: 1),
-          boxShadow: [
-            BoxShadow(
-              color: accent.withOpacity(0.05),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
+    final contenido = Container(
+      decoration: BoxDecoration(
+        color: war.superficie,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accent.withOpacity(0.25), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withOpacity(0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: accent.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: accent.withOpacity(0.30), width: 1),
+              ),
+              child: Icon(icon, size: 20, color: accent),
+            ),
+            const Spacer(),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: accent,
+                fontFamily: 'Cinzel',
+                letterSpacing: 1.5,
+              ),
+            ),
+            const SizedBox(height: 3),
+            Flexible(
+              child: Text(
+                sublabel,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 9,
+                  color: war.textoTenue,
+                  fontFamily: 'Cinzel',
+                  height: 1.6,
+                  letterSpacing: 0.5,
+                ),
+              ),
             ),
           ],
         ),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 38,
-                height: 38,
-                decoration: BoxDecoration(
-                  color: accent.withOpacity(0.10),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: accent.withOpacity(0.30), width: 1),
-                ),
-                child: Icon(icon, size: 20, color: accent),
-              ),
-              const Spacer(),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                  color: accent,
-                  fontFamily: 'Cinzel',
-                  letterSpacing: 1.5,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Flexible(
-                child: Text(
-                  sublabel,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 9,
-                    color: war.textoTenue,
-                    fontFamily: 'Cinzel',
-                    height: 1.6,
-                    letterSpacing: 0.5,
+      ),
+    );
+
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: enabled
+          ? contenido
+          : Stack(
+              fit: StackFit.expand,
+              children: [
+                Opacity(opacity: 0.45, child: contenido),
+                Positioned.fill(
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.28),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: war.superficie,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: accent.withOpacity(0.7), width: 1),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.lock_outline, size: 11, color: accent),
+                          const SizedBox(width: 5),
+                          Text(
+                            'PRÓXIMAMENTE',
+                            style: TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 8,
+                              letterSpacing: 1,
+                              fontWeight: FontWeight.bold,
+                              color: accent,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-      ),
+              ],
+            ),
     );
   }
 }

@@ -29,6 +29,7 @@ import '../services/habilidad_service.dart';
 import '../services/pending_revert_store.dart';
 import 'cuartel_screen.dart';
 import 'puntuaciones_screen.dart';
+import 'recompensas_batalla_screen.dart';
 
 /// Silueta fantasma de una carta en su celda de origen (revisión post-cierre).
 /// Es estructuralmente idéntico a `RevisionFantasma` de board_widget.dart (los
@@ -205,6 +206,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Regla: una carta base solo puede evolucionar si su evolución está aquí
   /// (poseer la base NO implica poseer la evolución). Se rellena en initState.
   final Set<String> _evolucionesPoseidas = {};
+
+  /// ¿El backend devolvió la lista `evolucionesPoseidas`? Si NO (backend antiguo
+  /// aún sin desplegar), NO se aplica la restricción, para no bloquear TODAS las
+  /// evoluciones por un despliegue a medias (fail-open).
+  bool _restriccionEvolucionActiva = false;
+
   bool _evolucionesPoseidasCargadas = false;
 
   /// Última carta robada (para mostrarla en el informe del turno).
@@ -228,6 +235,64 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// statsPartida.{uid}.robosComprados para que el precio no se reinicie al
   /// reentrar a la partida.
   int _robosComprados = 0;
+
+  /// True cuando este jugador ya ha ejecutado su única DESCARGA de la partida.
+  /// Se persiste en statsPartida.{uid}.descargaUsada.
+  bool _descargaUsada = false;
+
+  /// coord del cuartel -> turno en que se ejecutó DESCARGA.
+  /// Lo envía el servidor en `descargasCuartel`.
+  Map<String, int> _descargasCuartel = {};
+
+  Map<String, int> _descargasCuartelFromData(Map<String, dynamic> data) {
+    final raw = data['descargasCuartel'];
+
+    if (raw is! Map) {
+      return {};
+    }
+
+    final result = <String, int>{};
+
+    for (final entry in raw.entries) {
+      final value = entry.value;
+
+      if (value is num) {
+        result[entry.key.toString()] = value.toInt();
+      }
+    }
+
+    return result;
+  }
+
+  /// Defensa BASE efectiva del cuartel teniendo en cuenta DESCARGA.
+  ///
+  /// servidor:
+  ///   diff 0 ->  0
+  ///   diff 1 -> 10
+  ///   diff 2 -> 20
+  ///   diff 3 -> 30
+  ///   diff 4 -> 40
+  int _defensaCuartelActual(String? coord) {
+    if (coord == null) return 40;
+
+    final turnoDescarga = _descargasCuartel[coord];
+
+    if (turnoDescarga == null) {
+      return 40;
+    }
+
+    final diff = _boardState.turnoActual - turnoDescarga;
+
+    if (diff >= 4) {
+      return 40;
+    }
+
+    if (diff <= 0) {
+      return 0;
+    }
+
+    return 40 * diff ~/ 4;
+  }
 
   /// Precio del PRÓXIMO robo de carta en el cuartel.
   int get _precioRoboActual => 100 * (1 << _robosComprados);
@@ -435,7 +500,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _api.despertar();
     }
     _cargarEvolucionesPoseidas();
-    _loadGame();
+
     _loadGame();
   }
 
@@ -551,29 +616,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  // ── Evoluciones que el jugador POSEE (regla de evolución) ──
-  /// Carga desde el servidor las evoluciones que el jugador tiene en su
-  /// colección. Se usa para permitir/impedir evolucionar en el tablero: tener
-  /// la carta base NO implica tener su evolución. Hace setState para refrescar
-  /// los botones de evolución del sidebar.
   Future<void> _cargarEvolucionesPoseidas() async {
     try {
       final data = await _api.obtenerColeccion(widget.localPlayerUid);
-      final ids = ((data?['evolucionesPoseidas'] as List?) ?? const [])
-          .map((e) => e.toString())
-          .where((s) => s.isNotEmpty)
-          .toSet();
+      final raw = data?['evolucionesPoseidas'];
       if (!mounted) return;
       setState(() {
-        _evolucionesPoseidas
-          ..clear()
-          ..addAll(ids);
+        _evolucionesPoseidas.clear();
+        if (raw is List) {
+          // Backend NUEVO: sí restringimos según lo que posea el jugador.
+          _restriccionEvolucionActiva = true;
+          _evolucionesPoseidas.addAll(
+            raw.map((e) => e.toString()).where((s) => s.isNotEmpty),
+          );
+        } else {
+          // Backend ANTIGUO (campo ausente): NO restringir → no bloquear todo.
+          _restriccionEvolucionActiva = false;
+        }
         _evolucionesPoseidasCargadas = true;
       });
+      debugPrint('[WZ][evo] restriccion=$_restriccionEvolucionActiva '
+          'poseidas=${_evolucionesPoseidas.length}');
     } catch (_) {
-      // Sin bloqueo permanente ante fallos de red: se reintenta de forma
-      // perezosa la primera vez que se intente evolucionar.
       _evolucionesPoseidasCargadas = false;
+      _restriccionEvolucionActiva = false;
     }
   }
 
@@ -602,7 +668,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       await _cargarEvolucionesPoseidas();
     }
     if (!mounted) return;
-    if (_evolucionesPoseidasCargadas &&
+    if (_restriccionEvolucionActiva &&
         !_evolucionesPoseidas.contains(evolucion.id)) {
       _toast('No posees la evolución de esta carta.', error: true);
       return;
@@ -1203,16 +1269,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         if (rawStats.containsKey(widget.localPlayerUid)) {
           final myS =
               Map<String, dynamic>.from(rawStats[widget.localPlayerUid] as Map);
+
           puntosRestaurados = (myS['energies'] as num?)?.toInt() ?? 0;
-          // Especiales ya compradas por el jugador esta partida.
+
           final compradas = myS['especialesCompradas'] as List?;
           if (compradas != null) {
             _especialesCompradas
               ..clear()
               ..addAll(compradas.map((e) => e.toString()));
           }
-          // Robos de cuartel ya realizados (precio creciente del robo).
+
           _robosComprados = (myS['robosComprados'] as num?)?.toInt() ?? 0;
+
+          // DESCARGA: una sola vez por jugador y partida.
+          _descargaUsada = myS['descargaUsada'] == true;
         } else {
           // Primera vez: el servidor ya asigna energías en POST /warzero/entrar,
           // pero por robustez las fijamos también vía API (increment sobre campo
@@ -1272,6 +1342,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           final coord = entradasObel[i].value as String;
           colors[uid] = _colorJugadorPorIndice(i);
           obeliscosMap[uid] = coord;
+        } // El obelisco (cuartel) de cada jugador SÍ cambia durante la partida
+        // (se conquistan cuarteles, hay eliminados), así que lo seguimos
+        // guardando para pintar el cristal. Pero el COLOR NO debe salir de aquí:
+        // si se ordena por la coord del obelisco, al capturar/eliminar cambia el
+        // orden y a todos se les reasigna el color. El color se ata al orden
+        // ESTABLE de jugadores del lobby (mismo array en todos los clientes,
+        // conserva a los eliminados) → color fijo por uid toda la partida.
+        for (final e in obeliscosData.entries) {
+          obeliscosMap[e.key] = e.value as String;
+        }
+        for (var i = 0; i < lobby.jugadores.length; i++) {
+          colors[lobby.jugadores[i].uid] = _colorJugadorPorIndice(i);
         }
         // Extraer el cuartel del jugador local y del oponente directamente
         // del doc. Respaldo: el obelisco que el servidor dice haber asignado.
@@ -1302,6 +1384,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _localPlayer.puntos = puntosRestaurados;
           _playerColors = colors;
           _obeliscosPorJugador = obeliscosMap;
+          _descargasCuartel = _descargasCuartelFromData(data);
           if (obeliscoLocalDoc != null) _obeliscoLocal = obeliscoLocalDoc;
           if (obeliscoOponenteDoc != null) {
             _obeliscoOponente = obeliscoOponenteDoc;
@@ -1660,13 +1743,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final streamObeliscos = <String, String>{};
       // Color por jugador con paleta de 8 (orden estable por coord), igual que
       // en _loadGame, para que coincida entre carga inicial y sondeo.
-      final entradasObelStream = obelData.entries.toList()
-        ..sort((a, b) => a.value.toString().compareTo(b.value.toString()));
-      for (var i = 0; i < entradasObelStream.length; i++) {
-        final uid = entradasObelStream[i].key;
-        final coord = entradasObelStream[i].value as String;
-        streamColors[uid] = _colorJugadorPorIndice(i);
-        streamObeliscos[uid] = coord;
+      // Mismo criterio que en _loadGame: obeliscos para el cristal, pero el
+      // COLOR se ata al orden ESTABLE de jugadores del lobby, no a la coord del
+      // obelisco (que cambia al conquistar cuarteles y reasignaba colores).
+      for (final e in obelData.entries) {
+        streamObeliscos[e.key] = e.value as String;
+      }
+      for (var i = 0; i < lobby.jugadores.length; i++) {
+        streamColors[lobby.jugadores[i].uid] = _colorJugadorPorIndice(i);
       }
 
       // ── Actualizar eliminados ─────────────────────────────────
@@ -1682,6 +1766,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _cerradoPor = List<String>.from(lobby.cerradoPor);
         _jugadoresEnPartida = lobby.jugadores.length;
         _modoTurno = lobby.modoTurno;
+        _descargasCuartel = _descargasCuartelFromData(data);
         if (streamColors.isNotEmpty) _playerColors = streamColors;
         if (streamObeliscos.isNotEmpty) _obeliscosPorJugador = streamObeliscos;
         _currentLobby = lobby;
@@ -1802,11 +1887,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         if (rawSt.containsKey(widget.localPlayerUid)) {
           final myS =
               Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
-          final pts = (myS['energies'] as num?)?.toInt() ?? 0;
-          if (pts != _localPlayer.puntos) {
+          final pts = (myS['energies'] as num?)?.toInt() ?? _localPlayer.puntos;
+
+          final descargaUsada = myS['descargaUsada'] == true;
+
+          if (pts != _localPlayer.puntos || descargaUsada != _descargaUsada) {
             setState(() {
               _localPlayer.puntos = pts;
-              _puntosInicial = pts; // sincronizar snapshot de inicio de turno
+              _puntosInicial = pts;
+              _descargaUsada = descargaUsada;
             });
           }
         }
@@ -2254,6 +2343,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => CuartelScreen(
         ejercitoId: _miEjercitoId,
+        uid: widget.localPlayerUid,
         energiasIniciales: _localPlayer.puntos,
         puedeComprar: puedeComprar,
         compradasIniciales: _especialesCompradas,
@@ -3376,42 +3466,63 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _toast('No puedes usar la descarga ahora.', error: true);
       return;
     }
+
+    if (_descargaUsada) {
+      _toast(
+        'Ya has utilizado la descarga en esta partida.',
+        error: true,
+      );
+      return;
+    }
+
     if (_obeliscoLocal != coord) {
       _toast('La descarga solo se usa en tu cuartel.', error: true);
       return;
     }
+
     final idx = _accionesPendientes
         .indexWhere((a) => a.esDescarga && a.origen == coord);
+
     if (idx >= 0) {
-      // Cancelar: reembolsar el coste.
+      // Mientras todavía NO se ha cerrado el turno se puede cancelar.
       setState(() {
         final a = _accionesPendientes.removeAt(idx);
         _localPlayer.puntos += a.costePagado;
       });
+
       _toast('Descarga cancelada.');
       return;
     }
+
     if (_localPlayer.puntos < kDescargaCoste) {
       _toast(
-          'Energías insuficientes (${_localPlayer.puntos} / $kDescargaCoste).',
-          error: true);
+        'Energías insuficientes '
+        '(${_localPlayer.puntos} / $kDescargaCoste).',
+        error: true,
+      );
       return;
     }
+
     setState(() {
-      _accionesPendientes.add(AccionPendiente(
-        habilidadId: 0,
-        uid: _localPlayer.datos.uid,
-        zona: _localPlayer.zona,
-        origen: coord,
-        objetivos: [coord],
-        turno: _boardState.turnoActual,
-        esDescarga: true,
-        costePagado: kDescargaCoste,
-      ));
+      _accionesPendientes.add(
+        AccionPendiente(
+          habilidadId: 0,
+          uid: _localPlayer.datos.uid,
+          zona: _localPlayer.zona,
+          origen: coord,
+          objetivos: [coord],
+          turno: _boardState.turnoActual,
+          esDescarga: true,
+          costePagado: kDescargaCoste,
+        ),
+      );
+
       _localPlayer.puntos -= kDescargaCoste;
     });
+
     _toast(
-        'Descarga armada: al resolver morirá todo lo que haya en tu cuartel.');
+      'Descarga armada: al resolver morirá todo lo que haya en tu cuartel.',
+    );
   }
 
   /// Construye la AccionPendiente final, descuenta energías y la añade a
@@ -4171,6 +4282,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       setState(() {
         _cerradoPor = cerradoPor;
         if (jugadores.isNotEmpty) _jugadoresEnPartida = jugadores.length;
+        _descargasCuartel = _descargasCuartelFromData(estado);
       });
       _maybeMostrarInforme(turnoActual, estado);
 
@@ -4230,15 +4342,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // BUG QAS #2: mano/mazo llegan del servidor con la carta ya repartida.
         _sincronizarManoDesdeEstado(estado);
 
-        // Refrescar energías del nuevo turno desde el estado.
         final rawSt = estado['statsPartida'] as Map<String, dynamic>? ?? {};
+
         if (rawSt.containsKey(widget.localPlayerUid)) {
           final myS =
               Map<String, dynamic>.from(rawSt[widget.localPlayerUid] as Map);
+
           final pts = (myS['energies'] as num?)?.toInt() ?? _localPlayer.puntos;
+          final descargaUsada = myS['descargaUsada'] == true;
+
           setState(() {
             _localPlayer.puntos = pts;
             _puntosInicial = pts;
+            _descargaUsada = descargaUsada;
           });
         } else {
           _puntosInicial = _localPlayer.puntos;
@@ -4461,10 +4577,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         actions: [
           TextButton(
             onPressed: () {
-              Navigator.of(context).pop();
-              Navigator.of(context).pop();
+              Navigator.of(context).pop(); // cierra el mensaje de victoria
+              _flujoFinPartida(); // tabla de puntuaciones → recompensas → menú
             },
-            child: Text('SALIR AL MENÚ',
+            child: Text('CONTINUAR',
                 style: TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 10,
@@ -4475,6 +4591,47 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  /// Secuencia de cierre de partida: al cerrar el mensaje de victoria/derrota se
+  /// muestra la tabla de PUNTUACIONES; al cerrarla, la pantalla de RECOMPENSAS
+  /// DE BATALLA; al cerrarla, se sale al menú.
+  Future<void> _flujoFinPartida() async {
+    final lobby = _currentLobby;
+    final localUid = _localPlayer.datos.uid;
+
+    final filas = (lobby?.jugadores ?? const []).map((j) {
+      final s = lobby!.statsDeJugador(j.uid);
+      return PuntuacionJugador(
+        alias: j.alias,
+        color: _colorDeUid(j.uid),
+        victorias: s.victorias,
+        derrotas: s.derrotas,
+        pc: s.pc,
+        eliminado: lobby.jugadoresEliminados.contains(j.uid),
+        esLocal: j.uid == localUid,
+      );
+    }).toList();
+
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PuntuacionesScreen(
+        nombrePartida: lobby?.nombre ?? 'Partida',
+        jugadores: filas,
+      ),
+    ));
+    if (!mounted) return;
+
+    final pcLocal = lobby?.statsDeJugador(localUid).pc ?? 0;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RecompensasBatallaScreen(
+        pc: pcLocal,
+        ejercitoId: _miEjercitoId,
+        esGanador: _ganadorUid == widget.localPlayerUid,
+      ),
+    ));
+    if (!mounted) return;
+
+    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
   void _toast(String msg, {bool error = false}) {
@@ -4763,15 +4920,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 resolveEvolucion: _resolveEvolucion,
                 onEvolucionar:
                     _estoyEliminado ? (_, __, ___) async {} : _evolucionarCarta,
-                evolucionesPoseidas: _evolucionesPoseidas,
+                evolucionesPoseidas:
+                    _restriccionEvolucionActiva ? _evolucionesPoseidas : null,
                 turnoActual: _boardState.turnoActual, // NUEVO
                 onLanzarHabilidad: // NUEVO
                     _estoyEliminado ? null : _iniciarAccionDesdeTablero,
+                // Defensa real del cuartel.
+                defensaCuartelActual: _defensaCuartelActual(_sidebarCoord),
                 // Descarga: solo en el cuartel propio (sidebar lo restringe con
                 // isObelisco && !isEnemyObelisco).
-                onDescarga: (_estoyEliminado || _sidebarCoord == null)
-                    ? null
-                    : () => _toggleDescarga(_sidebarCoord!),
+                onDescarga:
+                    (_estoyEliminado || _sidebarCoord == null || _descargaUsada)
+                        ? null
+                        : () => _toggleDescarga(_sidebarCoord!),
                 descargaArmada: _sidebarCoord != null &&
                     _accionesPendientes
                         .any((a) => a.esDescarga && a.origen == _sidebarCoord),

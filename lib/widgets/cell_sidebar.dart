@@ -78,6 +78,10 @@ class CellSidebar extends StatefulWidget {
   /// Coste en energías de la descarga.
   final int descargaCoste;
 
+  /// Defensa BASE efectiva del cuartel.
+  /// Normalmente 40; tras DESCARGA puede ser 0, 10, 20 o 30.
+  final int defensaCuartelActual;
+
   /// Defensa base de cualquier cuartel general.
   static const int defensaBase = 40;
 
@@ -105,6 +109,7 @@ class CellSidebar extends StatefulWidget {
     this.onDescarga,
     this.descargaArmada = false,
     this.descargaCoste = kDescargaCoste,
+    this.defensaCuartelActual = CellSidebar.defensaBase,
   });
 
   @override
@@ -184,19 +189,21 @@ class _CellSidebarState extends State<CellSidebar> {
     final int? defensa;
     int defensaReducida = 0;
     if (widget.isEnemyObelisco) {
-      defensa = CellSidebar.defensaBase;
+      defensa = widget.defensaCuartelActual;
     } else if (widget.isObelisco) {
-      defensa =
-          CellSidebar.defensaBase + (widget.celda?.defensaTotalEfectiva ?? 0);
+      defensa = widget.defensaCuartelActual +
+          (widget.celda?.defensaTotalEfectiva ?? 0);
+
       defensaReducida = (widget.celda?.defensaTotal ?? 0) -
           (widget.celda?.defensaTotalEfectiva ?? 0);
     } else {
       final d = widget.celda?.defensaTotalEfectiva;
+
       defensa = (d != null && d > 0) ? d : null;
+
       defensaReducida = (widget.celda?.defensaTotal ?? 0) -
           (widget.celda?.defensaTotalEfectiva ?? 0);
     }
-
     // Movimiento mínimo entre cartas seleccionadas
     int? minMov;
     if (_selected.isNotEmpty) {
@@ -248,6 +255,7 @@ class _CellSidebarState extends State<CellSidebar> {
             ejercitos: ejercitos,
             isObelisco: widget.isObelisco,
             isEnemyObelisco: widget.isEnemyObelisco,
+            defensaCuartelActual: widget.defensaCuartelActual,
             onClose: widget.onClose,
           ),
           const Divider(color: Color(0x30503214), height: 1),
@@ -323,6 +331,7 @@ class _Header extends StatelessWidget {
   final List<_ArmyTotal> ejercitos;
   final bool isObelisco;
   final bool isEnemyObelisco;
+  final int defensaCuartelActual;
   final VoidCallback onClose;
 
   const _Header({
@@ -334,6 +343,7 @@ class _Header extends StatelessWidget {
     this.ejercitos = const [],
     required this.isObelisco,
     required this.isEnemyObelisco,
+    required this.defensaCuartelActual,
     required this.onClose,
   });
 
@@ -475,7 +485,9 @@ class _Header extends StatelessWidget {
                       Icon(Icons.shield, size: 11, color: hqColor),
                       const SizedBox(width: 4),
                       Text(
-                        'DEFENSA BASE  ${CellSidebar.defensaBase}',
+                        defensaCuartelActual < CellSidebar.defensaBase
+                            ? 'DEFENSA  $defensaCuartelActual  · RECUPERANDO'
+                            : 'DEFENSA  $defensaCuartelActual',
                         style: TextStyle(
                             fontSize: 8,
                             color: hqColor,
@@ -750,7 +762,7 @@ class _Body extends StatelessWidget {
                       letterSpacing: 1.5)),
               const SizedBox(height: 4),
               const Text(
-                'El cuartel resiste con\ndefensa propia (40).',
+                'El cuartel resiste con\nsu defensa actual.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                     fontSize: 7,

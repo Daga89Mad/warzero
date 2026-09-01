@@ -19,7 +19,13 @@ class _MazoPerfil {
   final String nombre;
   final int ejercitoId;
   final bool esPrincipal;
-  final List<String> cartaIds; // IDs de cartas
+  final List<String> cartaIds; // IDs de cartas (mazo repartible, máx. 8)
+
+  /// IDs de cartas ESPECIALES seleccionadas para el cuartel (máx. 3). Se
+  /// guardan aparte de [cartaIds] porque las especiales NO se reparten: solo
+  /// definen cuáles pueden comprarse en el cuartel durante la partida.
+  final List<String> especialesIds;
+
   final int total;
 
   const _MazoPerfil({
@@ -28,6 +34,7 @@ class _MazoPerfil {
     required this.ejercitoId,
     required this.esPrincipal,
     required this.cartaIds,
+    this.especialesIds = const [],
     required this.total,
   });
 
@@ -39,6 +46,7 @@ class _MazoPerfil {
       ejercitoId: (d['ejercitoId'] as num?)?.toInt() ?? 1,
       esPrincipal: d['esPrincipal'] as bool? ?? false,
       cartaIds: List<String>.from(d['cartaIds'] as List? ?? []),
+      especialesIds: List<String>.from(d['especialesIds'] as List? ?? []),
       total: (d['total'] as num?)?.toInt() ?? 0,
     );
   }
@@ -51,6 +59,7 @@ class _MazoPerfil {
       ejercitoId: (d['ejercitoId'] as num?)?.toInt() ?? 1,
       esPrincipal: d['esPrincipal'] as bool? ?? false,
       cartaIds: List<String>.from(d['cartaIds'] as List? ?? []),
+      especialesIds: List<String>.from(d['especialesIds'] as List? ?? []),
       total: (d['total'] as num?)?.toInt() ?? 0,
     );
   }
@@ -136,6 +145,17 @@ class _MazoScreenState extends State<MazoScreen> {
       .where((c) =>
           c.ejercito == _selectedEjercitoId && !c.esEvolucion && !c.esEspecial)
       .toList();
+
+  /// Cartas ESPECIALES del ejército seleccionado, ordenadas de forma estable
+  /// (por número y luego coste) para que la preselección por defecto sea
+  /// determinista.
+  List<CartaModel> get _especialesDelEjercito => _todasLasCartas
+      .where((c) => c.ejercito == _selectedEjercitoId && c.esEspecial)
+      .toList()
+    ..sort((a, b) {
+      final n = a.numero.compareTo(b.numero);
+      return n != 0 ? n : a.coste.compareTo(b.coste);
+    });
 
   Future<void> _crearMazo() async {
     if (_mazosDelEjercito.length >= 3) {
@@ -223,6 +243,7 @@ class _MazoScreenState extends State<MazoScreen> {
       builder: (_) => _DeckBuilderScreen(
         mazo: mazo,
         cartasDisponibles: _cartasDelEjercito,
+        especialesDisponibles: _especialesDelEjercito,
         todasLasCartas: _todasLasCartas,
         uid: _uid,
         onSave: _loadData,
@@ -802,6 +823,10 @@ class _DeckBuilderScreen extends StatefulWidget {
   final _MazoPerfil mazo;
   final List<CartaModel> cartasDisponibles;
 
+  /// Cartas ESPECIALES del ejército, entre las que se eligen las (máx. 3) que
+  /// aparecerán en el cuartel durante la partida.
+  final List<CartaModel> especialesDisponibles;
+
   /// Lista COMPLETA de cartas del ejército (incluidas las de evolución, que
   /// `cartasDisponibles` no contiene). Se usa para resolver, en local, la carta
   /// a la que evoluciona cada carta base y así poder mostrar la flecha de
@@ -814,6 +839,7 @@ class _DeckBuilderScreen extends StatefulWidget {
   const _DeckBuilderScreen({
     required this.mazo,
     required this.cartasDisponibles,
+    required this.especialesDisponibles,
     required this.todasLasCartas,
     required this.uid,
     required this.onSave,
@@ -829,8 +855,13 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
   bool _saving = false;
 
   static const int _maxCartasMazo = 8;
+  static const int _maxEspeciales = 3;
+
+  /// IDs de especiales seleccionadas para el cuartel (máx. [_maxEspeciales]).
+  late Set<String> _especialesSel;
 
   int get _total => _cantidades.values.fold(0, (s, v) => s + v);
+  int get _totalEspeciales => _especialesSel.length;
 
   @override
   void initState() {
@@ -858,6 +889,68 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _persistirSaneo(saneados));
     }
+
+    // Especiales: preselección provisional a partir de lo que trae el perfil.
+    // Se refina con la lectura real de Firestore en [_cargarEspeciales].
+    _especialesSel = {...widget.mazo.especialesIds};
+    _cargarEspeciales();
+  }
+
+  /// Carga las especiales seleccionadas del mazo desde Firestore (fuente de
+  /// verdad, por si la API que llenó el perfil no incluía `especialesIds`) y
+  /// aplica los defaults:
+  ///   • Se descartan ids que ya no existan en el catálogo del ejército.
+  ///   • Si no hay ninguna guardada, se preseleccionan las del ejército
+  ///     (hasta [_maxEspeciales]) → así los 3 especiales existentes son las
+  ///     3 por defecto automáticamente.
+  ///   • Recorte de seguridad a [_maxEspeciales].
+  Future<void> _cargarEspeciales() async {
+    Set<String> sel = {...widget.mazo.especialesIds};
+    try {
+      final doc = await _db
+          .collection('Jugadores')
+          .doc(widget.uid)
+          .collection('Mazos')
+          .doc(widget.mazo.id)
+          .get();
+      final raw = doc.data()?['especialesIds'];
+      if (raw is List) sel = raw.map((e) => e.toString()).toSet();
+    } catch (_) {
+      // Silencioso: nos quedamos con la preselección del perfil.
+    }
+
+    final validas = widget.especialesDisponibles.map((c) => c.id).toSet();
+    sel = sel.where(validas.contains).toSet();
+
+    // Default: si no hay ninguna, preseleccionar las del ejército (≤ máx.).
+    if (sel.isEmpty) {
+      sel = widget.especialesDisponibles
+          .take(_maxEspeciales)
+          .map((c) => c.id)
+          .toSet();
+    } else if (sel.length > _maxEspeciales) {
+      sel = sel.take(_maxEspeciales).toSet();
+    }
+
+    if (mounted) setState(() => _especialesSel = sel);
+  }
+
+  void _toggleEspecial(String id) {
+    if (_especialesSel.contains(id)) {
+      setState(() => _especialesSel.remove(id));
+      return;
+    }
+    if (_especialesSel.length >= _maxEspeciales) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('El cuartel admite como máximo $_maxEspeciales '
+              'especiales'),
+          duration: Duration(seconds: 2),
+        ));
+      return;
+    }
+    setState(() => _especialesSel.add(id));
   }
 
   /// Reescribe en Firestore el mazo ya saneado (≤8, sin duplicados ni ids
@@ -901,6 +994,7 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
         .update({
       'cartaIds': expandido,
       'total': expandido.length,
+      'especialesIds': _especialesSel.toList(),
     });
     widget.onSave();
     if (mounted) {
@@ -999,45 +1093,209 @@ class _DeckBuilderScreenState extends State<_DeckBuilderScreen> {
           ),
         ],
       ),
-      body: widget.cartasDisponibles.isEmpty
-          ? Center(
-              child: Text(
-                'No hay cartas para este ejército.',
+      body: Column(
+        children: [
+          _buildEspecialesBar(),
+          Expanded(
+            child: widget.cartasDisponibles.isEmpty
+                ? Center(
+                    child: Text(
+                      'No hay cartas para este ejército.',
+                      style: TextStyle(
+                        color: war.textoTenue,
+                        fontFamily: 'Cinzel',
+                        fontSize: 11,
+                      ),
+                    ),
+                  )
+                : GridView.builder(
+                    padding: const EdgeInsets.all(12),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      childAspectRatio: 0.62,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                    ),
+                    itemCount: widget.cartasDisponibles.length,
+                    itemBuilder: (_, i) {
+                      final carta = widget.cartasDisponibles[i];
+                      final qty = _cantidades[carta.id] ?? 0;
+                      return _CardPickerTile(
+                        carta: carta,
+                        qty: qty,
+                        onTap: () => _toggle(carta.id),
+                        // Pulsación larga: abrir la carta en grande (misma
+                        // vista de detalle que en la colección / tablero). Se
+                        // pasa el resolvedor de evolución para que salga la
+                        // flecha que permite ver la carta a la que evoluciona.
+                        onLongPress: () => showCardDetail(
+                          context,
+                          carta,
+                          resolveEvolucion: _resolverEvolucion,
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Barra superior con las cartas ESPECIALES del ejército. El jugador elige
+  /// cuáles (máx. [_maxEspeciales]) aparecerán en el cuartel durante la
+  /// partida. Si el ejército no tiene especiales, no se muestra nada.
+  Widget _buildEspecialesBar() {
+    final war = context.war;
+    if (widget.especialesDisponibles.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: war.superficie,
+        border: Border(
+          bottom: BorderSide(color: war.primario.withOpacity(0.12)),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('⭐', style: TextStyle(fontSize: 12)),
+              const SizedBox(width: 6),
+              Text(
+                'ESPECIALES DEL CUARTEL',
                 style: TextStyle(
-                  color: war.textoTenue,
+                  fontSize: 10,
+                  color: war.primario,
                   fontFamily: 'Cinzel',
-                  fontSize: 11,
+                  letterSpacing: 1.5,
                 ),
               ),
-            )
-          : GridView.builder(
-              padding: const EdgeInsets.all(12),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                childAspectRatio: 0.62,
-                crossAxisSpacing: 8,
-                mainAxisSpacing: 8,
+              const Spacer(),
+              Text(
+                '$_totalEspeciales / $_maxEspeciales',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: war.textoTenue,
+                  fontFamily: 'Cinzel',
+                ),
               ),
-              itemCount: widget.cartasDisponibles.length,
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 96,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: widget.especialesDisponibles.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
               itemBuilder: (_, i) {
-                final carta = widget.cartasDisponibles[i];
-                final qty = _cantidades[carta.id] ?? 0;
-                return _CardPickerTile(
+                final carta = widget.especialesDisponibles[i];
+                return _EspecialPickerTile(
                   carta: carta,
-                  qty: qty,
-                  onTap: () => _toggle(carta.id),
-                  // Pulsación larga: abrir la carta en grande (misma vista de
-                  // detalle que en la colección / tablero). Se pasa el
-                  // resolvedor de evolución para que salga la flecha que
-                  // permite ver la carta a la que evoluciona.
-                  onLongPress: () => showCardDetail(
-                    context,
-                    carta,
-                    resolveEvolucion: _resolverEvolucion,
-                  ),
+                  selected: _especialesSel.contains(carta.id),
+                  onTap: () => _toggleEspecial(carta.id),
+                  onLongPress: () => showCardDetail(context, carta),
                 );
               },
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// TILE DE CARTA ESPECIAL (selector del cuartel)
+// ─────────────────────────────────────────────────────────────
+class _EspecialPickerTile extends StatelessWidget {
+  final CartaModel carta;
+  final bool selected;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  const _EspecialPickerTile({
+    required this.carta,
+    required this.selected,
+    required this.onTap,
+    this.onLongPress,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final accent = selected ? war.primario : war.borde;
+
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 74,
+        decoration: BoxDecoration(
+          color: selected ? war.primario.withOpacity(0.07) : war.fondo,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: accent.withOpacity(selected ? 0.55 : 0.20),
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        padding: const EdgeInsets.all(6),
+        child: Column(
+          children: [
+            Expanded(
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: carta.imagen.isNotEmpty
+                        ? Image.network(
+                            carta.imagen,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => Icon(
+                              Icons.star,
+                              size: 26,
+                              color: accent.withOpacity(0.5),
+                            ),
+                          )
+                        : Icon(Icons.star,
+                            size: 26, color: accent.withOpacity(0.5)),
+                  ),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: Icon(
+                      selected
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                      size: 14,
+                      color: selected
+                          ? war.primario
+                          : war.textoTenue.withOpacity(0.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              carta.nombre,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 7,
+                color: selected ? war.texto : war.textoTenue,
+                fontFamily: 'Cinzel',
+                letterSpacing: 0.3,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

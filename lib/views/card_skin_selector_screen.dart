@@ -17,6 +17,22 @@ import '../services/warzero_api.dart';
 //   + filtro adicional: solo las que están en skinsDesbloqueadas del jugador
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Una skin del inventario de la carta tal como la conoce el servidor en este
+/// momento (id + imagen + rareza + si el jugador la tiene desbloqueada).
+class SkinInventarioItem {
+  final String id;
+  final String imagen;
+  final String rareza;
+  final bool desbloqueada;
+
+  const SkinInventarioItem({
+    required this.id,
+    required this.imagen,
+    required this.rareza,
+    this.desbloqueada = false,
+  });
+}
+
 /// Resultado devuelto a CartasScreen al hacer pop.
 class SkinSelectorResult {
   /// null → diseño original (sin skin)
@@ -26,7 +42,19 @@ class SkinSelectorResult {
   /// Rareza de la skin aplicada ('comun' | 'rara' | 'epica' | 'legendaria').
   /// null cuando se vuelve al diseño original.
   final String? rareza;
-  const SkinSelectorResult({this.skinId, this.imagen, this.rareza});
+
+  /// Inventario COMPLETO de skins de la carta tal como lo acaba de leer el
+  /// servidor en este selector. Es la FUENTE DE VERDAD con la que la colección
+  /// reconcilia tanto la tira de números como el modo "Ver todo" (que pinta
+  /// cada skin como una celda). null cuando no se pudo determinar el inventario.
+  final List<SkinInventarioItem>? skinsInventario;
+
+  const SkinSelectorResult({
+    this.skinId,
+    this.imagen,
+    this.rareza,
+    this.skinsInventario,
+  });
 }
 
 class CardSkinSelectorScreen extends StatefulWidget {
@@ -207,6 +235,16 @@ class _CardSkinSelectorScreenState extends State<CardSkinSelectorScreen> {
         skinId: _selectedSkinId,
         imagen: imagenSeleccionada,
         rareza: rarezaSeleccionada,
+        // Inventario real y fresco de la carta para reconciliar la colección
+        // (tira de números y modo "Ver todo"), que pudo cargarse desfasada.
+        skinsInventario: _skins
+            .map((s) => SkinInventarioItem(
+                  id: s.id,
+                  imagen: s.imagen,
+                  rareza: s.rareza,
+                  desbloqueada: s.desbloqueada,
+                ))
+            .toList(),
       ));
     } catch (e) {
       if (mounted) {

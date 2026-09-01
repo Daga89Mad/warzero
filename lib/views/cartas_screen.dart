@@ -29,6 +29,10 @@ class _CartasScreenState extends State<CartasScreen>
   bool _loading = true;
   String? _error;
 
+  /// Modo "Ver todo": expande cada carta poseída mostrando, a continuación, sus
+  /// skins como celdas propias (desbloqueadas a color, bloqueadas atenuadas).
+  bool _verTodo = false;
+
   Map<String, CartaModel> _catalogoGlobal = {};
   Map<String, _ColeccionEntry> _coleccion = {};
   Map<int, List<CartaModel>> _cartasPorEjercito = {};
@@ -98,6 +102,18 @@ class _CartasScreenState extends State<CartasScreen>
           skinsDesbloqueadas:
               List<String>.from(m['skinsDesbloqueadas'] as List? ?? []),
           skinsExtraIds: List<String>.from(m['skinsExtraIds'] as List? ?? []),
+          skinsExtra: ((m['skinsExtra'] as List?) ?? [])
+              .map((raw) {
+                final s = Map<String, dynamic>.from(raw as Map);
+                return _SkinInfo(
+                  id: s['id']?.toString() ?? '',
+                  imagen: s['imagen']?.toString() ?? '',
+                  rareza: s['rareza']?.toString() ?? 'comun',
+                  desbloqueada: s['desbloqueada'] == true,
+                );
+              })
+              .where((s) => s.id.isNotEmpty)
+              .toList(),
           fechaObtenida: m['fechaObtenida'] is num
               ? DateTime.fromMillisecondsSinceEpoch(
                   (m['fechaObtenida'] as num).toInt())
@@ -261,12 +277,31 @@ class _CartasScreenState extends State<CartasScreen>
 
     setState(() {
       final prev = _coleccion[carta.id] ?? _ColeccionEntry(cartaId: carta.id);
+      // Reconciliar con el inventario REAL que el selector acaba de leer del
+      // servidor. Si la colección se cargó desfasada para esta carta (p. ej.
+      // skins añadidas después), tanto la tira de números como el modo "Ver
+      // todo" se corrigen al visitarla, en lugar de conservar el estado viejo.
+      final inv = result.skinsInventario;
+      final skinsExtra = inv != null
+          ? inv
+              .map((s) => _SkinInfo(
+                    id: s.id,
+                    imagen: s.imagen,
+                    rareza: s.rareza,
+                    desbloqueada: s.desbloqueada,
+                  ))
+              .toList()
+          : prev.skinsExtra;
       _coleccion[carta.id] = _ColeccionEntry(
         cartaId: carta.id,
         cantidad: prev.cantidad,
         skinSeleccionada: result.skinId,
-        skinsDesbloqueadas: prev.skinsDesbloqueadas,
-        skinsExtraIds: prev.skinsExtraIds,
+        skinsDesbloqueadas: inv != null
+            ? inv.where((s) => s.desbloqueada).map((s) => s.id).toList()
+            : prev.skinsDesbloqueadas,
+        skinsExtraIds:
+            inv != null ? inv.map((s) => s.id).toList() : prev.skinsExtraIds,
+        skinsExtra: skinsExtra,
         fechaObtenida: prev.fechaObtenida,
       );
       if (result.skinId == null) {
@@ -319,6 +354,16 @@ class _CartasScreenState extends State<CartasScreen>
     // varias básicas comparten la misma evolución.
     final evosPuestas = <String>{};
 
+    // Añade una carta poseída y, en modo "Ver todo", sus skins a continuación.
+    void agregarCartaConSkins(CartaModel carta, int numero) {
+      items.add(_GridItem.owned(carta, numero));
+      if (!_verTodo) return;
+      final entry = _coleccion[carta.id];
+      for (final s in (entry?.skinsExtra ?? const <_SkinInfo>[])) {
+        items.add(_GridItem.skin(s, carta));
+      }
+    }
+
     void agregarEvolucion(String idEvo) {
       if (idEvo.isEmpty) return;
       if (propios.contains(idEvo)) return; // ya aparece con su propio número
@@ -333,7 +378,7 @@ class _CartasScreenState extends State<CartasScreen>
       final poseida =
           slot.poseida && carta != null && _coleccion.containsKey(slot.cartaId);
       if (poseida) {
-        items.add(_GridItem.owned(carta!, slot.numero));
+        agregarCartaConSkins(carta!, slot.numero);
         usados.add(slot.cartaId);
         agregarEvolucion(carta.idEvolucion);
       } else {
@@ -347,7 +392,7 @@ class _CartasScreenState extends State<CartasScreen>
     // Poseídas sin número (no vienen en el catálogo numerado).
     for (final carta in (_cartasPorEjercito[ejercitoId] ?? const [])) {
       if (usados.contains(carta.id) || carta.numero > 0) continue;
-      items.add(_GridItem.owned(carta, 0));
+      agregarCartaConSkins(carta, 0);
       agregarEvolucion(carta.idEvolucion);
     }
     return items;
@@ -379,6 +424,10 @@ class _CartasScreenState extends State<CartasScreen>
             const Expanded(child: _ColeccionVaciaView())
           else ...[
             _buildTabBar(),
+            _VerTodoToggle(
+              value: _verTodo,
+              onChanged: (v) => setState(() => _verTodo = v),
+            ),
             Expanded(
               child: TabBarView(
                 controller: _tabController,
@@ -388,6 +437,7 @@ class _CartasScreenState extends State<CartasScreen>
                     coleccion: _coleccion,
                     imagenEfectiva: _imagenEfectiva,
                     onCardTap: _abrirDetalle,
+                    verTodo: _verTodo,
                   );
                 }).toList(),
               ),
@@ -577,7 +627,7 @@ class _JugadorStatsBar extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              const Text('💰', style: TextStyle(fontSize: 18)),
+              const Text('🪙', style: TextStyle(fontSize: 18)),
               Text(
                 '${stats.dinero}',
                 style: const TextStyle(
@@ -603,18 +653,29 @@ class _CartasGrid extends StatelessWidget {
   final String Function(CartaModel) imagenEfectiva;
   final void Function(CartaModel) onCardTap;
 
+  /// En modo "Ver todo" las skins ya se pintan como celdas propias, así que la
+  /// tira de números bajo cada carta se oculta (sería redundante).
+  final bool verTodo;
+
   const _CartasGrid({
     required this.items,
     required this.coleccion,
     required this.imagenEfectiva,
     required this.onCardTap,
+    this.verTodo = false,
   });
 
   List<bool> _flagsDe(CartaModel carta) {
     final entry = coleccion[carta.id];
+    // Fuente principal: inventario completo (con estado por skin).
+    final extra = entry?.skinsExtra ?? const <_SkinInfo>[];
+    if (extra.isNotEmpty) {
+      // nº 1 = diseño por defecto; 2..X = cada skin (resaltada si desbloqueada).
+      return <bool>[true, for (final s in extra) s.desbloqueada];
+    }
+    // Respaldo si el servidor aún no envía `skinsExtra`.
     final extraIds = entry?.skinsExtraIds ?? const <String>[];
     final unlocked = (entry?.skinsDesbloqueadas ?? const <String>[]).toSet();
-    // nº 1 = diseño por defecto (poseído al tener la carta); 2..X = extra.
     return <bool>[true, for (final id in extraIds) unlocked.contains(id)];
   }
 
@@ -632,6 +693,24 @@ class _CartasGrid extends StatelessWidget {
       itemCount: items.length,
       itemBuilder: (_, i) {
         final item = items[i];
+
+        // Celda de SKIN (modo "Ver todo").
+        if (item.esSkin) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _SkinCelda(
+                  skin: item.skin!,
+                  onTap: () => onCardTap(item.skinParent!),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const SizedBox(height: 13),
+            ],
+          );
+        }
+
         if (item.bloqueada) {
           return _LockedCarta(
               numero: item.numero, esEvolucion: item.esEvolucion);
@@ -639,8 +718,9 @@ class _CartasGrid extends StatelessWidget {
 
         final carta = item.carta!;
         final entry = coleccion[carta.id];
-        // Las evoluciones de preview se muestran sin tira de skins.
-        final flags = item.esEvolucion ? null : _flagsDe(carta);
+        // Sin tira en evoluciones (preview) ni en modo "Ver todo" (las skins ya
+        // se muestran como celdas propias a continuación de la carta).
+        final flags = (item.esEvolucion || verTodo) ? null : _flagsDe(carta);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -911,6 +991,172 @@ class _MiniCarta extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// TOGGLE "VER TODO"  (barra bajo las pestañas)
+//   Al activarse, cada carta poseída se expande mostrando sus skins.
+// ─────────────────────────────────────────────────────────────
+class _VerTodoToggle extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+  const _VerTodoToggle({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: war.fondo,
+          border:
+              Border(bottom: BorderSide(color: war.borde.withOpacity(0.35))),
+        ),
+        child: Row(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              width: 16,
+              height: 16,
+              decoration: BoxDecoration(
+                color: value ? war.primario : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                    color: value ? war.primario : war.borde, width: 1.2),
+              ),
+              child:
+                  value ? Icon(Icons.check, size: 12, color: war.fondo) : null,
+            ),
+            const SizedBox(width: 8),
+            Text('VER TODO',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                    letterSpacing: 1.5,
+                    fontWeight: FontWeight.bold,
+                    color: value ? war.primario : war.textoTenue)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('cartas y sus diseños',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 7.5,
+                      color: war.textoTenue.withOpacity(0.7))),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CELDA DE SKIN (modo "Ver todo")
+//   Desbloqueada → a color con borde de rareza. Bloqueada → atenuada + candado.
+// ─────────────────────────────────────────────────────────────
+class _SkinCelda extends StatelessWidget {
+  final _SkinInfo skin;
+  final VoidCallback onTap;
+  const _SkinCelda({required this.skin, required this.onTap});
+
+  Color _rarezaColor(String r) {
+    switch (r) {
+      case 'legendaria':
+        return const Color(0xFFFF9500);
+      case 'epica':
+        return const Color(0xFFA040FF);
+      case 'rara':
+        return const Color(0xFF3090FF);
+      default:
+        return const Color(0xFF506070);
+    }
+  }
+
+  String _rarezaCorta(String r) {
+    switch (r) {
+      case 'legendaria':
+        return 'LEGENDARIA';
+      case 'epica':
+        return 'ÉPICA';
+      case 'rara':
+        return 'RARA';
+      default:
+        return 'COMÚN';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final borde = _rarezaColor(skin.rareza);
+    final bloqueada = !skin.desbloqueada;
+
+    final img = skin.imagen.isNotEmpty
+        ? Image.network(skin.imagen,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const _PlaceholderArt())
+        : const _PlaceholderArt();
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: war.superficie,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: borde.withOpacity(bloqueada ? 0.35 : 0.85),
+            width: bloqueada ? 1 : 1.5,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(5),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              bloqueada
+                  ? ColorFiltered(
+                      colorFilter: const ColorFilter.mode(
+                          Colors.black54, BlendMode.darken),
+                      child: img,
+                    )
+                  : img,
+              // Etiqueta de rareza en la parte inferior.
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+                  color: borde.withOpacity(bloqueada ? 0.55 : 0.9),
+                  child: Text(
+                    _rarezaCorta(skin.rareza),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 6,
+                        letterSpacing: 0.5,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white),
+                  ),
+                ),
+              ),
+              if (bloqueada)
+                const Center(
+                    child: Icon(Icons.lock, size: 18, color: Colors.white70)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PlaceholderArt extends StatelessWidget {
   const _PlaceholderArt();
   @override
@@ -983,6 +1229,21 @@ class _ColeccionVaciaView extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // MODELOS LOCALES
 // ─────────────────────────────────────────────────────────────
+/// Una skin del inventario de una carta (para el modo "Ver todo" y la tira).
+class _SkinInfo {
+  final String id;
+  final String imagen;
+  final String rareza;
+  final bool desbloqueada;
+
+  const _SkinInfo({
+    required this.id,
+    required this.imagen,
+    required this.rareza,
+    required this.desbloqueada,
+  });
+}
+
 class _ColeccionEntry {
   final String cartaId;
   final int cantidad;
@@ -991,7 +1252,12 @@ class _ColeccionEntry {
 
   /// Ids (en orden) de las skins EXTRA existentes para esta carta. Sirve para
   /// pintar los números 1..X bajo la carta y saber cuáles están desbloqueadas.
+  /// (Se mantiene como respaldo si el servidor aún no envía `skinsExtra`.)
   final List<String> skinsExtraIds;
+
+  /// Inventario COMPLETO de skins de la carta (id + imagen + rareza + estado).
+  /// Fuente principal para la tira de números y para el modo "Ver todo".
+  final List<_SkinInfo> skinsExtra;
   final DateTime? fechaObtenida;
 
   const _ColeccionEntry({
@@ -1000,6 +1266,7 @@ class _ColeccionEntry {
     this.skinSeleccionada,
     this.skinsDesbloqueadas = const [],
     this.skinsExtraIds = const [],
+    this.skinsExtra = const [],
     this.fechaObtenida,
   });
 }
@@ -1034,16 +1301,25 @@ class _EjercitoPct {
   });
 }
 
-/// Celda de la rejilla: carta poseída, hueco bloqueado o evolución (preview).
+/// Celda de la rejilla: carta poseída, hueco bloqueado, evolución (preview) o
+/// —en modo "Ver todo"— una skin de una carta poseída.
 class _GridItem {
-  final CartaModel? carta; // null → bloqueada
+  final CartaModel? carta; // null → bloqueada o skin
+
   final int numero;
 
   /// True si es la evolución de otra carta (se muestra como celda propia, sin
   /// tira de skins).
   final bool esEvolucion;
 
-  const _GridItem._(this.carta, this.numero, this.esEvolucion);
+  /// Non-null → esta celda representa una SKIN (modo "Ver todo").
+  final _SkinInfo? skin;
+
+  /// Carta a la que pertenece la skin (para abrir su detalle al tocarla).
+  final CartaModel? skinParent;
+
+  const _GridItem._(this.carta, this.numero, this.esEvolucion,
+      {this.skin, this.skinParent});
   factory _GridItem.owned(CartaModel c, int numero) =>
       _GridItem._(c, numero, false);
   factory _GridItem.locked(int numero) => _GridItem._(null, numero, false);
@@ -1051,7 +1327,13 @@ class _GridItem {
 
   /// Evolución de una base bloqueada: se sabe que existe pero no se revela.
   factory _GridItem.evolucionLocked() => _GridItem._(null, 0, true);
-  bool get bloqueada => carta == null;
+
+  /// Celda de skin (modo "Ver todo"), asociada a su carta.
+  factory _GridItem.skin(_SkinInfo s, CartaModel parent) =>
+      _GridItem._(null, 0, false, skin: s, skinParent: parent);
+
+  bool get esSkin => skin != null;
+  bool get bloqueada => carta == null && skin == null;
 }
 
 class _JugadorStats {

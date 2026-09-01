@@ -29,6 +29,14 @@ class CompraResult {
 /// jugador durante el resto de la partida.
 class CuartelScreen extends StatefulWidget {
   final int? ejercitoId;
+
+  /// UID del jugador local. Se usa para leer, de su mazo en juego, las cartas
+  /// especiales seleccionadas (campo `especialesIds`) y así mostrar en el
+  /// cuartel SOLO esas (máximo 3). Si es null, o el mazo no tiene ninguna
+  /// seleccionada, se muestran todas las especiales del ejército (que por
+  /// defecto son 3).
+  final String? uid;
+
   final int energiasIniciales;
 
   /// True si el jugador puede comprar ahora (es su turno y no lo ha cerrado).
@@ -51,6 +59,7 @@ class CuartelScreen extends StatefulWidget {
   const CuartelScreen({
     super.key,
     required this.ejercitoId,
+    this.uid,
     required this.energiasIniciales,
     required this.puedeComprar,
     required this.compradasIniciales,
@@ -70,6 +79,15 @@ class _CuartelScreenState extends State<CuartelScreen> {
   late int _robosComprados; // nº de robos ya hechos (precio creciente)
   bool _robando = false;
 
+  /// Máximo de especiales que pueden aparecer en el cuartel (= las que se
+  /// seleccionan en el mazo).
+  static const int _maxEspeciales = 3;
+
+  /// IDs de especiales seleccionadas en el mazo en juego. Vacío ⇒ mostrar
+  /// todas las del ejército (las 3 por defecto). Se rellena de forma
+  /// asíncrona en [_cargarEspecialesDelMazo].
+  Set<String> _especialesDelMazo = {};
+
   // Colores semánticos que se mantienen fijos en cualquier tema.
   static const _energy = Color(0xFF2EA6FF); // Zero / energía
   static const _verde = Color(0xFF4ABB58); // comprado / disponible
@@ -84,6 +102,40 @@ class _CuartelScreenState extends State<CuartelScreen> {
     _energias = widget.energiasIniciales;
     _compradas = {...widget.compradasIniciales};
     _robosComprados = widget.robosCompradosIniciales;
+    _cargarEspecialesDelMazo();
+  }
+
+  /// Lee, del mazo del jugador para su ejército en juego, las especiales
+  /// seleccionadas (campo `especialesIds`). Prioriza el mazo marcado como
+  /// principal de ese ejército; si no hay, usa el primero. Silencioso: si
+  /// falla o no hay selección, se dejan todas las del ejército (default).
+  Future<void> _cargarEspecialesDelMazo() async {
+    final uid = widget.uid;
+    final ej = widget.ejercitoId;
+    if (uid == null || uid.isEmpty || ej == null) return;
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('Jugadores')
+          .doc(uid)
+          .collection('Mazos')
+          .where('ejercitoId', isEqualTo: ej)
+          .get();
+      if (snap.docs.isEmpty) return;
+
+      // Principal del ejército → si no, el primero.
+      final doc = snap.docs.firstWhere(
+        (d) => (d.data()['esPrincipal'] as bool?) ?? false,
+        orElse: () => snap.docs.first,
+      );
+      final raw = doc.data()['especialesIds'];
+      if (raw is! List || raw.isEmpty) return;
+
+      final ids = raw.map((e) => e.toString()).toSet();
+      if (!mounted) return;
+      setState(() => _especialesDelMazo = ids);
+    } catch (_) {
+      // Silencioso: el default (todas las del ejército) sigue siendo válido.
+    }
   }
 
   Future<void> _comprar(CartaModel carta) async {
@@ -297,11 +349,23 @@ class _CuartelScreenState extends State<CuartelScreen> {
           );
         }
 
-        final especiales = (snap.data?.docs ?? [])
+        var especiales = (snap.data?.docs ?? [])
             .map((d) => CartaModel.fromFirestore(d))
             .where((c) => c.ejercito == widget.ejercitoId)
             .toList()
           ..sort((a, b) => a.coste.compareTo(b.coste));
+
+        // Si el mazo tiene especiales seleccionadas, mostrar SOLO esas; si no,
+        // se muestran todas las del ejército (por defecto, las 3 existentes).
+        if (_especialesDelMazo.isNotEmpty) {
+          especiales = especiales
+              .where((c) => _especialesDelMazo.contains(c.id))
+              .toList();
+        }
+        // Tope de seguridad: nunca más de 3 en el cuartel.
+        if (especiales.length > _maxEspeciales) {
+          especiales = especiales.take(_maxEspeciales).toList();
+        }
 
         if (especiales.isEmpty) {
           return Center(

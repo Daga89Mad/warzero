@@ -38,6 +38,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
   int _nivel = 1;
   int _experiencia = 0;
   int _dinero = 0;
+  // Victorias de PARTIDA por tamaño de sala (2/4/6/8 jugadores).
+  int _vic2 = 0, _vic4 = 0, _vic6 = 0, _vic8 = 0;
   String _fechaRegistro = '';
 
   // Coleccionismo: % de completado por ejército y saldos de las 5 monedas Zero.
@@ -99,6 +101,10 @@ class _PerfilScreenState extends State<PerfilScreen> {
         _nivel = (d['nivel'] as num?)?.toInt() ?? 1;
         _experiencia = (d['experiencia'] as num?)?.toInt() ?? 0;
         _dinero = (d['dinero'] as num?)?.toInt() ?? 0;
+        _vic2 = (d['victorias2'] as num?)?.toInt() ?? 0;
+        _vic4 = (d['victorias4'] as num?)?.toInt() ?? 0;
+        _vic6 = (d['victorias6'] as num?)?.toInt() ?? 0;
+        _vic8 = (d['victorias8'] as num?)?.toInt() ?? 0;
         _fechaRegistro = fechaStr;
         _zeros = zeros;
         _porcentajes = porcentajes;
@@ -270,8 +276,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: _StatCard(
-                          icon: '💰',
-                          label: 'DINERO',
+                          icon: '🪙',
+                          label: 'Oro',
                           value: '$_dinero',
                           color: const Color(0xFFD4A800), // oro (semántico)
                         ),
@@ -280,6 +286,48 @@ class _PerfilScreenState extends State<PerfilScreen> {
                   ),
                   const SizedBox(height: 14),
                   _XpBar(nivel: _nivel, experiencia: _experiencia),
+                  const SizedBox(height: 28),
+                  _SectionLabel('VICTORIAS POR MODO'),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _StatCard(
+                          icon: '🏆',
+                          label: '2 JUGADORES',
+                          value: '$_vic2',
+                          color: war.primario,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _StatCard(
+                          icon: '🏆',
+                          label: '4 JUGADORES',
+                          value: '$_vic4',
+                          color: war.primario,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _StatCard(
+                          icon: '🏆',
+                          label: '6 JUGADORES',
+                          value: '$_vic6',
+                          color: war.primario,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _StatCard(
+                          icon: '🏆',
+                          label: '8 JUGADORES',
+                          value: '$_vic8',
+                          color: war.primario,
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 28),
                   _SectionLabel('COLECCIÓN POR EJÉRCITO'),
                   const SizedBox(height: 14),
@@ -310,23 +358,56 @@ class _AvatarPreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final war = context.war;
+    const nexoColor = Color(0xFF9B5CFF);
     return Center(
-      child: Container(
-        width: 100,
-        height: 100,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: war.superficie,
-          border: Border.all(color: war.primario.withOpacity(0.5), width: 2),
-        ),
-        child: ClipOval(
-          child: imageUrl.isNotEmpty
-              ? Image.network(
-                  imageUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const _AvatarPlaceholder(),
-                )
-              : const _AvatarPlaceholder(),
+      child: SizedBox(
+        width: 116,
+        height: 108,
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.bottomCenter,
+          children: [
+            Container(
+              width: 100,
+              height: 100,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: war.superficie,
+                border:
+                    Border.all(color: war.primario.withOpacity(0.5), width: 2),
+              ),
+              child: ClipOval(
+                child: imageUrl.isNotEmpty
+                    ? Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) =>
+                            const _AvatarPlaceholder(),
+                      )
+                    : const _AvatarPlaceholder(),
+              ),
+            ),
+            // Icono del NEXO, pequeño y arriba a la derecha (como un superíndice).
+            Positioned(
+              top: 0,
+              right: 6,
+              child: Container(
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: war.fondo,
+                  border: Border.all(color: nexoColor, width: 1.5),
+                  boxShadow: [
+                    BoxShadow(color: nexoColor.withOpacity(0.5), blurRadius: 8),
+                  ],
+                ),
+                child: const Icon(Icons.hexagon_outlined,
+                    size: 15, color: nexoColor),
+              ),
+            ),
+          ],
         ),
       ),
     );
