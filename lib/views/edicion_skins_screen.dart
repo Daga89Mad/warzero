@@ -184,8 +184,8 @@ class _SkinItem {
   final String rareza;
 
   /// Nº de veces que debe tocarte la carta al abrir sobres para poder comprar
-  /// esta skin. Solo aplica a skins NO legendarias; las legendarias tienen
-  /// `numeroCompra` = 0 y no se pueden comprar (se consiguen directamente).
+  /// esta skin. Aplica a TODAS las rarezas (incluidas las legendarias).
+  /// 0 = no comprable.
   final int numeroCompra;
 
   const _SkinItem({
@@ -195,9 +195,6 @@ class _SkinItem {
     required this.rareza,
     this.numeroCompra = 0,
   });
-
-  /// True si la skin es legendaria (no comprable, se obtiene directa).
-  bool get esLegendaria => rareza == 'legendaria';
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -260,11 +257,9 @@ class _SkinTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    skin.esLegendaria
-                        ? '✦ Directa (no comprable)'
-                        : skin.numeroCompra > 0
-                            ? 'Compra: ${skin.numeroCompra}× la carta'
-                            : 'No comprable',
+                    skin.numeroCompra > 0
+                        ? 'Compra: ${skin.numeroCompra}× la carta'
+                        : 'No comprable',
                     style: const TextStyle(
                         fontSize: 8,
                         fontFamily: 'Cinzel',
@@ -373,11 +368,9 @@ class _EditorSkinState extends State<_EditorSkin> {
       return;
     }
     setState(() => _saving = true);
-    // Las legendarias no se compran: numeroCompra = 0 siempre. El resto guarda
-    // el valor introducido (0 = no comprable por sobres).
-    final numeroCompra = _rareza == 'legendaria'
-        ? 0
-        : (int.tryParse(_numeroCompraCtrl.text.trim()) ?? 0);
+    // Todas las rarezas (legendarias incluidas) guardan el valor introducido
+    // (0 = no comprable por sobres).
+    final numeroCompra = int.tryParse(_numeroCompraCtrl.text.trim()) ?? 0;
     final data = <String, dynamic>{
       'cartaId': _cartaId,
       'imagen': _urlCtrl.text.trim(),
@@ -686,76 +679,46 @@ class _EditorSkinState extends State<_EditorSkin> {
 
           const SizedBox(height: 20),
 
-          // ── Nº DE VECES PARA COMPRAR (solo skins NO legendarias) ──
-          if (_rareza == 'legendaria')
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE0A020).withOpacity(0.08),
+          // ── Nº DE VECES PARA COMPRAR (todas las rarezas) ──
+          _label('Nº DE VECES PARA COMPRAR'),
+          const SizedBox(height: 6),
+          TextField(
+            controller: _numeroCompraCtrl,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            style: const TextStyle(
+                color: Color(0xFFE0D8C0), fontSize: 13, fontFamily: 'Cinzel'),
+            decoration: InputDecoration(
+              hintText: 'Ej: 5',
+              hintStyle:
+                  const TextStyle(color: Color(0xFF405060), fontSize: 12),
+              filled: true,
+              fillColor: const Color(0xFF0A1220),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(6),
-                border:
-                    Border.all(color: const Color(0xFFE0A020).withOpacity(0.4)),
+                borderSide: BorderSide(
+                    color: const Color(0xFF506070).withOpacity(0.35)),
               ),
-              child: const Row(
-                children: [
-                  Icon(Icons.workspace_premium,
-                      size: 18, color: Color(0xFFE0A020)),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Skin legendaria: no se puede comprar. Se obtiene '
-                      'directamente (al abrir sobres o por reparto).',
-                      style: TextStyle(
-                          fontSize: 10,
-                          height: 1.4,
-                          color: Color(0xFFE0C060),
-                          fontFamily: 'Cinzel'),
-                    ),
-                  ),
-                ],
-              ),
-            )
-          else ...[
-            _label('Nº DE VECES PARA COMPRAR'),
-            const SizedBox(height: 6),
-            TextField(
-              controller: _numeroCompraCtrl,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              style: const TextStyle(
-                  color: Color(0xFFE0D8C0), fontSize: 13, fontFamily: 'Cinzel'),
-              decoration: InputDecoration(
-                hintText: 'Ej: 5',
-                hintStyle:
-                    const TextStyle(color: Color(0xFF405060), fontSize: 12),
-                filled: true,
-                fillColor: const Color(0xFF0A1220),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(6),
-                  borderSide: BorderSide(
-                      color: const Color(0xFF506070).withOpacity(0.35)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(6),
-                  borderSide: const BorderSide(color: _accent),
-                ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(6),
+                borderSide: const BorderSide(color: _accent),
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.only(top: 6),
-              child: Text(
-                'Veces que debe tocarte esta carta al abrir sobres para poder '
-                'comprar la skin. 0 = no comprable.',
-                style: TextStyle(
-                    fontSize: 8,
-                    color: Color(0xFF607080),
-                    fontFamily: 'Cinzel',
-                    height: 1.5),
-              ),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 6),
+            child: Text(
+              'Veces que debe tocarte esta carta al abrir sobres para poder '
+              'comprar la skin. 0 = no comprable.',
+              style: TextStyle(
+                  fontSize: 8,
+                  color: Color(0xFF607080),
+                  fontFamily: 'Cinzel',
+                  height: 1.5),
             ),
-          ],
+          ),
 
           // ── ENVIAR A TODOS LOS USUARIOS (solo editores) ──
           if (_puedeRepartir) ...[

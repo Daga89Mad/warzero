@@ -152,6 +152,17 @@ class GameConfig {
   static const int maxFilas = 26;
   static const int maxColumnas = 40;
 
+  /// MÍNIMO FUNCIONAL de la rejilla.
+  ///
+  /// Las bandas de despliegue son de 3 celdas de grosor: norte = filas 0..2,
+  /// sur = filas (rows-3)..(rows-1); oeste = cols 0..2, este = cols (cols-3)..
+  /// Para que norte y sur (o este y oeste) NO se solapen hace falta un mínimo de
+  /// 6 filas y 6 columnas. Por debajo de eso el tablero deja de funcionar
+  /// (zonas superpuestas, despliegue ambiguo), así que este es el suelo real:
+  /// permite mapas pequeños (p. ej. 6×6, 6×8) sin romper las reglas de zona.
+  static const int minFilas = 6;
+  static const int minColumnas = 6;
+
   /// Etiquetas de fila para [n] filas: A, B, C… (tope [maxFilas]).
   static List<String> generarRowLabels(int n) {
     final total = n.clamp(1, maxFilas);
@@ -172,28 +183,27 @@ class GameConfig {
   /// nueva rejilla simplemente no se pintan (y `terrainAt` sigue devolviendo
   /// `land` para las nuevas celdas sin definir).
   ///
-  /// IMPORTANTE (fix bug 8 jugadores): la rejilla NUNCA se encoge por debajo del
-  /// preset del nº de jugadores. Los cuarteles se colocan según ese preset
-  /// (`Coords.ObeliscosFallback` en el backend / `forPlayerCount` aquí), de modo
-  /// que en 8 jugadores caen en los bordes extremos (fila `L`, columna `18`). Si
-  /// un mapa NO declara `filas`/`columnas` y su terreno pintado no llega hasta
-  /// esos bordes, las dimensiones inferidas encogerían la rejilla y el cuartel
-  /// quedaría FUERA del tablero: se podría desplegar en él (solo compara la
-  /// coord del obelisco) pero NO mover desde él (el BFS de movimiento llama a
-  /// `_coordToPos`, que con `rowLabels.indexOf('L') == -1` devuelve null y deja
-  /// el alcance vacío). Por eso aquí tomamos el MÁXIMO entre lo solicitado y el
-  /// preset: la rejilla solo puede crecer, nunca reducirse por debajo de lo que
-  /// el nº de jugadores necesita.
+  /// SUELO = [minFilas] × [minColumnas] (mínimo funcional), no el preset.
+  ///
+  /// Antes esto se clampaba al preset del nº de jugadores para evitar que los
+  /// cuarteles por defecto (`Coords.ObeliscosFallback` en el backend), que se
+  /// colocaban en los BORDES del preset, quedaran FUERA de una rejilla más
+  /// pequeña (rompía el movimiento desde el cuartel en 8 jugadores). Ese
+  /// fallback ahora escala a las filas/columnas REALES del mapa en el backend,
+  /// de modo que los cuarteles siempre caen dentro del tablero real y la
+  /// rejilla puede encogerse con seguridad hasta el mínimo funcional. La
+  /// rejilla nunca baja de [minFilas]×[minColumnas] ni sube de
+  /// [maxFilas]×[maxColumnas].
   GameConfig withGrid({int? filas, int? columnas}) {
-    final preset = forPlayerCount(playerCount);
+    final int pedidasFilas = filas ?? rows;
+    final int pedidasColumnas = columnas ?? cols;
 
-    final solicitadasFilas = filas ?? rows;
-    final solicitadasColumnas = columnas ?? cols;
-
-    final finalFilas =
-        solicitadasFilas > preset.rows ? solicitadasFilas : preset.rows;
-    final finalColumnas =
-        solicitadasColumnas > preset.cols ? solicitadasColumnas : preset.cols;
+    final int finalFilas = pedidasFilas < minFilas
+        ? minFilas
+        : (pedidasFilas > maxFilas ? maxFilas : pedidasFilas);
+    final int finalColumnas = pedidasColumnas < minColumnas
+        ? minColumnas
+        : (pedidasColumnas > maxColumnas ? maxColumnas : pedidasColumnas);
 
     return GameConfig(
       playerCount: playerCount,

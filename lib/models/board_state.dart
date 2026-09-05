@@ -18,11 +18,6 @@ class CartaEnCelda {
   /// distinguir instancias concretas —y que, por ejemplo, marcar una como
   /// "ya movida este turno" NO afecte a otra copia recién desplegada— se usa
   /// este `instanceId`, que es propio de cada objeto colocado.
-  ///
-  /// Se genera al crear la carta si no se aporta uno. Se preserva a través de
-  /// movimientos (misma instancia) y de `copyWith`. Al reconstruir el tablero
-  /// desde el servidor cada turno se genera uno nuevo, lo cual es correcto: el
-  /// rastreo de "movidas este turno" se reinicia en cada turno.
   final String instanceId;
 
   CartaEnCelda({
@@ -43,7 +38,7 @@ class CartaEnCelda {
   int get defensaReducidaPorEfectos {
     int total = 0;
     for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
       if (e.tipo == EfectoTipoEstado.veneno) total += e.magnitud;
     }
     return total;
@@ -54,7 +49,7 @@ class CartaEnCelda {
   int get defensaExtraPorEfectos {
     int total = 0;
     for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
       if (e.tipo == EfectoTipoEstado.potDefensa) total += e.magnitud;
     }
     return total;
@@ -64,7 +59,7 @@ class CartaEnCelda {
   int get fuerzaExtraPorEfectos {
     int total = 0;
     for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
       if (e.tipo == EfectoTipoEstado.potFuerza) total += e.magnitud;
     }
     return total;
@@ -74,7 +69,7 @@ class CartaEnCelda {
   int get movimientoExtraPorEfectos {
     int total = 0;
     for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
       if (e.tipo == EfectoTipoEstado.potMovimiento) total += e.magnitud;
     }
     return total;
@@ -92,46 +87,30 @@ class CartaEnCelda {
   /// Movimiento efectivo (con potenciación de movimiento).
   int get movimientoEfectivo => carta.movimiento + movimientoExtraPorEfectos;
 
-  /// True si la carta arrastra algún buff de potenciación activo.
-  bool get potenciada {
+  bool _tiene(EfectoTipoEstado t) {
     for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
-      if (e.tipo == EfectoTipoEstado.potFuerza ||
-          e.tipo == EfectoTipoEstado.potDefensa ||
-          e.tipo == EfectoTipoEstado.potMovimiento) return true;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
+      if (e.tipo == t) return true;
     }
     return false;
   }
+
+  /// True si la carta arrastra algún buff de potenciación activo.
+  bool get potenciada =>
+      _tiene(EfectoTipoEstado.potFuerza) ||
+      _tiene(EfectoTipoEstado.potDefensa) ||
+      _tiene(EfectoTipoEstado.potMovimiento);
 
   /// True si la carta arrastra un efecto de parálisis activo (no puede moverse).
-  bool get paralizado {
-    for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
-      if (e.tipo == EfectoTipoEstado.paralisis) return true;
-    }
-    return false;
-  }
+  bool get paralizado => _tiene(EfectoTipoEstado.paralisis);
 
   /// True si la carta arrastra un veneno activo (defensa reducida).
-  bool get envenenada {
-    for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
-      if (e.tipo == EfectoTipoEstado.veneno) return true;
-    }
-    return false;
-  }
+  bool get envenenada => _tiene(EfectoTipoEstado.veneno);
 
   /// True si la carta arrastra una invisibilidad activa. Mientras lo esté, solo
   /// su propietario debe verla en el tablero (el resto de clientes la ocultan) y
-  /// para el propietario se pinta con transparencia. El efecto se rompe al
-  /// expirar los turnos, al entrar en combate o al morir la carta.
-  bool get invisible {
-    for (final e in efectos) {
-      if (e.turnosRestantes <= 0) continue;
-      if (e.tipo == EfectoTipoEstado.invisibilidad) return true;
-    }
-    return false;
-  }
+  /// para el propietario se pinta con transparencia.
+  bool get invisible => _tiene(EfectoTipoEstado.invisibilidad);
 
   bool habilidadDisponible(int turnoActual) {
     if (!carta.tieneHabilidad) return false;
@@ -154,8 +133,6 @@ class CartaEnCelda {
         carta: CartaModel.fromMap(d),
         ownerUid: d['ownerUid'] as String? ?? '',
         ownerZone: d['ownerZone'] as String? ?? '',
-        // Si el servidor conserva el instanceId lo reutilizamos; si no, se
-        // genera uno nuevo (el rastreo por-turno se reinicia igualmente).
         instanceId: d['instanceId'] as String?,
         efectos: ((d['Efectos'] ?? d['efectos']) as List?)
                 ?.map((m) =>
@@ -182,7 +159,6 @@ class CartaEnCelda {
         ownerZone: ownerZone ?? this.ownerZone,
         efectos: efectos ?? this.efectos,
         ultimoUsoHabilidad: ultimoUsoHabilidad ?? this.ultimoUsoHabilidad,
-        // Preservar la identidad de instancia a través de copyWith.
         instanceId: instanceId,
       );
 }
@@ -226,6 +202,117 @@ class CeldaState {
       CeldaState(coord: coord, cartas: nuevas);
 }
 
+/// Acumulador mutable interno para fusionar efectos por (tipo, origen).
+class _MutEfectoVista {
+  EfectoTipoEstado tipo;
+  int turnos;
+  int magnitud;
+  String origen;
+  String icono;
+  bool oculta;
+  CartaEnCelda? carta;
+  _MutEfectoVista(this.tipo, this.turnos, this.magnitud, this.origen,
+      this.icono, this.oculta, this.carta);
+}
+
+/// UN efecto activo sobre una celda, ya listo para PINTARSE.
+///
+/// Es la fuente ÚNICA de verdad del indicador de efectos: la usan por igual el
+/// badge del tablero (`CellWidget`) y el panel "ACCIONES ACTIVAS" del menú
+/// lateral (`CellSidebar`). Antes cada uno recolectaba por su cuenta y solo el
+/// sidebar cubría todos los tipos; el tablero solo pintaba veneno, parálisis y
+/// escudo, así que las potenciaciones, la invisibilidad y las trampas no se
+/// veían en la casilla.
+class EfectoCeldaVista {
+  final EfectoTipoEstado tipo;
+
+  /// Turnos que el efecto seguirá activo (máximo entre los fusionados).
+  final int turnos;
+  final int magnitud;
+  final String origenUid;
+
+  /// Icono a pintar (el propio de la trampa, si lo trae; si no, el del tipo).
+  final String icono;
+
+  /// Solo trampas: true mientras siga oculta (solo la ve su dueño).
+  final bool oculta;
+
+  /// Carta concreta a la que afecta, si el efecto viaja en una carta. Permite
+  /// abrir su detalle desde el sidebar.
+  final CartaEnCelda? cartaAfectada;
+
+  const EfectoCeldaVista({
+    required this.tipo,
+    required this.turnos,
+    required this.magnitud,
+    required this.origenUid,
+    required this.icono,
+    this.oculta = false,
+    this.cartaAfectada,
+  });
+
+  /// True si lo lanzó [uid].
+  bool esDe(String? uid) => uid != null && uid.isNotEmpty && origenUid == uid;
+
+  /// Combina los efectos de CELDA (`efectosCelda[coord]`) con los que arrastran
+  /// las cartas presentes, deduplicando por (tipo, origen) y quedándose con el
+  /// máximo de turnos restantes.
+  ///
+  /// [viewerUid] es quien MIRA: se descartan las trampas aún ocultas de otros
+  /// jugadores. El resto de efectos son públicos a propósito — cualquiera debe
+  /// poder ver qué casillas están afectadas y cuántos turnos les quedan.
+  static List<EfectoCeldaVista> recolectar(
+    List<EfectoActivo> efectosCelda,
+    List<CartaEnCelda> cards, {
+    String? viewerUid,
+  }) {
+    final acc = <String, _MutEfectoVista>{};
+
+    void upsert(EfectoActivo e, CartaEnCelda? carta) {
+      if (e.turnosRestantes <= 0) return;
+      // Tipo que este cliente no conoce: se ignora en vez de disfrazarlo de
+      // veneno (que es lo que hacía el fallback de `fromName`).
+      if (!e.conocido) return;
+      if (!e.visiblePara(viewerUid)) return;
+
+      final key = '${e.tipo.name}|${e.origenUid}';
+      final prev = acc[key];
+      if (prev == null) {
+        acc[key] = _MutEfectoVista(e.tipo, e.turnosRestantes, e.magnitud,
+            e.origenUid, e.iconoMostrado, e.oculta, carta);
+      } else {
+        if (e.turnosRestantes > prev.turnos) prev.turnos = e.turnosRestantes;
+        if (e.magnitud > prev.magnitud) prev.magnitud = e.magnitud;
+        prev.carta ??= carta;
+        prev.oculta = prev.oculta && e.oculta;
+      }
+    }
+
+    for (final e in efectosCelda) {
+      upsert(e, null);
+    }
+    for (final c in cards) {
+      for (final e in c.efectos) {
+        upsert(e, c);
+      }
+    }
+
+    final list = acc.values
+        .map((m) => EfectoCeldaVista(
+              tipo: m.tipo,
+              turnos: m.turnos,
+              magnitud: m.magnitud,
+              origenUid: m.origen,
+              icono: m.icono,
+              oculta: m.oculta,
+              cartaAfectada: m.carta,
+            ))
+        .toList()
+      ..sort((a, b) => a.tipo.orden.compareTo(b.tipo.orden));
+    return list;
+  }
+}
+
 /// Estado completo del tablero en tiempo real
 class BoardState {
   final Map<String, CeldaState> celdas;
@@ -256,21 +343,33 @@ class BoardState {
   List<EfectoActivo> getEfectosCelda(String coord) =>
       efectosCelda[coord] ?? const [];
 
-  bool celdaEnvenenada(String coord) {
+  /// TODOS los efectos activos sobre [coord] tal y como los debe ver
+  /// [viewerUid], ya fusionados y ordenados. Es lo que consumen el badge del
+  /// tablero y el panel del menú lateral.
+  ///
+  /// Se usan las cartas FILTRADAS por visibilidad (`celdaVisiblePara`) para que
+  /// los efectos que arrastra una carta invisible enemiga no la delaten.
+  List<EfectoCeldaVista> efectosVisiblesCelda(
+          String coord, String? viewerUid) =>
+      EfectoCeldaVista.recolectar(
+        getEfectosCelda(coord),
+        celdaVisiblePara(coord, viewerUid).cartas,
+        viewerUid: viewerUid,
+      );
+
+  bool _celdaTiene(String coord, EfectoTipoEstado tipo) {
     final lista = efectosCelda[coord];
     if (lista == null) return false;
     return lista.any(
-      (e) => e.tipo == EfectoTipoEstado.veneno && e.turnosRestantes > 0,
+      (e) => e.conocido && e.tipo == tipo && e.turnosRestantes > 0,
     );
   }
 
-  bool celdaParalizada(String coord) {
-    final lista = efectosCelda[coord];
-    if (lista == null) return false;
-    return lista.any(
-      (e) => e.tipo == EfectoTipoEstado.paralisis && e.turnosRestantes > 0,
-    );
-  }
+  bool celdaEnvenenada(String coord) =>
+      _celdaTiene(coord, EfectoTipoEstado.veneno);
+
+  bool celdaParalizada(String coord) =>
+      _celdaTiene(coord, EfectoTipoEstado.paralisis);
 
   /// Venenos activos en la celda con su origen y magnitud. Se usa para que el
   /// preview de combate reste defensa solo a las cartas ENEMIGAS del veneno
@@ -280,7 +379,7 @@ class BoardState {
     if (lista == null) return const [];
     final res = <({String origen, int magnitud})>[];
     for (final e in lista) {
-      if (e.turnosRestantes <= 0) continue;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
       if (e.tipo != EfectoTipoEstado.veneno) continue;
       res.add((origen: e.origenUid, magnitud: e.magnitud));
     }
@@ -303,17 +402,13 @@ class BoardState {
 
   /// Turnos restantes (máximo) de un efecto de ACCIÓN activo sobre la celda del
   /// tipo indicado. Mira tanto los efectos propios de la celda (`efectosCelda`)
-  /// como los que arrastran las cartas presentes. Devuelve 0 si no hay ninguno
-  /// activo de ese tipo.
-  ///
-  /// Es la base del nuevo indicador de tablero (visible por TODOS los jugadores)
-  /// que muestra, sobre cada celda con una acción activa, el icono de la acción
-  /// y el número de turnos que seguirá surtiendo efecto sobre esa celda.
+  /// como los que arrastran las cartas presentes. Devuelve 0 si no hay ninguno.
   int turnosEfectoCelda(String coord, EfectoTipoEstado tipo) {
     int maxT = 0;
     final lista = efectosCelda[coord];
     if (lista != null) {
       for (final e in lista) {
+        if (!e.conocido) continue;
         if (e.tipo == tipo && e.turnosRestantes > maxT) {
           maxT = e.turnosRestantes;
         }
@@ -321,6 +416,7 @@ class BoardState {
     }
     for (final c in getCelda(coord).cartas) {
       for (final e in c.efectos) {
+        if (!e.conocido) continue;
         if (e.tipo == tipo && e.turnosRestantes > maxT) {
           maxT = e.turnosRestantes;
         }
@@ -348,7 +444,7 @@ class BoardState {
     if (lista == null) return const [];
     final res = <({String origen, int magnitud})>[];
     for (final e in lista) {
-      if (e.turnosRestantes <= 0) continue;
+      if (e.turnosRestantes <= 0 || !e.conocido) continue;
       if (e.tipo != EfectoTipoEstado.escudo) continue;
       res.add((origen: e.origenUid, magnitud: e.magnitud));
     }
@@ -357,12 +453,8 @@ class BoardState {
 
   /// True si la celda está escudada (protección activa). El escudo es un efecto
   /// de CELDA (no viaja en las cartas), así que solo se mira efectosCelda.
-  bool celdaTieneEscudo(String coord) {
-    final lista = efectosCelda[coord];
-    return lista != null &&
-        lista.any(
-            (e) => e.tipo == EfectoTipoEstado.escudo && e.turnosRestantes > 0);
-  }
+  bool celdaTieneEscudo(String coord) =>
+      _celdaTiene(coord, EfectoTipoEstado.escudo);
 
   /// True si la celda está escudada por OTRO jugador (distinto de [localUid]).
   /// Esas celdas están protegidas: no puedes mover tus cartas dentro ni
@@ -371,18 +463,14 @@ class BoardState {
     final lista = efectosCelda[coord];
     if (lista == null) return false;
     return lista.any((e) =>
+        e.conocido &&
         e.tipo == EfectoTipoEstado.escudo &&
         e.turnosRestantes > 0 &&
         e.origenUid != localUid);
   }
 
   /// Devuelve la celda tal y como debe VERLA [viewerUid]: se ocultan las cartas
-  /// invisibles que NO pertenezcan al observador. Las cartas invisibles propias
-  /// sí se conservan (el propietario las ve, con transparencia). Se usa en el
-  /// tablero y en el sidebar para que el rival no vea las cartas invisibles.
-  ///
-  /// La resolución del turno en el servidor SIEMPRE trabaja con el tablero
-  /// completo: esto es solo un filtro de presentación local.
+  /// invisibles que NO pertenezcan al observador.
   CeldaState celdaVisiblePara(String coord, String? viewerUid) {
     final celda = getCelda(coord);
     if (viewerUid == null) return celda;
@@ -463,7 +551,6 @@ class BoardState {
       );
 
   /// Fija (o limpia, pasando {}) las celdas de rayo de forma explícita.
-  /// `copyWith` no puede distinguir "no tocar" de "vaciar", por eso existe este.
   BoardState withRayos(Set<String> coords) => BoardState(
         celdas: celdas,
         turnoActual: turnoActual,

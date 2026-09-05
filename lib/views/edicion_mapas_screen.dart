@@ -937,7 +937,7 @@ class _EditorMapaState extends State<_EditorMapa> {
                   child: _Stepper(
                     label: 'FILAS',
                     valor: _filas,
-                    min: 4,
+                    min: GameConfig.minFilas,
                     max: GameConfig.maxFilas,
                     onChanged: (v) => setState(() => _filas = v),
                   ),
@@ -947,7 +947,7 @@ class _EditorMapaState extends State<_EditorMapa> {
                   child: _Stepper(
                     label: 'COLUMNAS',
                     valor: _columnas,
-                    min: 4,
+                    min: GameConfig.minColumnas,
                     max: GameConfig.maxColumnas,
                     onChanged: (v) => setState(() => _columnas = v),
                   ),

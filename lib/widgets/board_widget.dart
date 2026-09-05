@@ -982,13 +982,18 @@ class _GridContent extends StatelessWidget {
                     obeliscoCoords: obeliscoCoords,
                     obeliscoColores: obeliscoColores,
                     isConquistado: boardState.esCuartelDestruido(coord),
-                    isRayo: boardState.esRayo(coord), // ← nuevo
-                    isEnvenenada: boardState.celdaTieneVeneno(coord),
-                    isParalizada: boardState.celdaTieneParalisis(coord),
-                    isEscudada: boardState.celdaTieneEscudo(coord),
-                    turnosVeneno: boardState.turnosVenenoCelda(coord),
-                    turnosParalisis: boardState.turnosParalisisCelda(coord),
-                    turnosEscudo: boardState.turnosEscudoCelda(coord),
+                    isRayo: boardState.esRayo(coord),
+                    // TODOS los efectos activos de la celda con sus turnos
+                    // restantes, en UNA sola lista. Sustituye a los antiguos
+                    // flags + contadores sueltos, que solo cubrían veneno,
+                    // parálisis y escudo: las potenciaciones, la invisibilidad
+                    // y las trampas reveladas no llegaban a pintarse.
+                    //
+                    // `efectosVisiblesCelda` filtra únicamente las trampas aún
+                    // ocultas de otros jugadores; el resto es público, para que
+                    // TODOS vean qué casillas están afectadas tras el turno.
+                    efectos:
+                        boardState.efectosVisiblesCelda(coord, localPlayerUid),
                     venenosCelda: boardState.venenosCelda(coord),
                     escudosCelda: boardState.escudosCelda(coord),
                     playerColors: playerColors,

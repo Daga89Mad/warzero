@@ -13,6 +13,7 @@
 // del lobby cambia (turno avanzado, tablero nuevo, etc.) la UI se reconstruye.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/accion_pendiente.dart';
 import '../models/board_state.dart';
@@ -190,11 +191,39 @@ class TurnService {
   }
 
   /// Parsea el campo `efectosCelda` del doc del lobby.
+  ///
+  /// En modo debug deja una traza con lo que ha llegado. Sirve para separar dos
+  /// fallos que se ven igual desde el juego: que el efecto NO llegue del
+  /// servidor (traza vacía o sin la celda) o que llegue y no se pinte (traza con
+  /// el efecto pero sin badge en el tablero).
   static Map<String, List<EfectoActivo>> parseEfectosCelda(
-          Map<String, dynamic> data) =>
-      BoardState.efectosCeldaFromFirestore(
-        data['efectosCelda'] as Map<String, dynamic>?,
-      );
+      Map<String, dynamic> data) {
+    final raw = data['efectosCelda'];
+    final mapa = raw is Map ? Map<String, dynamic>.from(raw) : null;
+    final parsed = BoardState.efectosCeldaFromFirestore(mapa);
+
+    if (kDebugMode) {
+      if (mapa == null) {
+        debugPrint('[WZ][efectos] el doc NO trae campo efectosCelda');
+      } else if (parsed.isEmpty) {
+        debugPrint('[WZ][efectos] campo presente pero VACÍO tras parsear');
+      } else {
+        final partes = <String>[];
+        parsed.forEach((coord, lista) {
+          final detalle = lista
+              .map((e) => '${e.tipoRaw}:${e.turnosRestantes}t'
+                  '/mag${e.magnitud}/${e.origenUid}')
+              .toList()
+              .join(', ');
+          partes.add('$coord [$detalle]');
+        });
+        final resumen = partes.join(' | ');
+        debugPrint('[WZ][efectos] ${parsed.length} celdas -> $resumen');
+      }
+    }
+
+    return parsed;
+  }
 
   /// Parsea el campo `acciones` flat de todos los movimientos de un turno.
   static List<AccionPendiente> parseAccionesDeMovimientos(

@@ -48,6 +48,12 @@ class AccionPendiente {
   /// (p. ej. al colocar otra carta en la misma celda antes de resolver).
   final String? cartaOrigenId;
 
+  /// Solo para habilidades lanzadas desde una carta del tablero.
+  /// Identifica de forma inequívoca la instancia concreta que lanzó
+  /// la habilidad. El servidor lo usa para validar la carta real
+  /// y calcular CosteHabilidad sin confiar en costePagado.
+  final String? lanzadorInstanceId;
+
   /// Solo para carta de acción jugada desde la mano: id de la `CartaModel`
   /// que se debe descartar de la mano después de aplicar el efecto.
   /// Si es null → es una habilidad de carta del tablero (no se descarta nada).
@@ -81,6 +87,7 @@ class AccionPendiente {
     this.cartaOrigenIndice,
     this.cartaOrigenId,
     this.cartaAccionId,
+    this.lanzadorInstanceId,
     this.esDescarga = false,
     this.costePagado = 0,
   });
@@ -99,6 +106,8 @@ class AccionPendiente {
         if (cartaOrigenCoord != null) 'cartaOrigenCoord': cartaOrigenCoord,
         if (cartaOrigenIndice != null) 'cartaOrigenIndice': cartaOrigenIndice,
         if (cartaOrigenId != null) 'cartaOrigenId': cartaOrigenId,
+        if (lanzadorInstanceId != null)
+          'lanzadorInstanceId': lanzadorInstanceId,
         if (cartaAccionId != null) 'cartaAccionId': cartaAccionId,
       };
 
@@ -117,6 +126,7 @@ class AccionPendiente {
         cartaOrigenCoord: d['cartaOrigenCoord'] as String?,
         cartaOrigenIndice: (d['cartaOrigenIndice'] as num?)?.toInt(),
         cartaOrigenId: d['cartaOrigenId'] as String?,
+        lanzadorInstanceId: d['lanzadorInstanceId'] as String?,
         cartaAccionId: d['cartaAccionId'] as String?,
       );
 
@@ -129,6 +139,7 @@ class AccionPendiente {
     String? cartaOrigenCoord,
     int? cartaOrigenIndice,
     String? cartaOrigenId,
+    String? lanzadorInstanceId,
     String? cartaAccionId,
     int? turno,
     bool? esDescarga,
@@ -143,6 +154,7 @@ class AccionPendiente {
         cartaOrigenCoord: cartaOrigenCoord ?? this.cartaOrigenCoord,
         cartaOrigenIndice: cartaOrigenIndice ?? this.cartaOrigenIndice,
         cartaOrigenId: cartaOrigenId ?? this.cartaOrigenId,
+        lanzadorInstanceId: lanzadorInstanceId ?? this.lanzadorInstanceId,
         cartaAccionId: cartaAccionId ?? this.cartaAccionId,
         turno: turno ?? this.turno,
         esDescarga: esDescarga ?? this.esDescarga,

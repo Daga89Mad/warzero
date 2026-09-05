@@ -8,6 +8,8 @@ import '../services/ejercito_service.dart';
 import '../services/lobby_service.dart';
 import '../services/warzero_api.dart';
 import 'game_screen.dart';
+import '../models/trofeo_model.dart';
+import '../services/trofeos_service.dart';
 
 // ─────────────────────────────────────────────────────────────
 // ROOM SCREEN  (sala de espera con jugadores + selección ejército)
@@ -30,6 +32,23 @@ class RoomScreen extends StatefulWidget {
 
 class _RoomScreenState extends State<RoomScreen> {
   final _service = LobbyService();
+  final _trofeosSvc = TrofeosService();
+
+  /// uid → trofeo destacado, para pintarlo junto al alias en la sala.
+  Map<String, TrofeoModel> _destacados = {};
+
+  /// Clave de los uids ya consultados (para no repetir la petición en cada frame).
+  String _destacadosKey = '';
+
+  /// Consulta los destacados de los uids de la sala si han cambiado.
+  Future<void> _cargarDestacados(List<String> uids) async {
+    final key = (uids.toList()..sort()).join(',');
+    if (key == _destacadosKey) return;
+    _destacadosKey = key;
+    final map = await _trofeosSvc.obtenerDestacados(uids);
+    if (!mounted) return;
+    setState(() => _destacados = map);
+  }
 
   int? _selectedEjercitoId;
   bool _navigating = false;
@@ -212,6 +231,12 @@ class _RoomScreenState extends State<RoomScreen> {
                 _lobby =
                     lobby; // cache para _gestionarSalida (saber si soy host)
 
+                // Trofeos destacados de los presentes (una sola petición; solo
+                // se repite si cambia la lista de uids).
+                final uidsSala = lobby.jugadores.map((j) => j.uid).toList();
+                WidgetsBinding.instance
+                    .addPostFrameCallback((_) => _cargarDestacados(uidsSala));
+
                 if (lobby.estado == LobbyEstado.enCurso) {
                   _goToGame(lobby);
                 }
@@ -239,6 +264,7 @@ class _RoomScreenState extends State<RoomScreen> {
                               child: _PlayerList(
                                 lobby: lobby,
                                 localUid: widget.localUid,
+                                destacados: _destacados,
                               ),
                             ),
                             Container(
@@ -434,8 +460,12 @@ class _RoomHeader extends StatelessWidget {
 class _PlayerList extends StatelessWidget {
   final LobbyModel lobby;
   final String localUid;
-
-  const _PlayerList({required this.lobby, required this.localUid});
+  final Map<String, TrofeoModel> destacados;
+  const _PlayerList({
+    required this.lobby,
+    required this.localUid,
+    required this.destacados,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -470,6 +500,7 @@ class _PlayerList extends StatelessWidget {
                 jugador: j,
                 isLocal: j?.uid == localUid,
                 isHost: j?.uid == lobby.hostUid,
+                trofeo: j == null ? null : destacados[j.uid],
               );
             },
           ),
@@ -483,11 +514,12 @@ class _PlayerSlot extends StatelessWidget {
   final LobbyJugador? jugador;
   final bool isLocal;
   final bool isHost;
-
+  final TrofeoModel? trofeo;
   const _PlayerSlot({
     required this.jugador,
     required this.isLocal,
     required this.isHost,
+    this.trofeo,
   });
 
   @override
@@ -554,6 +586,20 @@ class _PlayerSlot extends StatelessWidget {
                     children: [
                       Row(
                         children: [
+                          if (trofeo != null) ...[
+                            Text(trofeo!.icono,
+                                style: const TextStyle(fontSize: 12)),
+                            const SizedBox(width: 4),
+                          ],
+                          Text(
+                            jugador!.alias.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: war.primario,
+                              fontFamily: 'Cinzel',
+                              letterSpacing: 1,
+                            ),
+                          ),
                           Text(
                             jugador!.alias.toUpperCase(),
                             style: TextStyle(

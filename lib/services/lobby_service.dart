@@ -4,38 +4,33 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/lobby_model.dart';
 import '../models/mazo_model.dart';
 import '../services/mazo_service.dart';
+import 'warzero_api.dart';
 
 class LobbyService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final WarZeroApi _api = WarZeroApi();
 
   // ── Stream de lobbies públicos en espera ──────────────────
-  /// Filtra SOLO por estado en el servidor (índice de campo único, siempre
-  /// disponible) y descarta las privadas en cliente. Antes combinaba dos
-  /// `where` (esPrivada + estado), lo que exige un índice COMPUESTO en
-  /// Firestore: si no está desplegado, el stream lanza error y la lista deja de
-  /// mostrar partidas ("dejó de buscar partidas"). Mismo criterio que en
-  /// [misPartidasStream].
+  /// La lista pública se sirve ahora por HTTP desde el backend, que la cachea
+  /// con TTL corto y COMPARTIDO entre todos los clientes. Así N clientes
+  /// sondeando = 1 ciclo de lectura de Firestore en el servidor, en lugar de N
+  /// lecturas independientes (una por cliente). El sondeo del cliente se relaja
+  /// a 30 s: una lista pública tolera perfectamente esa latencia.
   Stream<List<LobbyModel>> lobbiesPublicosStream() {
-    // OPTIMIZACIÓN DE LECTURAS: antes esto era un listener en tiempo real
-    // (`snapshots()`) sobre hasta 50 partidas en espera. Como los bots entran y
-    // salen de salas constantemente, CADA cambio re-leía documentos y en CADA
-    // cliente con el lobby abierto, disparando el consumo de Firestore. Una
-    // lista pública tolera perfectamente algo de latencia, así que la
-    // sondeamos cada 12 s con una lectura acotada.
-    return _sondeoPeriodico(const Duration(seconds: 12), _leerLobbiesPublicos);
+    return _sondeoPeriodico(const Duration(seconds: 30), _leerLobbiesPublicos);
   }
 
   Future<List<LobbyModel>> _leerLobbiesPublicos() async {
-    final s = await _db
-        .collection('Partidas')
-        .where('estado', isEqualTo: 'esperando')
-        .limit(50)
-        .get();
+    // Lectura vía backend (cacheada y compartida). Ya no toca Firestore desde
+    // el cliente. El backend devuelve mapas planos con `id` inyectado.
+    final raw = await _api.obtenerPublicas();
     final list = <LobbyModel>[];
-    for (final d in s.docs) {
+    for (final d in raw) {
       try {
-        final l = LobbyModel.fromFirestore(d);
-        if (!l.esPrivada) list.add(l); // privadas fuera, en cliente
+        final id = d['id'] as String? ?? '';
+        if (id.isEmpty) continue;
+        final l = LobbyModel.fromMap(id, d);
+        if (!l.esPrivada) list.add(l); // defensa extra: privadas fuera
       } catch (_) {
         // Ignorar documentos malformados.
       }
@@ -276,13 +271,13 @@ class LobbyService {
   /// Un único `arrayContains` no requiere índice compuesto. El estado se filtra
   /// en cliente (excluir finalizadas) para no necesitar un índice combinado.
   Stream<List<LobbyModel>> misPartidasStream(String uid) {
-    // OPTIMIZACIÓN DE LECTURAS: en tiempo real, este listener re-leía la partida
-    // completa cada vez que se escribía en ella (cada resolución de turno, cada
-    // movimiento persistido), incluidas las partidas EN CURSO, que son las que
-    // más cambian. Con la lista sondeada cada 15 s el coste queda acotado y
-    // predecible, sin amplificarse con la actividad de la partida.
+    // OPTIMIZACIÓN DE LECTURAS: es una consulta por-usuario (no compartible),
+    // así que se mantiene en el cliente pero con la cadencia relajada a 30 s
+    // (antes 15 s). En tiempo real este listener re-leía la partida completa en
+    // cada escritura (cada resolución de turno, cada movimiento), incluidas las
+    // partidas EN CURSO, que son las que más cambian; el sondeo acota el coste.
     return _sondeoPeriodico(
-      const Duration(seconds: 15),
+      const Duration(seconds: 30),
       () => _leerMisPartidas(uid),
     );
   }

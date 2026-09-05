@@ -22,6 +22,7 @@ import 'package:warzero/views/edicion_skins_screen.dart';
 import 'package:warzero/views/edicion_mapas_screen.dart';
 import 'package:warzero/views/edicion_bots_screen.dart';
 import 'package:warzero/views/edicion_tienda_screen.dart';
+import 'package:warzero/views/edicion_trofeos_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
@@ -243,6 +244,17 @@ class MenuScreen extends StatelessWidget {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const EdicionHistoriasScreen()),
+                        ),
+                      ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.emoji_events,
+                        label: 'ED. TROFEOS',
+                        sublabel: 'Crear y editar\ntrofeos y condiciones',
+                        accent: const Color(0xFFE0B040),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionTrofeosScreen()),
                         ),
                       ),
                     if (puedeEditar)

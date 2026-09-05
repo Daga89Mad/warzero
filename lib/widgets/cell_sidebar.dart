@@ -781,10 +781,21 @@ class _Body extends StatelessWidget {
     // Combina los efectos de celda (efectosCelda) con los que arrastran las
     // cartas presentes. Cada chip muestra icono + turnos restantes; al pulsar,
     // si el efecto afecta a una carta concreta, abre su detalle.
-    final efectosActivos = _EfectoCeldaEntry.recolectar(efectosCelda, cards);
+    // La recolección la hace `EfectoCeldaVista.recolectar`, la MISMA que usa el
+    // tablero para sus badges, así que casilla y sidebar coinciden siempre.
+    // `viewerUid` solo filtra las trampas aún ocultas de otros jugadores.
+    final efectosActivos = EfectoCeldaVista.recolectar(
+      efectosCelda,
+      cards,
+      viewerUid: localUid,
+    );
     final Widget actionsBar = efectosActivos.isEmpty
         ? const SizedBox.shrink()
-        : _CellActionsBar(entries: efectosActivos);
+        : _CellActionsBar(
+            entries: efectosActivos,
+            localUid: localUid,
+            playerColors: playerColors,
+          );
 
     // ── Celda vacía (no obelisco) ────────────────────────────
     if (cards.isEmpty) {
@@ -1462,144 +1473,31 @@ class _EvolChip extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// INDICADOR DE ACCIONES ACTIVAS SOBRE LA CELDA
+// INDICADOR DE EFECTOS ACTIVOS SOBRE LA CELDA
 // ─────────────────────────────────────────────────────────────
 
-/// Acumulador mutable interno para fusionar efectos por (tipo, origen).
-class _MutEfecto {
-  EfectoTipoEstado tipo;
-  int turnos;
-  int magnitud;
-  String origen;
-  CartaEnCelda? carta;
-  _MutEfecto(this.tipo, this.turnos, this.magnitud, this.origen, this.carta);
-}
-
-/// Una acción activa sobre la celda, lista para mostrarse: tipo de efecto,
-/// turnos restantes (máximo), magnitud, origen y —si procede— la carta concreta
-/// a la que está afectando (para abrir su detalle al pulsar).
-class _EfectoCeldaEntry {
-  final EfectoTipoEstado tipo;
-  final int turnos;
-  final int magnitud;
-  final String origenUid;
-  final CartaEnCelda? cartaAfectada;
-
-  const _EfectoCeldaEntry({
-    required this.tipo,
-    required this.turnos,
-    required this.magnitud,
-    required this.origenUid,
-    required this.cartaAfectada,
-  });
-
-  /// Combina los efectos de CELDA (`efectosCelda`) con los que arrastran las
-  /// cartas presentes, deduplicando por (tipo, origen) y quedándose con el
-  /// máximo de turnos restantes. Asocia a cada efecto la primera carta que lo
-  /// arrastra (si la hay), para poder abrir su detalle al pulsar. Así funciona
-  /// tanto para un veneno recién colocado sobre la celda como para un efecto que
-  /// una carta arrastra tras moverse a otra casilla.
-  static List<_EfectoCeldaEntry> recolectar(
-      List<EfectoActivo> efectosCelda, List<CartaEnCelda> cards) {
-    final acc = <String, _MutEfecto>{};
-
-    void upsert(EfectoActivo e, CartaEnCelda? carta) {
-      if (e.turnosRestantes <= 0) return;
-      final key = '${e.tipo.name}|${e.origenUid}';
-      final prev = acc[key];
-      if (prev == null) {
-        acc[key] = _MutEfecto(
-            e.tipo, e.turnosRestantes, e.magnitud, e.origenUid, carta);
-      } else {
-        if (e.turnosRestantes > prev.turnos) prev.turnos = e.turnosRestantes;
-        if (e.magnitud > prev.magnitud) prev.magnitud = e.magnitud;
-        prev.carta ??= carta;
-      }
-    }
-
-    for (final e in efectosCelda) {
-      upsert(e, null);
-    }
-    for (final c in cards) {
-      for (final e in c.efectos) {
-        upsert(e, c);
-      }
-    }
-
-    int rank(EfectoTipoEstado t) {
-      switch (t) {
-        case EfectoTipoEstado.veneno:
-          return 0;
-        case EfectoTipoEstado.paralisis:
-          return 1;
-        case EfectoTipoEstado.escudo:
-          return 2;
-        case EfectoTipoEstado.potFuerza:
-          return 3;
-        case EfectoTipoEstado.potDefensa:
-          return 4;
-        case EfectoTipoEstado.potMovimiento:
-          return 5;
-        case EfectoTipoEstado.invisibilidad:
-          return 6;
-      }
-    }
-
-    final list = acc.values
-        .map((m) => _EfectoCeldaEntry(
-              tipo: m.tipo,
-              turnos: m.turnos,
-              magnitud: m.magnitud,
-              origenUid: m.origen,
-              cartaAfectada: m.carta,
-            ))
-        .toList()
-      ..sort((a, b) => rank(a.tipo).compareTo(rank(b.tipo)));
-    return list;
-  }
-}
-
-/// Cabecera con las acciones activas sobre la celda. Cada chip muestra el icono
-/// del efecto, su magnitud (si aplica) y los turnos que le quedan; si el efecto
-/// está afectando a una carta concreta, al pulsarlo se abre el detalle de esa
-/// carta con sus estadísticas ya modificadas por el efecto.
+/// Panel "EFECTOS ACTIVOS" del menú lateral. Lista TODOS los efectos que
+/// afectan a la celda seleccionada, con su icono, magnitud, turnos restantes y
+/// quién los lanzó.
+///
+/// La recolección y fusión de efectos ya NO vive aquí: la hace
+/// `EfectoCeldaVista.recolectar` (en `board_state.dart`), que es la misma que
+/// alimenta los badges del tablero. Así el badge de la casilla y este panel
+/// dicen siempre exactamente lo mismo, incluidos los turnos restantes.
 class _CellActionsBar extends StatelessWidget {
-  final List<_EfectoCeldaEntry> entries;
-  const _CellActionsBar({required this.entries});
+  final List<EfectoCeldaVista> entries;
 
-  Color _colorDe(EfectoTipoEstado t) {
-    switch (t) {
-      case EfectoTipoEstado.veneno:
-        return const Color(0xFF2BA046);
-      case EfectoTipoEstado.paralisis:
-        return const Color(0xFF2C90C8);
-      case EfectoTipoEstado.escudo:
-        return const Color(0xFF6AB0FF);
-      case EfectoTipoEstado.potFuerza:
-        return const Color(0xFFFFB84D);
-      case EfectoTipoEstado.potDefensa:
-        return const Color(0xFF9AD0FF);
-      case EfectoTipoEstado.potMovimiento:
-        return const Color(0xFF9AD0FF);
-      case EfectoTipoEstado.invisibilidad:
-        return const Color(0xFFB68CE0); // púrpura tenue
-    }
-  }
+  /// uid del jugador local, para etiquetar cada efecto como TUYO / RIVAL.
+  final String? localUid;
 
-  /// Texto de magnitud con signo (veneno resta defensa, potenciaciones suman).
-  String _signo(EfectoTipoEstado t, int mag) {
-    if (mag <= 0) return '';
-    switch (t) {
-      case EfectoTipoEstado.veneno:
-        return '-$mag';
-      case EfectoTipoEstado.potFuerza:
-      case EfectoTipoEstado.potDefensa:
-      case EfectoTipoEstado.potMovimiento:
-        return '+$mag';
-      default:
-        return '';
-    }
-  }
+  /// uid → color de jugador, para el punto de autoría del chip.
+  final Map<String, Color> playerColors;
+
+  const _CellActionsBar({
+    required this.entries,
+    this.localUid,
+    this.playerColors = const {},
+  });
 
   void _abrirCarta(BuildContext ctx, CartaEnCelda entry) {
     showCardDetail(
@@ -1611,6 +1509,12 @@ class _CellActionsBar extends StatelessWidget {
       movimientoExtra: entry.movimientoExtraPorEfectos,
       paralizada: entry.paralizado,
     );
+  }
+
+  /// Etiqueta de autoría del efecto: TUYO / RIVAL, o vacío si no se sabe.
+  String _autor(EfectoCeldaVista e) {
+    if (e.origenUid.isEmpty) return '';
+    return e.esDe(localUid) ? 'TUYO' : 'RIVAL';
   }
 
   @override
@@ -1625,7 +1529,7 @@ class _CellActionsBar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('ACCIONES ACTIVAS',
+          const Text('EFECTOS ACTIVOS',
               style: TextStyle(
                   fontSize: 7,
                   color: Color(0xFF7A6040),
@@ -1636,10 +1540,12 @@ class _CellActionsBar extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: entries.map((e) {
-              final color = _colorDe(e.tipo);
+              final color = e.tipo.color;
               final carta = e.cartaAfectada;
               final tappable = carta != null;
-              final signo = _signo(e.tipo, e.magnitud);
+              final signo = e.tipo.signoMagnitud(e.magnitud);
+              final autor = _autor(e);
+              final colorAutor = playerColors[e.origenUid];
               return Builder(builder: (ctx) {
                 return GestureDetector(
                   onTap: tappable ? () => _abrirCarta(ctx, carta) : null,
@@ -1656,7 +1562,7 @@ class _CellActionsBar extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(e.tipo.icon, style: const TextStyle(fontSize: 11)),
+                        Text(e.icono, style: const TextStyle(fontSize: 11)),
                         const SizedBox(width: 3),
                         Text(e.tipo.nombre.toUpperCase(),
                             style: TextStyle(
@@ -1674,6 +1580,8 @@ class _CellActionsBar extends StatelessWidget {
                                   fontWeight: FontWeight.bold)),
                         ],
                         const SizedBox(width: 5),
+                        // Turnos que le quedan al efecto: el mismo número que
+                        // muestra el badge de la casilla en el tablero.
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 4, vertical: 1),
@@ -1688,6 +1596,36 @@ class _CellActionsBar extends StatelessWidget {
                                   fontFamily: 'Cinzel',
                                   fontWeight: FontWeight.bold)),
                         ),
+                        if (autor.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          if (colorAutor != null) ...[
+                            Container(
+                              width: 5,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: colorAutor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 2),
+                          ],
+                          Text(autor,
+                              style: TextStyle(
+                                  fontSize: 6.5,
+                                  color: color.withOpacity(0.75),
+                                  letterSpacing: 0.8,
+                                  fontFamily: 'Cinzel')),
+                        ],
+                        // Trampa propia todavía sin disparar: el rival NO la ve.
+                        if (e.oculta) ...[
+                          const SizedBox(width: 3),
+                          Text('OCULTA',
+                              style: TextStyle(
+                                  fontSize: 6.5,
+                                  color: color.withOpacity(0.75),
+                                  letterSpacing: 0.8,
+                                  fontFamily: 'Cinzel')),
+                        ],
                         if (tappable) ...[
                           const SizedBox(width: 3),
                           Icon(Icons.open_in_new,

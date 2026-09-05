@@ -272,8 +272,13 @@ class _RankRow extends StatelessWidget {
     final vic = (fila['victorias'] as num?)?.toInt() ?? 0;
     final img = (fila['imagenPerfil'] as String?) ?? '';
 
+    // Trofeo destacado (lo resuelve el backend: icono + nombre).
+    final trofeoIcono = (fila['trofeoIcono'] as String?)?.trim() ?? '';
+    final trofeoNombre = (fila['trofeoNombre'] as String?)?.trim() ?? '';
+
     final primario = war.primario;
     final tenue = war.textoTenue;
+    const oro = Color(0xFFE0B040);
 
     final uid = (fila['uid'] as String?) ?? '';
     return GestureDetector(
@@ -321,23 +326,47 @@ class _RankRow extends StatelessWidget {
             // Avatar.
             _Avatar(url: img, color: primario),
             const SizedBox(width: 10),
-            // Alias + nivel.
+            // Alias + nivel + trofeo destacado.
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    nombre,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: war.texto,
-                    ),
+                  Row(
+                    children: [
+                      if (trofeoIcono.isNotEmpty) ...[
+                        Text(trofeoIcono, style: const TextStyle(fontSize: 14)),
+                        const SizedBox(width: 5),
+                      ],
+                      Flexible(
+                        child: Text(
+                          nombre,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: war.texto,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text('Nivel $nivel · $exp XP',
                       style: TextStyle(fontSize: 12, color: tenue)),
+                  // Nombre del trofeo destacado.
+                  if (trofeoNombre.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      trofeoNombre,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        color: oro,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

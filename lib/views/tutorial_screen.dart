@@ -175,11 +175,19 @@ enum _Step {
   cartaGrande,
   sacarCuartel,
   mover,
+  // Primer FIN TURNO: no hay combates. El informe se abre en ZERO y sirve para
+  // explicar de dónde sale la energía antes de gastarla en evolucionar.
+  cierreTurno,
+  // Al cerrar el informe, el rival ha movido una unidad junto a la tuya: así se
+  // entiende que los turnos se resuelven a la vez para todos los jugadores.
+  rivalCerca,
   evolucion,
   batalla,
   informe,
   estatica,
   teletransporte,
+  // Segundo informe explicado: la pestaña ACCIONES con el teletransporte.
+  informeAcciones,
   misil,
   fin,
 }
@@ -191,14 +199,25 @@ const List<_Step> _orden = [
   _Step.cartaGrande,
   _Step.sacarCuartel,
   _Step.mover,
+  _Step.cierreTurno,
+  _Step.rivalCerca,
   _Step.evolucion,
   _Step.batalla,
   _Step.informe,
   _Step.estatica,
   _Step.teletransporte,
+  _Step.informeAcciones,
   _Step.misil,
   _Step.fin,
 ];
+
+/// Referencia a una carta propia del tablero, para el listado que aparece al
+/// declarar un teletransporte (mismo flujo que el modal real de la partida).
+class _TeleRef {
+  final String coord;
+  final _TCard card;
+  const _TeleRef(this.coord, this.card);
+}
 
 // Nodo auxiliar para el BFS de movimiento.
 class _QN {
@@ -371,6 +390,30 @@ class _TutorialScreenState extends State<TutorialScreen>
   Map<String, dynamic>? _combateInforme;
   _CombatePendiente? _combatePendiente;
 
+  /// Turno del tutorial. Sube en cada FIN TURNO y se muestra en el informe.
+  int _turno = 1;
+
+  // ── Acción de teletransporte declarada (pendiente de cierre) ─────────────
+  // Reproduce el flujo REAL: seleccionas la carta de acción en la mano, tocas
+  // la celda DESTINO, eliges en un listado qué carta tuya viajará y la acción
+  // queda PENDIENTE (marcador fantasma en el destino) hasta que cierras turno.
+  String? _teleDestino;
+  String? _teleOrigen;
+  _TCard? _teleCarta;
+  bool get _teleListo => _teleDestino != null && _teleOrigen != null;
+
+  /// True cuando la acción ya se ha ejecutado al cerrar el turno: el marcador
+  /// fantasma desaparece, pero los datos siguen disponibles para el informe.
+  bool _teleResuelto = false;
+
+  // ── Último informe mostrado (para reabrirlo con el botón 📜) ─────────────
+  List<Map<String, dynamic>> _informeCombates = const [];
+  List<Map<String, dynamic>> _informeAcciones = const [];
+  List<Map<String, dynamic>> _informeMovimientos = const [];
+  int _informeTab = 0;
+  String _informeNota = '';
+  CartaModel? _informeCarta;
+
   late final AnimationController _pulse;
 
   _Step get _step => _orden[_paso];
@@ -394,6 +437,7 @@ class _TutorialScreenState extends State<TutorialScreen>
   void _resetPartida() {
     _board.clear(); // el mapa arranca VACÍO
     _zero = 12;
+    _turno = 1;
     _onEnterStep();
   }
 
@@ -411,7 +455,15 @@ class _TutorialScreenState extends State<TutorialScreen>
       _batallaResuelta = false;
       _combatePendiente = null;
     }
-    if (_step == _Step.batalla) {
+    if (_step != _Step.teletransporte && _step != _Step.informeAcciones) {
+      // La acción declarada solo vive entre su paso y el informe que la explica.
+      _teleDestino = null;
+      _teleOrigen = null;
+      _teleCarta = null;
+      _teleResuelto = false;
+    }
+    if (_step == _Step.rivalCerca || _step == _Step.batalla) {
+      // El rival aparece al RESOLVERSE el primer turno, junto a tu unidad.
       _spawnDron();
     } else if (_step == _Step.misil) {
       _spawnTanque();
@@ -563,9 +615,7 @@ class _TutorialScreenState extends State<TutorialScreen>
   }
 
   bool get _pasoSeleccionaUnidad =>
-      _step == _Step.mover ||
-      _step == _Step.batalla ||
-      (_step == _Step.teletransporte && _selHand?.id == 'tele');
+      _step == _Step.mover || _step == _Step.batalla;
 
   bool get _usaDeploy => _step == _Step.sacarCuartel || _step == _Step.estatica;
 
@@ -596,7 +646,10 @@ class _TutorialScreenState extends State<TutorialScreen>
         }
         break;
       case _Step.teletransporte:
-        if (_selHand?.id == 'tele' && _selBoard != null) t = _celdasLibres();
+        // Flujo REAL de una carta de acción: al seleccionarla en la mano se
+        // iluminan directamente las celdas OBJETIVO (aquí, el destino libre del
+        // teletransporte). La carta que viaja se elige DESPUÉS, en un listado.
+        if (_selHand?.id == 'tele' && !_teleListo) t = _celdasLibres();
         break;
       case _Step.misil:
         if (_selHand?.id == 'misil') t = _enemyCoords();
@@ -698,22 +751,11 @@ class _TutorialScreenState extends State<TutorialScreen>
         }
         break;
       case _Step.teletransporte:
-        if (_selHand?.id != 'tele') break;
-        if (_selBoard == null) {
-          if (placed?.owner == 'yo') {
-            setState(() {
-              _selBoard = coord;
-              _recalcTargets();
-            });
-          }
-        } else if (_targets.contains(coord)) {
-          _teletransportar(_selBoard!, coord);
-        } else if (placed?.owner == 'yo') {
-          setState(() {
-            _selBoard = coord;
-            _recalcTargets();
-          });
-        }
+        // 1) Carta de acción seleccionada en la mano → 2) tocas la celda
+        // DESTINO → 3) eliges en el listado qué carta tuya viaja. La acción
+        // queda declarada y no se resuelve hasta cerrar el turno.
+        if (_selHand?.id != 'tele' || _teleListo) break;
+        if (_targets.contains(coord)) _elegirCartaTeleport(coord);
         break;
       case _Step.misil:
         if (_selHand?.id == 'misil' && _targets.contains(coord)) {
@@ -856,31 +898,154 @@ class _TutorialScreenState extends State<TutorialScreen>
   }
 
   // ── Cierre de turno + informe de fin de turno ───────────────
-  /// Cierra el turno del tutorial: RESUELVE el combate pendiente (la carta
-  /// enemiga se destruye y conquistas la celda ganando su premio), abre el
-  /// INFORME DE BATALLA con el resultado y, al volver, avanza a la explicación.
+  /// Cierra el turno del tutorial. Hace lo mismo que el juego real: resuelve lo
+  /// que estuviera PENDIENTE (combates y acciones declaradas), genera el
+  /// INFORME DE FIN DE TURNO y avanza el turno.
+  ///
+  /// Se usa en tres momentos del tutorial, cada uno con su informe:
+  ///   · [_Step.cierreTurno]    → turno sin combates; informe abierto en ZERO.
+  ///   · [_Step.batalla]        → se resuelve el combate; informe en COMBATES.
+  ///   · [_Step.teletransporte] → se resuelve la acción; informe en ACCIONES.
   Future<void> _cerrarTurnoTutorial() async {
-    final p = _combatePendiente;
-    if (p != null) {
+    final paso = _step;
+
+    if (paso == _Step.cierreTurno) {
+      // Turno tranquilo: nadie ha luchado. Solo se cobra el farmeo del cristal.
       setState(() {
-        // La enemiga desaparece; tu carta ocupa la celda en solitario.
-        _board[p.coord] = _Placed(p.aliada, 'yo');
-        _zero += p.premio;
-        _combatePendiente = null;
+        _zero += 10;
+        _turno++;
       });
+      _prepararInforme(
+        tab: 2, // ZERO
+        combates: const [],
+        acciones: const [],
+        carta: _torreta.aModelo(),
+        nota: 'Este es el INFORME DE FIN DE TURNO: se genera cuando todos los '
+            'jugadores han cerrado y el turno se resuelve. Esta vez la pestaña '
+            'COMBATES está vacía porque nadie ha luchado. Estás en ZERO, donde '
+            'se detalla la ENERGÍA (Ø) que has ganado: cada CRISTAL ZERO (las '
+            'celdas con el icono Ø, como C8) da +10 Ø por turno a quien tenga '
+            'una carta encima, y también se gana Ø al vencer combates. Con esa '
+            'energía pagas despliegues, evoluciones y acciones.',
+      );
+      await _abrirInforme();
+      if (!mounted) return;
+      _advance();
+      return;
     }
-    await _abrirInforme();
-    if (!mounted) return;
-    _advance();
+
+    if (paso == _Step.batalla) {
+      final p = _combatePendiente;
+      if (p != null) {
+        setState(() {
+          // La enemiga desaparece; tu carta ocupa la celda en solitario.
+          _board[p.coord] = _Placed(p.aliada, 'yo');
+          _zero += p.premio + 10;
+          _combatePendiente = null;
+          _turno++;
+        });
+      }
+      _prepararInforme(
+        tab: 0, // COMBATES
+        combates: _combateInforme != null ? [_combateInforme!] : const [],
+        acciones: const [],
+        carta: _tele.aModelo(),
+        nota:
+            'Pestaña COMBATES: aquí aparece cada celda donde ha habido lucha. '
+            'Se muestran los dos bandos con su FUERZA y DEFENSA totales y el '
+            'PODER NETO de cada uno (tu fuerza menos la defensa rival). Gana el '
+            'de mayor poder neto: sus cartas sobreviven, las del perdedor se '
+            'destruyen y el ganador se lleva la celda y la recompensa en Ø.',
+      );
+      await _abrirInforme();
+      if (!mounted) return;
+      _advance();
+      return;
+    }
+
+    if (paso == _Step.teletransporte) {
+      _resolverTeletransporte();
+      _prepararInforme(
+        tab: 1, // ACCIONES
+        combates: const [],
+        acciones: _accionesInformeTele(),
+        carta: _misil.aModelo(),
+        nota: 'Pestaña ACCIONES: recoge todas las habilidades lanzadas en el '
+            'turno por cualquier jugador (teletransportes, disparos, venenos, '
+            'parálisis, escudos y potenciaciones), con quién la lanzó, desde '
+            'qué celda y sobre qué objetivo. Aquí ves tu TELETRANSPORTE ya '
+            'resuelto. Las acciones que el servidor rechaza aparecen marcadas '
+            'como FALLIDA con su motivo.',
+      );
+      await _abrirInforme();
+      if (!mounted) return;
+      _advance();
+      return;
+    }
   }
 
-  /// Abre el informe de batalla real (misma pantalla que en la partida),
-  /// posicionado en la pestaña ZERO y con una nota explicativa del tutorial
-  /// para explicar cómo se farmea energía.
+  /// Guarda la configuración del informe que toca mostrar. Se conserva para
+  /// poder reabrirlo con el botón 📜 de la barra superior, igual que en la
+  /// partida real.
+  void _prepararInforme({
+    required int tab,
+    required List<Map<String, dynamic>> combates,
+    required List<Map<String, dynamic>> acciones,
+    required String nota,
+    CartaModel? carta,
+  }) {
+    _informeTab = tab;
+    _informeCombates = combates;
+    _informeAcciones = acciones;
+    _informeMovimientos = _movimientosLogYo();
+    _informeNota = nota;
+    _informeCarta = carta;
+  }
+
+  /// Movimientos del turno con tus cartas y su posición final, en el formato
+  /// que consume la pestaña MOVIMIENTOS del informe real.
+  List<Map<String, dynamic>> _movimientosLogYo() {
+    final celdas = <String, dynamic>{};
+    _board.forEach((coord, p) {
+      if (p.owner != 'yo') return;
+      celdas[coord] = [
+        {
+          'Nombre': p.card.nombre,
+          'Fuerza': p.card.fuerza,
+          'Defensa': p.card.defensa,
+          'nombre': p.card.nombre,
+          'fuerza': p.card.fuerza,
+          'defensa': p.card.defensa,
+        }
+      ];
+    });
+    return [
+      {'uid': 'yo', 'zona': 'south', 'celdas': celdas}
+    ];
+  }
+
+  /// Entrada de `accionesLog` del teletransporte, con el mismo formato que
+  /// genera el servidor y que pinta la pestaña ACCIONES.
+  List<Map<String, dynamic>> _accionesInformeTele() {
+    if (_teleDestino == null || _teleOrigen == null) return const [];
+    return [
+      {
+        'tipo': 'teletransporte',
+        'uid': 'yo',
+        'zona': 'south',
+        'habilidadNombre': 'Teletransporte',
+        'origen': _teleOrigen,
+        'cartaOrigenCoord': _teleOrigen,
+        'destino': _teleDestino,
+        'cartaNombre': _teleCarta?.nombre ?? 'una carta',
+      }
+    ];
+  }
+
+  /// Abre el informe de batalla real (misma pantalla que en la partida) con la
+  /// configuración preparada en [_prepararInforme].
   Future<void> _abrirInforme() async {
-    final combate = _combateInforme;
-    // Entrada de farmeo de ejemplo: +10 Zero del cristal (rayo) de C8, para que
-    // la pestaña ZERO muestre un ingreso real que explicar.
+    // El farmeo del cristal (rayo) de C8 se cobra todos los turnos: +10 Ø.
     const farmeo = <Map<String, dynamic>>[
       {
         'uid': 'yo',
@@ -892,10 +1057,10 @@ class _TutorialScreenState extends State<TutorialScreen>
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => InformeBatallaScreen(
-          combateLog: combate != null ? [combate] : const [],
-          movimientosLog: const [],
+          combateLog: _informeCombates,
+          movimientosLog: _informeMovimientos,
           farmeoLog: farmeo,
-          accionesLog: const [],
+          accionesLog: _informeAcciones,
           rayoCoords: const [_rayo],
           historial: const [],
           localUid: 'yo',
@@ -903,17 +1068,10 @@ class _TutorialScreenState extends State<TutorialScreen>
             LobbyJugador(uid: 'yo', alias: 'TÚ'),
             LobbyJugador(uid: 'rojo', alias: 'Rojo'),
           ],
-          turno: 1,
-          // La carta nueva del turno: la Torreta que usarás en el paso siguiente.
-          ultimaCartaRepartida: _torreta.aModelo(),
-          // Abre en COMBATES (índice 0) y muestra la nota guía del tutorial.
-          initialTabIndex: 0,
-          notaTutorial:
-              'Este es el informe de fin de turno. Aquí ves el COMBATE que acabas '
-              'de ganar. Ahora toca la pestaña ZERO (arriba) para ver cómo se '
-              'farmea la ENERGÍA ZERO (Ø): cada CRISTAL ZERO (celdas con el icono '
-              'Ø, como C8) da +10 Ø por turno a quien tenga una carta encima, y '
-              'también ganas Ø al vencer combates.',
+          turno: _turno,
+          ultimaCartaRepartida: _informeCarta,
+          initialTabIndex: _informeTab,
+          notaTutorial: _informeNota.isEmpty ? null : _informeNota,
         ),
       ),
     );
@@ -928,14 +1086,121 @@ class _TutorialScreenState extends State<TutorialScreen>
     _advance();
   }
 
-  void _teletransportar(String src, String dst) {
+  // ── Teletransporte (flujo REAL de una carta de acción) ──────
+  /// Paso 3 del flujo: con el destino ya elegido, se abre el LISTADO de tus
+  /// cartas del tablero para decidir cuál viaja. Es el mismo modal que usa la
+  /// partida real tras marcar la celda objetivo de un teletransporte.
+  Future<void> _elegirCartaTeleport(String destino) async {
+    final candidatos = _board.entries
+        .where((e) => e.value.owner == 'yo')
+        .map((e) => _TeleRef(e.key, e.value.card))
+        .toList();
+    if (candidatos.isEmpty) {
+      _toast('No tienes cartas en el tablero para teletransportar.');
+      return;
+    }
+
+    final elegido = await showDialog<_TeleRef>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1220),
+        title: const Text('¿QUÉ CARTA TELETRANSPORTAS?',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 12,
+                color: Color(0xFF40C0FF),
+                letterSpacing: 1.5)),
+        content: SizedBox(
+          width: 280,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: candidatos.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            itemBuilder: (_, i) {
+              final r = candidatos[i];
+              return InkWell(
+                onTap: () => Navigator.of(ctx).pop(r),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF06101C),
+                    borderRadius: BorderRadius.circular(4),
+                    border:
+                        Border.all(color: const Color(0x4040C0FF), width: 0.8),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(r.coord,
+                          style: const TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 12,
+                              color: Color(0xFFC8A860),
+                              fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(r.card.nombre,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontFamily: 'Cinzel',
+                                fontSize: 10,
+                                color: Color(0xFFB0A090))),
+                      ),
+                      Text('${r.card.fuerza}⚔',
+                          style: const TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 10,
+                              color: Color(0xFFC04040))),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(null),
+            child: const Text('CANCELAR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    color: Color(0xFF506070),
+                    fontSize: 10)),
+          ),
+        ],
+      ),
+    );
+
+    if (elegido == null || !mounted) return;
+
     setState(() {
-      final p = _board.remove(src)!;
-      _board[dst] = p;
+      // La acción queda DECLARADA, no resuelta: el coste se reserva ya (como en
+      // la partida) y en el destino aparece el marcador fantasma.
+      _teleDestino = destino;
+      _teleOrigen = elegido.coord;
+      _teleCarta = elegido.card;
       _zero = (_zero - _tele.coste).clamp(0, 999);
+      _targets = {};
+      _selBoard = null;
     });
-    _toast('¡Teletransporte! −${_tele.coste} Ø');
-    _advance();
+    _toast('Teletransporte declarado: ${elegido.card.nombre} → $destino '
+        '(−${_tele.coste} Ø). Cierra el turno para resolverlo.');
+  }
+
+  /// Resuelve al cerrar el turno la acción declarada: la carta viaja realmente.
+  void _resolverTeletransporte() {
+    final src = _teleOrigen;
+    final dst = _teleDestino;
+    if (src == null || dst == null) return;
+    final p = _board.remove(src);
+    if (p == null) return;
+    setState(() {
+      _board[dst] = p;
+      _zero += 10; // farmeo del cristal
+      _turno++;
+      // El fantasma se retira: la acción ya está ejecutada.
+      _teleResuelto = true;
+    });
   }
 
   void _lanzarMisil(String coord) {
@@ -1000,10 +1265,16 @@ class _TutorialScreenState extends State<TutorialScreen>
     // ── Estado de fin de turno ──
     // El botón FIN TURNO solo se activa cuando el combate del paso "batalla" ya
     // se ha resuelto: al pulsarlo se abre el informe de fin de turno.
-    final puedeCerrarTurno = _step == _Step.batalla && _batallaResuelta;
-    // El botón de informe (📜) del menú superior se habilita en el paso de
-    // explicación para poder reabrir el informe cuando se quiera.
-    final puedeVerInforme = _step == _Step.informe;
+    // El botón FIN TURNO se activa en los tres cierres del tutorial: el turno
+    // tranquilo, el que resuelve el combate y el que resuelve la acción.
+    final puedeCerrarTurno = _step == _Step.cierreTurno ||
+        (_step == _Step.batalla && _batallaResuelta) ||
+        (_step == _Step.teletransporte && _teleListo);
+    // El botón de informe (📜) se habilita en los pasos de explicación para
+    // poder reabrir el último informe cuando se quiera.
+    final puedeVerInforme = _step == _Step.rivalCerca ||
+        _step == _Step.informe ||
+        _step == _Step.informeAcciones;
 
     return Scaffold(
       backgroundColor: war.fondo,
@@ -1044,6 +1315,14 @@ class _TutorialScreenState extends State<TutorialScreen>
                     obeliscoColores: _obeliscoColores,
                     playerColors: _playerColors,
                     localPlayerUid: 'yo',
+                    // Marcador FANTASMA de la acción declarada: igual que en la
+                    // partida, la celda objetivo queda marcada hasta que el
+                    // turno se resuelve.
+                    fantasmasAccion: (_teleDestino != null && !_teleResuelto)
+                        ? {
+                            _teleDestino!: [_tele.aModelo()]
+                          }
+                        : const {},
                     onBackgroundTap: () {
                       if (_sidebarOpen) {
                         _cerrarSidebar();
@@ -1352,9 +1631,31 @@ class _TutorialScreenState extends State<TutorialScreen>
               'llegar. Toca una para desplazarte.',
           hint: hint,
         );
+      case _Step.cierreTurno:
+        return const _Coach(
+          titulo: '6 · Cierra tu primer turno',
+          cuerpo:
+              'En WarZero todos los jugadores planifican su turno A LA VEZ y '
+              'nada ocurre hasta que se cierra. Tus movimientos y acciones son '
+              'solo intenciones hasta ese momento. Pulsa FIN TURNO (abajo, a la '
+              'derecha): cuando el turno se resuelve se genera el INFORME DE FIN '
+              'DE TURNO con todo lo que ha pasado.',
+          hint: 'Pulsa FIN TURNO',
+        );
+      case _Step.rivalCerca:
+        return const _Coach(
+          titulo: '7 · El turno se ha resuelto',
+          cuerpo:
+              'En ese informe no había combates, porque nadie ha luchado este '
+              'turno, y en la pestaña ZERO has visto de dónde sale tu energía. '
+              'Pero fíjate en el tablero: mientras tú movías, un RIVAL también '
+              'movía. Su unidad ha avanzado y ahora está junto a la tuya. Antes '
+              'de decidir qué haces con ella, veamos cómo reforzarla.',
+          boton: 'SIGUIENTE',
+        );
       case _Step.evolucion:
         return _Coach(
-          titulo: '6 · Evolución',
+          titulo: '8 · Evolución',
           cuerpo: 'Algunas cartas pueden EVOLUCIONAR a una versión más potente '
               'pagando Energía Zero. Toca tu Soldado en el tablero para abrir su '
               'ficha: pulsa la FLECHA de evolución para ver en qué se convierte y '
@@ -1368,43 +1669,44 @@ class _TutorialScreenState extends State<TutorialScreen>
         if (_batallaResuelta) {
           // Segunda fase del paso: cerrar el turno para ver el informe.
           return const _Coach(
-            titulo: '7 · Cierra el turno',
+            titulo: '9 · Cierra el turno',
             cuerpo:
                 'Tu carta ha entrado en la celda del Dron: ahora la celda muestra '
                 'el ⚡ de cada bando (tu fuerza menos la defensa rival, y al revés). '
                 'El combate NO se resuelve todavía y el Dron sigue ahí. Pulsa FIN '
-                'TURNO (abajo a la derecha): al cerrar el turno se resuelven los '
-                'combates, la carta enemiga es destruida y se genera el INFORME '
-                'DE FIN DE TURNO.',
-            hint: 'Pulsa FIN TURNO para resolver y ver el informe',
+                'TURNO: al cerrar el turno se resuelven los combates, la carta '
+                'enemiga es destruida y se genera el informe.',
+            hint: 'Pulsa FIN TURNO para resolver el combate',
           );
         }
         return _Coach(
-          titulo: '7 · ¡Batalla!',
+          titulo: '9 · ¡Batalla!',
           cuerpo:
-              'Ha aparecido un Dron Rival junto a ti. Al entrar en una celda '
-              'enemiga se combate: gana quien supere la defensa rival. '
-              'Selecciona tu unidad y ataca al Dron.',
+              'Ya tienes tu unidad reforzada y el Dron Rival al lado. Al entrar '
+              'en una celda ocupada por un enemigo se combate: gana quien supere '
+              'la defensa rival. Selecciona tu unidad y muévela a la celda del '
+              'Dron.',
           hint: _selBoard == null
               ? 'Toca tu unidad para seleccionarla'
               : 'Toca la celda del Dron Rival',
         );
       case _Step.informe:
         return const _Coach(
-          titulo: '8 · Informe de fin de turno',
+          titulo: '10 · Informe: pestaña COMBATES',
           cuerpo:
-              'El informe se abre en COMBATES con el combate que ganaste. Cambia '
-              'a la pestaña ZERO para ver cómo se farmea la energía: los CRISTALES '
-              'ZERO (celdas con el icono Ø, como C8) dan +10 Ø por turno a quien '
-              'tenga una carta encima, y también ganas Ø al vencer combates. El '
-              'informe reúne además ACCIONES, CARTA (la nueva carta del turno) y '
-              'MOVIMIENTOS. Puedes reabrirlo con el botón 📜 de la barra superior.',
+              'Este turno SÍ ha habido lucha, así que el informe se ha abierto en '
+              'COMBATES. Ahí ves la celda donde se combatió, los dos bandos con '
+              'su fuerza y defensa totales y el PODER NETO de cada uno: gana el '
+              'mayor, sus cartas sobreviven y se queda la celda más la '
+              'recompensa en Ø. El informe tiene además ACCIONES, ZERO, CARTA '
+              '(la nueva carta del turno) y MOVIMIENTOS. Puedes reabrirlo con el '
+              'botón 📜 de la barra superior.',
           boton: 'SIGUIENTE',
         );
       case _Step.estatica:
         final tieneSel = _selHand?.id == 'torreta';
         return _Coach(
-          titulo: '9 · Cartas estáticas',
+          titulo: '11 · Cartas estáticas',
           cuerpo: 'La "Torreta Búnker" es ESTÁTICA: no se mueve (Mov 0). '
               'Selecciónala en tu mano y colócala sobre una '
               'celda que controlas.',
@@ -1413,25 +1715,51 @@ class _TutorialScreenState extends State<TutorialScreen>
               : 'Selecciona la Torreta en tu mano',
         );
       case _Step.teletransporte:
-        String hint;
+        if (_teleListo) {
+          return _Coach(
+            titulo: '12 · Cierra el turno',
+            cuerpo:
+                'La acción queda DECLARADA, no ejecutada: en la celda destino '
+                'aparece un marcador fantasma que solo ves tú, y el coste ya '
+                'está reservado. Igual que los movimientos, las acciones no se '
+                'resuelven hasta cerrar el turno (y el rival puede bloquearlas, '
+                'por ejemplo con un escudo). Pulsa FIN TURNO.',
+            hint: 'Pulsa FIN TURNO para resolver el teletransporte',
+          );
+        }
+        final String hint;
         if (_selHand?.id != 'tele') {
           hint = 'Selecciona la carta Teletransporte en tu mano';
-        } else if (_selBoard == null) {
-          hint = 'Toca una carta TUYA del tablero';
         } else {
-          hint = 'Toca la celda de destino';
+          hint = 'Toca la celda DESTINO resaltada';
         }
-        return _Coach(
-          titulo: '10 · Acción: Teletransporte',
-          cuerpo: 'Las cartas de ACCIÓN lanzan efectos y se descartan. El '
-              'Teletransporte mueve una carta tuya a cualquier celda libre: '
-              'selecciona la acción, elige tu carta y luego el destino.',
-          hint: hint,
+        return const _Coach(
+          titulo: '12 · Acción: Teletransporte',
+          cuerpo:
+              'Las cartas de ACCIÓN no se despliegan: lanzan un efecto sobre el '
+              'tablero y se descartan. El orden es siempre el mismo: 1) tocas la '
+              'carta de acción en tu mano, 2) se iluminan las celdas OBJETIVO y '
+              'eliges una —aquí, el destino del salto—, y 3) si la habilidad '
+              'necesita saber sobre qué carta actúa, aparece un LISTADO con tus '
+              'cartas del tablero para que elijas.',
+          hint: '',
+        ).conHint(hint);
+      case _Step.informeAcciones:
+        return const _Coach(
+          titulo: '13 · Informe: pestaña ACCIONES',
+          cuerpo:
+              'El informe se ha abierto en ACCIONES: ahí queda registrada cada '
+              'habilidad lanzada en el turno por cualquier jugador —quién la '
+              'lanzó, desde qué celda y sobre qué objetivo—, incluidos los '
+              'venenos, parálisis y escudos con los turnos que duran. Si el '
+              'servidor rechaza una acción (sin energía, objetivo protegido…) '
+              'aparece marcada como FALLIDA con el motivo.',
+          boton: 'SIGUIENTE',
         );
       case _Step.misil:
         final tieneSel = _selHand?.id == 'misil';
         return _Coach(
-          titulo: '11 · Acción: Misil',
+          titulo: '14 · Acción: Misil',
           cuerpo: 'Ha aparecido un Tanque Rival. El Misil Zero es una acción '
               'ofensiva: destruye una carta enemiga a distancia. Selecciónalo '
               'en tu mano y apunta al Tanque.',
@@ -1444,8 +1772,9 @@ class _TutorialScreenState extends State<TutorialScreen>
           titulo: '¡Tutorial completado!',
           cuerpo:
               'Ya conoces la Energía Zero, los atributos, el despliegue, el '
-              'movimiento, la evolución, el combate y las cartas estáticas y de '
-              'acción. ¡Estás listo para tu primera partida real!',
+              'movimiento, el cierre de turno y su informe, la evolución, el '
+              'combate y las cartas estáticas y de acción. ¡Estás listo para tu '
+              'primera partida real!',
           boton: 'TERMINAR',
         );
     }
@@ -1544,4 +1873,13 @@ class _Coach {
     this.boton,
     this.hint,
   });
+
+  /// Copia con otra pista. Permite declarar el texto largo como `const` y
+  /// ajustar solo la pista según el estado del paso.
+  _Coach conHint(String nuevoHint) => _Coach(
+        titulo: titulo,
+        cuerpo: cuerpo,
+        boton: boton,
+        hint: nuevoHint,
+      );
 }

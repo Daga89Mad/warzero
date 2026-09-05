@@ -778,8 +778,6 @@ class _SkinItem {
     this.desbloqueada = true,
   });
 
-  bool get esLegendaria => rareza == 'legendaria';
-
   _SkinItem comoDesbloqueada() => _SkinItem(
         id: id,
         nombre: nombre,
@@ -818,8 +816,7 @@ class _SkinCompraCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cumple = skin.numeroCompra > 0 && vecesObtenida >= skin.numeroCompra;
     final faltan = (skin.numeroCompra - vecesObtenida).clamp(0, 9999);
-    final puedeCanjear = !skin.esLegendaria &&
-        skin.numeroCompra > 0 &&
+    final puedeCanjear = skin.numeroCompra > 0 &&
         cumple &&
         !comprando &&
         !bloqueadoPorOtraCompra;
@@ -879,12 +876,12 @@ class _SkinCompraCard extends StatelessWidget {
                         color: Color(0xFFC8A860),
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
-                if (skin.esLegendaria)
-                  const Text('Solo se consigue en sobres',
+                if (skin.numeroCompra <= 0)
+                  const Text('No disponible para canje',
                       style: TextStyle(
                           fontFamily: 'Cinzel',
                           fontSize: 7,
-                          color: Color(0xFFFF9500)))
+                          color: Color(0xFF607080)))
                 else
                   Text(
                     'Copias: $vecesObtenida/${skin.numeroCompra}'
@@ -900,7 +897,7 @@ class _SkinCompraCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          if (!skin.esLegendaria)
+          if (skin.numeroCompra > 0)
             GestureDetector(
               onTap: puedeCanjear ? onComprar : null,
               child: Container(

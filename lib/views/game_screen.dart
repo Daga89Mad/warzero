@@ -166,6 +166,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _juegoTerminado = false;
   String? _ganadorUid;
 
+  /// Hay una eliminación del jugador local pendiente de comunicar. No se
+  /// muestra el diálogo en el acto: primero se deja ver el INFORME del turno en
+  /// el que le destruyeron el cuartel (y su revisión), y al cerrarlo se abre el
+  /// diálogo con el acceso a puntuaciones y recompensas. Si no hay informe que
+  /// mostrar, se drena de inmediato.
+  bool _eliminadoPendiente = false;
+
+  /// El jugador local ya vio el desglose (puntuaciones + recompensas) de su
+  /// eliminación. Evita repetirlo en cada sondeo o al reentrar en la partida.
+  bool _resultadosEliminadoVistos = false;
+
   List<Map<String, dynamic>> _lastCombateLog = [];
   List<Map<String, dynamic>> _lastMovimientosLog = [];
   List<Map<String, dynamic>> _lastFarmeoLog = []; // ← nuevo
@@ -317,6 +328,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Acciones declaradas en este turno (se envían al cerrar turno).
   final List<AccionPendiente> _accionesPendientes = [];
+
+  /// instanceId de la carta del tablero que está preparando
+  /// actualmente una habilidad.
+  ///
+  /// Null cuando la acción viene de la mano o no hay acción activa.
+  String? _lanzadorHabilidadInstanceId;
 
   /// Marcadores puramente visuales y locales: carta(s) de acción colocadas
   /// en una celda mientras la acción está pendiente de resolverse al cerrar
@@ -1152,6 +1169,74 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return conteo.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
+  /// True si el mapa de obeliscos del [estado] aún NO cubre a todos los
+  /// jugadores ACTIVOS (no eliminados), o si al jugador local le falta el suyo.
+  /// Se usa para decidir si merece la pena reintentar `entrar` en el arranque.
+  bool _faltanObeliscos(LobbyModel lobby, Map<String, dynamic> estado) {
+    final obel = (estado['obeliscos'] as Map?)?.map(
+          (k, v) => MapEntry(k.toString(), v.toString()),
+        ) ??
+        const <String, String>{};
+
+    // Al jugador local SIEMPRE le tiene que constar cuartel.
+    if ((obel[widget.localPlayerUid] ?? '').isEmpty) return true;
+
+    // Y a cada jugador NO eliminado del lobby, también.
+    final elim = ((estado['jugadoresEliminados'] as List?) ?? const [])
+        .map((e) => e.toString())
+        .toSet();
+    for (final j in lobby.jugadores) {
+      if (elim.contains(j.uid)) continue;
+      if ((obel[j.uid] ?? '').isEmpty) return true;
+    }
+    return false;
+  }
+
+  /// Entra a la partida y, si el mapa de obeliscos llega INCOMPLETO (a algún
+  /// jugador activo —incluido el local— le falta cuartel), reintenta `entrar`
+  /// unas cuantas veces con una espera breve. Cada `entrar` re-ejecuta en el
+  /// servidor la asignación de TODOS los obeliscos pendientes, así que
+  /// reintentar rellena los que faltasen por una carrera de arranque (relleno
+  /// de bots, lectura eventualmente consistente, arranque en frío de Render).
+  ///
+  /// Con esto desaparece el "arrancas con las posiciones mal; sales y entras y
+  /// ya están bien": el reintento hace solo lo que antes había que hacer a mano.
+  /// Devuelve el ÚLTIMO EntrarResult con estado (aunque siga incompleto tras
+  /// agotar los intentos), o null si nunca hubo estado.
+  Future<EntrarResult?> _entrarConObeliscos() async {
+    const maxIntentos = 4;
+    EntrarResult? mejor;
+    for (int intento = 1; intento <= maxIntentos; intento++) {
+      EntrarResult? r;
+      try {
+        r = await _api.entrar(
+          lobbyId: widget.lobbyId!,
+          uid: widget.localPlayerUid,
+        );
+      } catch (e) {
+        debugPrint('[WZ][entrar] intento $intento error: $e');
+      }
+      if (!mounted) return mejor;
+
+      if (r?.estado != null) {
+        mejor = r; // nos quedamos con el más reciente que traiga estado
+        final lobby = LobbyModel.fromMap(widget.lobbyId!, r!.estado!);
+        if (!_faltanObeliscos(lobby, r.estado!)) {
+          return mejor; // obeliscos completos → listo
+        }
+        debugPrint(
+            '[WZ][entrar] obeliscos incompletos (intento $intento) → reintento');
+      }
+
+      if (intento < maxIntentos) {
+        // Espera creciente y corta: deja que el relleno/lectura cuaje.
+        await Future.delayed(Duration(milliseconds: 400 * intento));
+        if (!mounted) return mejor;
+      }
+    }
+    return mejor;
+  }
+
   Future<void> _loadGame() async {
     try {
       // ── 1. Entrar a la partida vía API (init atómica energías + obelisco) ──
@@ -1161,19 +1246,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       String? obeliscoAsignadoServer;
 
       if (widget.lobbyId != null) {
-        EntrarResult? entrada;
-        try {
-          entrada = await _api.entrar(
-            lobbyId: widget.lobbyId!,
-            uid: widget.localPlayerUid,
-          );
-          debugPrint('[WZ][entrar] turno=${entrada?.turnoActual} '
-              'energias=${entrada?.energiasAsignadas} '
-              'obelisco=${entrada?.obeliscoAsignado}');
-          obeliscoAsignadoServer = entrada?.obeliscoAsignado;
-        } catch (e) {
-          debugPrint('[WZ][entrar] error API entrar: $e');
-        }
+        // Reintenta `entrar` hasta que el servidor haya asignado los obeliscos
+        // de TODOS los jugadores activos (no solo el local). Antes bastaba con
+        // que la PRIMERA lectura llegara con el mapa a medias para pintar las
+        // posiciones mal, y había que salir y volver a entrar; ahora ese
+        // reintento se hace solo. (Ver _entrarConObeliscos / _faltanObeliscos.)
+        final entrada = await _entrarConObeliscos();
+        debugPrint('[WZ][entrar] turno=${entrada?.turnoActual} '
+            'energias=${entrada?.energiasAsignadas} '
+            'obelisco=${entrada?.obeliscoAsignado}');
+        obeliscoAsignadoServer = entrada?.obeliscoAsignado;
         if (!mounted) return;
 
         if (entrada?.estado != null) {
@@ -1539,23 +1621,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // El obelisco lo asigna el servidor en POST /warzero/entrar; los datos
         // ya vienen en `data['obeliscos']` y se aplicaron arriba.
 
+        // Si al (re)entrar ya estamos eliminados y la partida sigue, dejamos el
+        // aviso PENDIENTE: primero el informe del último turno, y al cerrarlo se
+        // abre el diálogo con puntuaciones y recompensas.
+        _eliminadoPendiente =
+            _estoyEliminado && !_juegoTerminado && !_resultadosEliminadoVistos;
+
         // Abrir por defecto el informe del último turno resuelto al reentrar
         // (resuelve además _ultimaCartaRepartida desde ultimoRepartoLog, para que
         // la carta de fin de turno aparezca aunque no estuviéramos presentes).
         _maybeMostrarInforme(lobby.turnoActual, data);
+        // `_maybeMostrarInforme` marca `_informeAbierto` de forma SÍNCRONA antes
+        // de su primer await, así que aquí ya sabemos si va a abrirse. Si no hay
+        // informe que mostrar, el aviso de eliminación se drena en el acto.
+        if (!_informeAbierto) _drenarEliminadoPendiente();
 
         // La resolución del turno la hace el servidor; el stream avanza solo.
         // (Antes aquí se disparaba la resolución en cliente.)
 
-        // Mostrar pantallas de fin de juego si procede
-        if (_juegoTerminado || _estoyEliminado) {
+        // Mostrar pantallas de fin de juego si procede. La eliminación ya se
+        // gestiona con `_eliminadoPendiente` (arriba), para no tapar el informe.
+        if (_juegoTerminado) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            if (_estoyEliminado && !_juegoTerminado) {
-              _showEliminadoDialog();
-            } else if (_juegoTerminado) {
-              _showFinPartidaDialog();
-            }
+            _showFinPartidaDialog();
           });
         }
         return;
@@ -1618,9 +1707,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     switch (_modoTurno) {
       case ModoTurno.diario:
       case ModoTurno.turno12h:
-        return const Duration(seconds: 45);
+        return const Duration(seconds: 55);
       case ModoTurno.rapida:
-        return const Duration(seconds: 8);
+        return const Duration(seconds: 15);
     }
   }
 
@@ -1638,9 +1727,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           'mostrado=$_informeMostradoTurno');
       return;
     }
-    if (_informeAbierto || _estoyEliminado || _juegoTerminado) {
+    // NOTA: el jugador ELIMINADO también ve el informe. Antes se saltaba por
+    // `_estoyEliminado` y por eso, justo en el turno en el que le destruían el
+    // cuartel, no llegaba a ver el desglose (PC, combates, conquistas) de la
+    // jugada que lo había eliminado: era precisamente el informe más importante
+    // de toda su partida.
+    if (_informeAbierto || _juegoTerminado) {
       debugPrint('[WZ][informe] skip: abierto=$_informeAbierto '
-          'eliminado=$_estoyEliminado terminado=$_juegoTerminado');
+          'terminado=$_juegoTerminado');
       return;
     }
     debugPrint('[WZ][informe] ABRIENDO informe turno=$turnoInforme');
@@ -1712,7 +1806,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ))
           .whenComplete(() {
         _informeAbierto = false;
-        _abrirRevisionTurno(turnoRevisar: turnoInforme);
+        _abrirRevisionTurno(turnoRevisar: turnoInforme)
+            .whenComplete(_drenarEliminadoPendiente);
       });
     });
   }
@@ -1791,14 +1886,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _ajustarGridAContenido(data, streamObeliscos);
       }
 
-      // Mostrar diálogo de eliminación si acaba de ocurrir
-      if (!yaEliminadoAntes && ahoraEliminado) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showEliminadoDialog();
-        });
+      // Acaban de eliminarnos: NO se muestra el aviso en el acto. Se marca como
+      // pendiente para que primero se vea el INFORME del turno en el que nos
+      // destruyeron el cuartel (con su desglose de PC) y, al cerrarlo, aparezca
+      // el diálogo con puntuaciones y recompensas.
+      if (!yaEliminadoAntes && ahoraEliminado && !_resultadosEliminadoVistos) {
+        _eliminadoPendiente = true;
       }
       // Mostrar fin de partida
       if (juegoTerminado && !_informeAbierto) {
+        // El flujo de fin de partida ya enseña puntuaciones y recompensas.
+        _eliminadoPendiente = false;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _showFinPartidaDialog();
         });
@@ -1809,6 +1907,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // mayor que el último informe mostrado, lo abrimos. Así no depende de
       // qué ruta avanzó `_turnoConfirmadoStream`.
       _maybeMostrarInforme(lobby.turnoActual, data);
+      // Si no había informe que abrir, el aviso de eliminación se drena ya.
+      if (!_informeAbierto) _drenarEliminadoPendiente();
 
       // ── Nuevo turno: aplicar tablero y robar 1 carta ──────────
       if (lobby.turnoActual > _turnoConfirmadoStream &&
@@ -3240,6 +3340,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _selectedHandIndex = null;
       _cancelMoveMode();
       _sidebarOpen = false;
+
+      // Una carta de acción de la mano NO tiene lanzador en tablero.
+      _lanzadorHabilidadInstanceId = null;
+
       _accionController.iniciarDesdeCartaDeMano(
         carta: carta,
         indiceMano: handIndex,
@@ -3279,11 +3383,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           error: true);
       return;
     }
-
     setState(() {
       _selectedHandIndex = null;
       _cancelMoveMode();
       _sidebarOpen = false;
+
+      // Guardamos la INSTANCIA exacta que está lanzando la habilidad.
+      _lanzadorHabilidadInstanceId = carta.instanceId;
+
       _accionController.iniciarDesdeCartaDeTablero(
         cartaEnCelda: carta,
         coord: coord,
@@ -3529,12 +3636,22 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// la lista pendiente. Si es carta de acción, se descarta de la mano.
   void _completarAccion() {
     final controller = _accionController;
-    final accion = controller.construir(
+
+    final accionBase = controller.construir(
       uid: _localPlayer.datos.uid,
       zona: _localPlayer.zona,
       turno: _boardState.turnoActual,
     );
-    if (accion == null) return;
+
+    if (accionBase == null) return;
+
+// Si la acción viene de una carta del tablero, añadimos la instancia
+// exacta que la lanzó. Para cartas de acción de la mano permanece null.
+    final accion = controller.esHabilidadDeTablero
+        ? accionBase.copyWith(
+            lanzadorInstanceId: _lanzadorHabilidadInstanceId,
+          )
+        : accionBase;
 
     // ── Revalidación defensiva de energía ──────────────────────
     // El coste se comprobó al iniciar la acción, pero puede haber pasado
@@ -3589,12 +3706,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         }
       }
       _accionController.cancelar();
+      _lanzadorHabilidadInstanceId = null;
     });
     _toast('Acción declarada. Se resolverá al cerrar el turno.');
   }
 
   void _cancelarAccion() {
-    setState(() => _accionController.cancelar());
+    setState(() {
+      _accionController.cancelar();
+      _lanzadorHabilidadInstanceId = null;
+    });
   }
 
   /// Celdas del tablero que contienen alguna carta del jugador local. Se usa
@@ -3637,6 +3758,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _sidebarOpen = false;
       _sidebarCoord = null;
       _accionController.cancelar();
+      _lanzadorHabilidadInstanceId = null;
       _accionesPendientes.clear();
       _fantasmasAccion.clear();
       // Restaurar energías locales al snapshot de inicio de turno (incluye el
@@ -4284,7 +4406,39 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         if (jugadores.isNotEmpty) _jugadoresEnPartida = jugadores.length;
         _descargasCuartel = _descargasCuartelFromData(estado);
       });
+
+      // ── Eliminación por esta ruta HTTP ────────────────────────────────────
+      // Es la que usa el jugador que acaba de CERRAR su turno (y el sondeo de
+      // espera). Si la resolución le ha destruido el cuartel, aquí es donde se
+      // entera; antes había que esperar al siguiente sondeo periódico.
+      // Solo se toca el estado si el servidor envía el campo, para no
+      // "resucitar" a un eliminado con una respuesta parcial.
+      final bool finalizadaHttp = (estado['estado'] as String?) == 'finalizada';
+      if (estado['jugadoresEliminados'] is List) {
+        final elimHttp = (estado['jugadoresEliminados'] as List)
+            .map((e) => e.toString())
+            .toList();
+        final yaEliminadoAntes = _estoyEliminado;
+        final ahoraEliminado = elimHttp.contains(widget.localPlayerUid);
+        setState(() {
+          _jugadoresEliminados = elimHttp;
+          _estoyEliminado = ahoraEliminado;
+        });
+        // Si además la partida ha terminado, manda el flujo de fin de partida
+        // (lo dispara _procesarEstado); no se encola el aviso de eliminación.
+        if (!yaEliminadoAntes &&
+            ahoraEliminado &&
+            !finalizadaHttp &&
+            !_resultadosEliminadoVistos) {
+          _eliminadoPendiente = true;
+        }
+      }
+
       _maybeMostrarInforme(turnoActual, estado);
+      // `_maybeMostrarInforme` fija `_informeAbierto` de forma síncrona: si no
+      // se abre informe, el aviso de eliminación se drena aquí mismo; si se
+      // abre, se drena al cerrarlo (y tras su pantalla de revisión).
+      if (!_informeAbierto) _drenarEliminadoPendiente();
 
       if (turnoActual > _turnoConfirmadoStream &&
           estado.containsKey('tablero')) {
@@ -4462,7 +4616,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Abre la pantalla de revisión del turno con los eventos del último
   /// turno resuelto. Se llama tras cerrar el informe de batalla.
-  void _abrirRevisionTurno({required int turnoRevisar}) {
+  ///
+  /// Devuelve el Future del push para poder encadenar lo que deba ocurrir DESPUÉS
+  /// de cerrarla (p. ej. el aviso de eliminación con sus recompensas).
+  Future<void> _abrirRevisionTurno({required int turnoRevisar}) async {
     if (!mounted) return;
     Map<String, dynamic>? entry;
     for (final h in _historialCombates.reversed) {
@@ -4480,7 +4637,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       'conquistasLog': const [],
     };
 
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => RevisionTurnoScreen(
           config: _config,
@@ -4495,9 +4652,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
+  // ── Eliminación: aviso + acceso al desglose ───────────────
+  /// Muestra el aviso de eliminación si quedó pendiente. Se llama al cerrarse el
+  /// informe (y su revisión) del turno que nos eliminó, para no taparlo.
+  void _drenarEliminadoPendiente() {
+    if (!mounted) return;
+    if (!_eliminadoPendiente) return;
+    // Si entretanto la partida ha terminado, manda el flujo de fin de partida.
+    if (_juegoTerminado) {
+      _eliminadoPendiente = false;
+      return;
+    }
+    _eliminadoPendiente = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showEliminadoDialog();
+    });
+  }
+
   // ── Diálogo de eliminación ────────────────────────────────
   void _showEliminadoDialog() {
     if (!mounted) return;
+    final restantes = _jugadoresActivos;
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -4510,16 +4685,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 fontSize: 14,
                 color: Color(0xFFCC3030),
                 letterSpacing: 1.5)),
-        content: const Text(
+        content: Text(
             'Tu cuartel general ha sido conquistado.\n'
-            'Has sido eliminado de la partida.\n'
-            'Puedes seguir observando la batalla.',
-            style: TextStyle(
+            'Has sido eliminado de la partida.\n\n'
+            'Tus puntos de combate están cerrados y tu recompensa ya se ha '
+            'acreditado: no tienes que esperar a que acabe la batalla.\n\n'
+            'Siguen en pie $restantes comandantes. Puedes seguir observando.',
+            style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 10,
                 color: Color(0xFF8A6060),
                 height: 1.7)),
         actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              // Puntuaciones + recompensas del jugador eliminado.
+              _flujoFinPartida(eliminado: true);
+            },
+            child: const Text('VER MIS RESULTADOS',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFC8A860))),
+          ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
             child: const Text('OBSERVAR',
@@ -4542,6 +4732,56 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  /// Tras ver los resultados como eliminado: decidir si seguir de espectador o
+  /// volver al menú. La partida continúa para los demás en cualquier caso.
+  Future<void> _preguntarObservarOSalir() async {
+    if (!mounted) return;
+    final seguir = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0A0A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('¿QUÉ QUIERES HACER?',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 13,
+                color: Color(0xFF8090A0),
+                letterSpacing: 1.5)),
+        content: const Text(
+            'Ya tienes tu recompensa. Puedes quedarte a ver cómo termina la '
+            'batalla o volver al menú.',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 10,
+                color: Color(0xFF607080),
+                height: 1.7)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('SEGUIR OBSERVANDO',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    color: Color(0xFFC8A860))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('SALIR AL MENÚ',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 10,
+                    color: Color(0xFF506070))),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (seguir == false && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
   }
 
   // ── Diálogo de fin de partida ─────────────────────────────
@@ -4593,10 +4833,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     );
   }
 
-  /// Secuencia de cierre de partida: al cerrar el mensaje de victoria/derrota se
-  /// muestra la tabla de PUNTUACIONES; al cerrarla, la pantalla de RECOMPENSAS
-  /// DE BATALLA; al cerrarla, se sale al menú.
-  Future<void> _flujoFinPartida() async {
+  /// Secuencia de cierre: tabla de PUNTUACIONES → pantalla de RECOMPENSAS DE
+  /// BATALLA. Se usa en dos casos:
+  ///
+  ///   · [eliminado] = false → la partida ha TERMINADO para todos. Al cerrar las
+  ///     recompensas se sale al menú.
+  ///   · [eliminado] = true  → al jugador local le han destruido el cuartel y la
+  ///     batalla continúa entre los demás. Ve igualmente sus puntuaciones y su
+  ///     recompensa (que el servidor ya le ha acreditado como anticipo) y luego
+  ///     elige entre seguir observando o volver al menú.
+  Future<void> _flujoFinPartida({bool eliminado = false}) async {
     final lobby = _currentLobby;
     final localUid = _localPlayer.datos.uid;
 
@@ -4615,21 +4861,82 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PuntuacionesScreen(
-        nombrePartida: lobby?.nombre ?? 'Partida',
+        nombrePartida: eliminado
+            ? '${lobby?.nombre ?? 'Partida'} · TU BATALLA HA TERMINADO'
+            : (lobby?.nombre ?? 'Partida'),
         jugadores: filas,
       ),
     ));
     if (!mounted) return;
 
     final pcLocal = lobby?.statsDeJugador(localUid).pc ?? 0;
+
+    // Experiencia/oro por posición final (misma tabla que el servidor,
+    // WarZeroRecompensas.RecompensaPorPosicion). Solo aplica al cierre
+    // definitivo; en el anticipo por eliminación aún no está la posición.
+    int xpGanada = 0, oroGanado = 0;
+    if (!eliminado && lobby != null) {
+      final jugs = lobby.jugadores;
+      final n = jugs.length;
+      final elim =
+          lobby.jugadoresEliminados; // orden de caída (último = más tarde)
+      int survival(String uid) {
+        final e = elim.indexOf(uid);
+        return e < 0 ? 1 << 30 : e; // no eliminado = mejor; más tarde = mejor
+      }
+
+      final ordenados = [...jugs]..sort((a, b) {
+          final pa = lobby.statsDeJugador(a.uid).pc;
+          final pb = lobby.statsDeJugador(b.uid).pc;
+          if (pb != pa) return pb.compareTo(pa);
+          return survival(b.uid).compareTo(survival(a.uid));
+        });
+      final pos = ordenados.indexWhere((j) => j.uid == localUid) + 1;
+      int baseXp(int c) => c == 2
+          ? 500
+          : c == 6
+              ? 2000
+              : c == 8
+                  ? 3000
+                  : 1000;
+      int baseOro(int c) => c == 2
+          ? 100
+          : c == 6
+              ? 300
+              : c == 8
+                  ? 400
+                  : 200;
+      if (pos == 1) {
+        xpGanada = baseXp(n);
+        oroGanado = baseOro(n);
+      } else if (pos == 2) {
+        xpGanada = baseXp(n) ~/ 2;
+        oroGanado = baseOro(n) ~/ 2;
+      } else if (pos >= 3) {
+        xpGanada = 100;
+        oroGanado = 25;
+      }
+    }
+
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => RecompensasBatallaScreen(
         pc: pcLocal,
         ejercitoId: _miEjercitoId,
-        esGanador: _ganadorUid == widget.localPlayerUid,
+        esGanador: !eliminado && _ganadorUid == widget.localPlayerUid,
+        eliminado: eliminado,
+        jugadoresRestantes: eliminado ? _jugadoresActivos : 0,
+        experiencia: xpGanada,
+        oro: oroGanado,
       ),
     ));
     if (!mounted) return;
+
+    if (eliminado) {
+      // Ya ha visto su desglose: no se le vuelve a interrumpir en esta sesión.
+      _resultadosEliminadoVistos = true;
+      await _preguntarObservarOSalir();
+      return;
+    }
 
     if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }

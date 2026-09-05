@@ -5,18 +5,19 @@ import 'package:flutter/material.dart';
 import '../models/lobby_model.dart' show kEjercitos, EjercitoInfo;
 import '../models/jugador_model.dart' show MonedaZeroExt;
 import '../services/settings_controller.dart';
+import '../services/trofeos_service.dart';
 import '../services/warzero_api.dart';
+import 'trofeos_screen.dart';
 
 /// PERFIL PÚBLICO — vista de SOLO LECTURA del perfil de otro jugador.
 ///
 /// Se abre al pulsar un jugador en el ranking. Muestra datos públicos: avatar,
-/// alias, nivel, experiencia, victorias totales y victorias por modo (2/4/6/8).
+/// alias, trofeo destacado, nivel, experiencia, victorias totales y por modo.
 /// No muestra datos privados (correo, oro, cristales) ni permite editar.
 ///
-/// Los datos básicos (alias, imagen, nivel, XP, victorias) llegan ya desde la
-/// fila del ranking, así que se pintan al instante. Las victorias por modo se
-/// intentan leer del doc del jugador como EXTRA (best-effort): si las reglas de
-/// Firestore no permiten leer el doc de otro jugador, simplemente no se muestran.
+/// Las victorias por modo, el % de colección y los trofeos se piden por la API
+/// (con credenciales de admin), que puede leer el doc de CUALQUIER jugador; el
+/// cliente no lee esos docs directamente (las reglas lo bloquean).
 class PerfilPublicoScreen extends StatefulWidget {
   final String uid;
   final String alias;
@@ -41,51 +42,81 @@ class PerfilPublicoScreen extends StatefulWidget {
 
 class _PerfilPublicoScreenState extends State<PerfilPublicoScreen> {
   final _api = WarZeroApi();
+  final _trofeosSvc = TrofeosService();
+
   int? _vic2, _vic4, _vic6, _vic8; // null = aún no cargado / no disponible
   Map<int, int> _porcentajes = {}; // ejercitoId → % de colección
+  TrofeosResult _trofeos = TrofeosResult.empty;
 
   @override
   void initState() {
     super.initState();
     _cargarExtras();
+    _cargarTrofeos();
   }
 
-  /// Lee, best-effort, las victorias por modo (del doc del jugador) y el % de
-  /// colección por ejército (de la API). Silencioso: si algo falla, esa parte
-  /// simplemente no se muestra.
-  Future<void> _cargarExtras() async {
-    // Victorias por modo (del doc del jugador).
-    try {
-      final doc = await FirebaseFirestore.instance
-          .collection('Jugadores')
-          .doc(widget.uid)
-          .get();
-      final d = doc.data();
-      if (d != null && mounted) {
-        setState(() {
-          _vic2 = (d['victorias2'] as num?)?.toInt() ?? 0;
-          _vic4 = (d['victorias4'] as num?)?.toInt() ?? 0;
-          _vic6 = (d['victorias6'] as num?)?.toInt() ?? 0;
-          _vic8 = (d['victorias8'] as num?)?.toInt() ?? 0;
-        });
-      }
-    } catch (_) {
-      // Sin permisos o error: se deja la sección por modo oculta.
-    }
+  /// Trofeos del jugador (para el destacado junto al alias y el % conseguido).
+  Future<void> _cargarTrofeos() async {
+    final r = await _trofeosSvc.obtener(widget.uid);
+    if (!mounted) return;
+    setState(() => _trofeos = r);
+  }
 
-    // Colección por ejército (%). La API acepta el uid de cualquier jugador.
+  /// Carga, best-effort, el % de colección por ejército y las victorias por modo.
+  Future<void> _cargarExtras() async {
+    int? v2, v4, v6, v8;
+    final pctMap = <int, int>{};
+
+    // ── Vía API (correcta para el perfil de otros jugadores) ──────────────
     try {
       final pct = await _api.obtenerPorcentajes(widget.uid);
-      final map = <int, int>{};
+
       for (final raw in (pct?['porcentajes'] as List? ?? const [])) {
         final m = Map<String, dynamic>.from(raw as Map);
         final ej = (m['ejercito'] as num?)?.toInt() ?? 0;
-        if (ej != 0) map[ej] = (m['porcentaje'] as num?)?.toInt() ?? 0;
+        if (ej != 0) pctMap[ej] = (m['porcentaje'] as num?)?.toInt() ?? 0;
       }
-      if (mounted) setState(() => _porcentajes = map);
+
+      // Victorias por modo (si el backend ya las incluye en la respuesta).
+      if (pct != null && pct.containsKey('victorias2')) {
+        v2 = (pct['victorias2'] as num?)?.toInt() ?? 0;
+        v4 = (pct['victorias4'] as num?)?.toInt() ?? 0;
+        v6 = (pct['victorias6'] as num?)?.toInt() ?? 0;
+        v8 = (pct['victorias8'] as num?)?.toInt() ?? 0;
+      }
     } catch (_) {
-      // Si falla, no se muestra la sección de colección.
+      // Si falla la API, no se muestran esas secciones (o se intenta el fallback).
     }
+
+    // ── Fallback: lectura directa del doc ─────────────────────────────────
+    if (v2 == null) {
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('Jugadores')
+            .doc(widget.uid)
+            .get();
+        final d = doc.data();
+        if (d != null) {
+          v2 = (d['victorias2'] as num?)?.toInt() ?? 0;
+          v4 = (d['victorias4'] as num?)?.toInt() ?? 0;
+          v6 = (d['victorias6'] as num?)?.toInt() ?? 0;
+          v8 = (d['victorias8'] as num?)?.toInt() ?? 0;
+        }
+      } catch (_) {
+        // Sin permisos o error: la sección por modo queda oculta.
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _porcentajes = pctMap;
+      if (v2 != null) {
+        _vic2 = v2;
+        _vic4 = v4;
+        _vic6 = v6;
+        _vic8 = v8;
+      }
+    });
   }
 
   @override
@@ -94,6 +125,8 @@ class _PerfilPublicoScreenState extends State<PerfilPublicoScreen> {
     final nombre =
         widget.alias.trim().isEmpty ? 'Jugador' : widget.alias.trim();
     final tieneModos = _vic2 != null;
+    final dest = _trofeos.destacado;
+    const oro = Color(0xFFE0B040);
 
     return Scaffold(
       backgroundColor: war.fondo,
@@ -168,16 +201,28 @@ class _PerfilPublicoScreenState extends State<PerfilPublicoScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            Text(
-              nombre,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontFamily: 'Cinzel',
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: war.texto,
-              ),
+            // Alias con el icono del trofeo destacado delante.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (dest != null) ...[
+                  Text(dest.icono, style: const TextStyle(fontSize: 18)),
+                  const SizedBox(width: 8),
+                ],
+                Flexible(
+                  child: Text(
+                    nombre,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: war.texto,
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 4),
             Text(
@@ -188,6 +233,19 @@ class _PerfilPublicoScreenState extends State<PerfilPublicoScreen> {
                 color: war.textoTenue,
               ),
             ),
+            // Nombre del trofeo destacado.
+            if (dest != null) ...[
+              const SizedBox(height: 5),
+              Text(
+                '🏆 ${dest.nombre}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 11,
+                  color: oro,
+                ),
+              ),
+            ],
             const SizedBox(height: 28),
 
             _SectionLabel('ESTADÍSTICAS', war),
@@ -268,6 +326,71 @@ class _PerfilPublicoScreenState extends State<PerfilPublicoScreen> {
                         war: war),
                   ),
                 ],
+              ),
+            ],
+
+            // Trofeos: % conseguido + acceso a la lista (solo lectura).
+            if (_trofeos.total > 0) ...[
+              const SizedBox(height: 28),
+              _SectionLabel('TROFEOS', war),
+              const SizedBox(height: 14),
+              GestureDetector(
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        TrofeosScreen(uid: widget.uid, alias: nombre),
+                  ),
+                ),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: war.superficie,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: oro.withOpacity(0.35), width: 1),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text('🏆', style: TextStyle(fontSize: 24)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('TROFEOS CONSEGUIDOS',
+                                style: TextStyle(
+                                    fontFamily: 'Cinzel',
+                                    fontSize: 10,
+                                    letterSpacing: 1,
+                                    color: war.texto)),
+                            const SizedBox(height: 8),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child: LinearProgressIndicator(
+                                value: (_trofeos.porcentaje / 100.0)
+                                    .clamp(0.0, 1.0),
+                                minHeight: 5,
+                                backgroundColor: war.borde.withOpacity(0.5),
+                                valueColor:
+                                    const AlwaysStoppedAnimation<Color>(oro),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text('${_trofeos.porcentaje}%',
+                          style: const TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: oro)),
+                      const SizedBox(width: 6),
+                      Icon(Icons.chevron_right,
+                          size: 18, color: war.textoTenue),
+                    ],
+                  ),
+                ),
               ),
             ],
 

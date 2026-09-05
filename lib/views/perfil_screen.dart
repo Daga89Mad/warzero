@@ -8,7 +8,9 @@ import '../models/jugador_model.dart';
 import '../models/lobby_model.dart';
 import '../services/settings_controller.dart';
 import '../services/warzero_api.dart';
-
+import '../services/trofeos_service.dart';
+import 'trofeos_screen.dart';
+import 'selector_trofeo_destacado.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // PerfilScreen — Pantalla de perfil del jugador.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,7 +27,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
   final _auth = FirebaseAuth.instance;
   final _svc = FirebaseCrudService();
   final _api = WarZeroApi();
-
+  final _trofeosSvc = TrofeosService();
+  TrofeosResult _trofeos = TrofeosResult.empty;
   final _aliasCtrl = TextEditingController();
   final _imagenCtrl = TextEditingController();
 
@@ -41,7 +44,6 @@ class _PerfilScreenState extends State<PerfilScreen> {
   // Victorias de PARTIDA por tamaño de sala (2/4/6/8 jugadores).
   int _vic2 = 0, _vic4 = 0, _vic6 = 0, _vic8 = 0;
   String _fechaRegistro = '';
-
   // Coleccionismo: % de completado por ejército y saldos de las 5 monedas Zero.
   Map<int, int> _porcentajes = {};
   Map<MonedaZero, int> _zeros = {for (final m in MonedaZero.values) m: 0};
@@ -52,6 +54,32 @@ class _PerfilScreenState extends State<PerfilScreen> {
   void initState() {
     super.initState();
     _loadPerfil();
+    _loadTrofeos();
+  }
+
+  Future<void> _loadTrofeos() async {
+    final r = await _trofeosSvc.obtener(_uid);
+    if (!mounted) return;
+    setState(() => _trofeos = r);
+  }
+
+  /// Abre el selector de trofeo destacado desde el perfil.
+  Future<void> _elegirDestacado() async {
+    final conseguidos = _trofeos.logrados;
+    if (conseguidos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Aún no has conseguido ningún trofeo para destacar.'),
+      ));
+      return;
+    }
+    final elegido = await mostrarSelectorTrofeoDestacado(
+      context,
+      uid: _uid,
+      conseguidos: conseguidos,
+      actualId: _trofeos.destacadoId,
+    );
+    if (elegido == null || !mounted) return;
+    setState(() => _trofeos = _trofeos.copyWith(destacadoId: elegido));
   }
 
   @override
@@ -219,6 +247,55 @@ class _PerfilScreenState extends State<PerfilScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   _AvatarPreview(imageUrl: _imagenCtrl.text),
+                  // Trofeo destacado: tócalo para elegir/cambiar el que verá
+                  // todo el mundo junto a tu alias. Si no hay ninguno pero tienes
+                  // trofeos conseguidos, aparece un chip para elegir.
+                  Builder(builder: (_) {
+                    final dest = _trofeos.destacado;
+                    final tieneLogrados = _trofeos.logrados.isNotEmpty;
+                    if (dest == null && !tieneLogrados) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 10),
+                      child: Center(
+                        child: GestureDetector(
+                          onTap: _elegirDestacado,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: war.superficie,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                  color: const Color(0xFFE0B040)
+                                      .withOpacity(dest != null ? 0.5 : 0.3)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(dest?.icono ?? '🏆',
+                                    style: const TextStyle(fontSize: 14)),
+                                const SizedBox(width: 6),
+                                Text(
+                                  dest?.nombre ?? 'Elegir trofeo destacado',
+                                  style: const TextStyle(
+                                    fontFamily: 'Cinzel',
+                                    fontSize: 10,
+                                    letterSpacing: 0.5,
+                                    color: Color(0xFFE0B040),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Icon(Icons.edit,
+                                    size: 11, color: Color(0xFFE0B040)),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
                   const SizedBox(height: 28),
                   _SectionLabel('DATOS EDITABLES'),
                   const SizedBox(height: 14),
@@ -332,6 +409,18 @@ class _PerfilScreenState extends State<PerfilScreen> {
                   _SectionLabel('COLECCIÓN POR EJÉRCITO'),
                   const SizedBox(height: 14),
                   _ColeccionEjercitos(porcentajes: _porcentajes),
+                  const SizedBox(height: 28),
+                  _SectionLabel('TROFEOS'),
+                  const SizedBox(height: 14),
+                  _TrofeosCard(
+                    porcentaje: _trofeos.porcentaje,
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => TrofeosScreen(
+                            uid: _uid, alias: _aliasCtrl.text.trim()),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 28),
                   _SectionLabel('CRISTALES ZERO'),
                   const SizedBox(height: 14),
@@ -652,6 +741,67 @@ class _ColeccionEjercitos extends StatelessWidget {
           }),
         ],
       ],
+    );
+  }
+}
+
+class _TrofeosCard extends StatelessWidget {
+  final int porcentaje;
+  final VoidCallback onTap;
+  const _TrofeosCard({required this.porcentaje, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    const oro = Color(0xFFE0B040);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        decoration: BoxDecoration(
+          color: war.superficie,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: oro.withOpacity(0.35), width: 1),
+        ),
+        child: Row(
+          children: [
+            const Text('🏆', style: TextStyle(fontSize: 24)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('TROFEOS CONSEGUIDOS',
+                      style: TextStyle(
+                          fontFamily: 'Cinzel',
+                          fontSize: 10,
+                          letterSpacing: 1,
+                          color: war.texto)),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: (porcentaje / 100.0).clamp(0.0, 1.0),
+                      minHeight: 5,
+                      backgroundColor: war.borde.withOpacity(0.5),
+                      valueColor: const AlwaysStoppedAnimation<Color>(oro),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Text('$porcentaje%',
+                style: const TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: oro)),
+            const SizedBox(width: 6),
+            Icon(Icons.chevron_right, size: 18, color: war.textoTenue),
+          ],
+        ),
+      ),
     );
   }
 }

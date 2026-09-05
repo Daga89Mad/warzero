@@ -116,6 +116,7 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
             'dificultad': 'medio',
             'estilo': 'equilibrado',
             'esperaSegundos': 0,
+            'esBot': true,
           });
           faltan++;
         }
@@ -175,6 +176,21 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
           : '${bot.alias} desactivado: no entrará a salas nuevas');
     } catch (e) {
       if (mounted) setState(() => bot.activo = !activo); // revertir
+      _toast('No se pudo actualizar: $e', error: true);
+    }
+  }
+
+  /// Marca si el bot CUENTA como bot (true) o "juega como humano" (false). Lo lee
+  /// el backend al liquidar la partida para los trofeos "sin bots".
+  Future<void> _toggleEsBot(_BotResumen bot, bool esBot) async {
+    setState(() => bot.esBot = esBot);
+    try {
+      await _col.doc(bot.id).update({'esBot': esBot});
+      _toast(esBot
+          ? '${bot.alias} cuenta como BOT'
+          : '${bot.alias} cuenta como HUMANO (juega como humano)');
+    } catch (e) {
+      if (mounted) setState(() => bot.esBot = !esBot); // revertir
       _toast('No se pudo actualizar: $e', error: true);
     }
   }
@@ -584,6 +600,7 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                           onEjercito: () => _elegirEjercito(_bots[i]),
                           onDificultad: (v) => _setDificultad(_bots[i], v),
                           onEstilo: (v) => _setEstilo(_bots[i], v),
+                          onEsBot: (v) => _toggleEsBot(_bots[i], v),
                           onRenombrar: () => _renombrar(_bots[i]),
                         ),
                       ),
@@ -814,6 +831,10 @@ class _BotResumen {
   String dificultad;
   String estilo;
 
+// Si true, CUENTA como bot (por defecto). Si false, el bot "juega como
+  /// humano": no descalifica las victorias "sin bots" de sus rivales.
+  bool esBot;
+
   /// Partidas en las que está metido AHORA. Solo lectura: lo escribe el
   /// orquestador del backend en cada barrido.
   int partidasActivas;
@@ -828,6 +849,7 @@ class _BotResumen {
     required this.esperaSegundos,
     required this.dificultad,
     required this.estilo,
+    required this.esBot,
     required this.partidasActivas,
   });
 
@@ -850,6 +872,7 @@ class _BotResumen {
       esperaSegundos: (data['esperaSegundos'] as num?)?.toInt() ?? 0,
       dificultad: kDificultades.contains(dif) ? dif! : 'medio',
       estilo: kEstilos.contains(est) ? est! : 'equilibrado',
+      esBot: (data['esBot'] as bool?) ?? true,
       partidasActivas: (data['partidasActivas'] as num?)?.toInt() ?? 0,
     );
   }
@@ -871,6 +894,7 @@ class _BotTile extends StatelessWidget {
   final VoidCallback onEjercito;
   final ValueChanged<String> onDificultad;
   final ValueChanged<String> onEstilo;
+  final ValueChanged<bool> onEsBot;
   final VoidCallback onRenombrar;
 
   const _BotTile({
@@ -889,6 +913,7 @@ class _BotTile extends StatelessWidget {
     required this.onEjercito,
     required this.onDificultad,
     required this.onEstilo,
+    required this.onEsBot,
     required this.onRenombrar,
   });
 
@@ -1093,6 +1118,38 @@ class _BotTile extends StatelessWidget {
                           ),
                         ],
                       ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                // CUENTA COMO: Bot (esBot=true) / Humano (esBot=false). Un bot
+                // marcado como Humano NO descalifica las victorias "sin bots".
+                Row(
+                  children: [
+                    const SizedBox(
+                      width: 62,
+                      child: Text(
+                        'Cuenta como',
+                        style: TextStyle(
+                          color: Color(0xFF6A727C),
+                          fontFamily: 'Cinzel',
+                          fontSize: 9,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                    _PerfilChip(
+                      label: 'Bot',
+                      seleccionado: bot.esBot,
+                      color: accent,
+                      onTap: () => onEsBot(true),
+                    ),
+                    const SizedBox(width: 6),
+                    _PerfilChip(
+                      label: 'Humano',
+                      seleccionado: !bot.esBot,
+                      color: const Color(0xFF3AC07A),
+                      onTap: () => onEsBot(false),
                     ),
                   ],
                 ),

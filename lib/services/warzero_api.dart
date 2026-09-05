@@ -316,6 +316,35 @@ class WarZeroApi {
     throw Exception('obtenerEstado HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// Lista de partidas públicas en espera por HTTP (sin Firestore en el
+  /// cliente). El backend cachea el resultado con TTL corto y COMPARTIDO, así
+  /// que N clientes sondeando = 1 ciclo de lectura de Firestore, no N.
+  /// Devuelve la lista de mapas planos (cada uno con su `id`), o lista vacía.
+  Future<List<Map<String, dynamic>>> obtenerPublicas() async {
+    final res = await _enviarConReintentos(
+      () => http.get(
+        Uri.parse('$baseUrl/warzero/publicas'),
+        headers: _headers,
+      ),
+      etiqueta: 'publicas',
+      intentos: 2,
+      timeout: _getTimeout,
+    );
+    debugPrint('[WZ][api] GET publicas status=${res.statusCode}');
+    if (res.statusCode >= 200 && res.statusCode < 300) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      final raw = j['partidas'];
+      if (raw is List) {
+        return raw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
+      }
+      return const [];
+    }
+    throw Exception('obtenerPublicas HTTP ${res.statusCode}: ${res.body}');
+  }
+
   /// Colección personal del jugador por HTTP (sin Firestore). Devuelve el mapa
   /// con claves `jugador`, `cartas` y `evoluciones`, o null si no existe.
   Future<Map<String, dynamic>?> obtenerColeccion(String uid) async {
@@ -651,26 +680,6 @@ class WarZeroApi {
       return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
     }
     throw Exception('obtenerMisPartidas HTTP ${res.statusCode}: ${res.body}');
-  }
-
-  /// Partidas públicas en espera (lista de la pestaña PÚBLICAS) vía API.
-  Future<List<Map<String, dynamic>>> obtenerPublicas() async {
-    final res = await _enviarConReintentos(
-      () => http.get(
-        Uri.parse('$baseUrl/warzero/publicas'),
-        headers: _headers,
-      ),
-      etiqueta: 'publicas',
-      intentos: 2,
-      timeout: _getTimeout,
-    );
-    debugPrint('[WZ][api] GET publicas status=${res.statusCode}');
-    if (res.statusCode >= 200 && res.statusCode < 300) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      final list = (j['partidas'] as List?) ?? [];
-      return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    }
-    throw Exception('obtenerPublicas HTTP ${res.statusCode}: ${res.body}');
   }
 
   /// Datos de la pantalla MIS MAZOS vía API (sin Firestore): ejércitos, catálogo
