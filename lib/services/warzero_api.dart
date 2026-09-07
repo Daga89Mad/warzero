@@ -293,6 +293,30 @@ class WarZeroApi {
     throw Exception('entrar HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// Crea (o reinicia) una batalla del modo historia. Devuelve el JSON
+  /// { ok, lobbyId, estado } (también en 400, con { error } para mostrarlo).
+  Future<Map<String, dynamic>?> crearHistoria({
+    required String uid,
+    required String historiaId,
+  }) async {
+    final res = await _enviarConReintentos(
+      () => http.post(
+        Uri.parse('$baseUrl/warzero/historia/crear'),
+        headers: _headers,
+        body: jsonEncode({'uid': uid, 'historiaId': historiaId}),
+      ),
+      etiqueta: 'historia/crear',
+      intentos: 3,
+      timeout: _postTimeout,
+    );
+    debugPrint('[WZ][api] POST historia/crear status=${res.statusCode}');
+    try {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (_) {
+      throw Exception('crearHistoria HTTP ${res.statusCode}: ${res.body}');
+    }
+  }
+
   /// Obtiene el estado completo de la partida por HTTP (sin Firestore).
   /// Devuelve el mapa `estado` (mismo shape que el doc) o null si no existe.
   Future<Map<String, dynamic>?> obtenerEstado(String lobbyId) async {

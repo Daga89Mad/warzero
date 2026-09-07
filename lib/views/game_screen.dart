@@ -30,6 +30,8 @@ import '../services/pending_revert_store.dart';
 import 'cuartel_screen.dart';
 import 'puntuaciones_screen.dart';
 import 'recompensas_batalla_screen.dart';
+import '../services/historia_service.dart';
+import 'historia_hud.dart';
 
 /// Silueta fantasma de una carta en su celda de origen (revisión post-cierre).
 /// Es estructuralmente idéntico a `RevisionFantasma` de board_widget.dart (los
@@ -53,11 +55,17 @@ class GameScreen extends StatefulWidget {
   /// Null en partidas locales/test (se asigna obelisco aleatorio sin persistir).
   final String? lobbyId;
 
+  /// Config de historia (campo `historia` del estado) si es una batalla del
+  /// modo historia; null en partidas normales. Activa el HUD de objetivo y el
+  /// diálogo de fin de historia (victoria/derrota/reintento).
+  final Map<String, dynamic>? historia;
+
   const GameScreen({
     super.key,
     required this.localPlayerUid,
     this.playerCount = 4,
     this.lobbyId,
+    this.historia,
   });
 
   @override
@@ -794,6 +802,20 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return result;
   }
 
+  /// Lee el pool de robo FIJADO por el servidor para el jugador local desde el
+  /// estado de la partida (statsPartida.{uid}.mazoPool). El servidor lo congela
+  /// al arrancar la partida (RepartirManoAsync), de modo que editar o crear
+  /// mazos DESPUÉS no altera una partida en curso. Devuelve lista vacía si la
+  /// partida no lo tiene (partidas antiguas anteriores a este campo).
+  List<String> _leerMazoPoolFijado(Map<String, dynamic> data) {
+    final rawStats = data['statsPartida'] as Map<String, dynamic>? ?? const {};
+    final myS = rawStats[widget.localPlayerUid];
+    if (myS is! Map) return const [];
+    final pool = myS['mazoPool'];
+    if (pool is! List) return const [];
+    return pool.map((e) => e.toString()).toList();
+  }
+
   /// Resuelve una lista de IDs de carta (con duplicados) a modelos. Busca
   /// primero en [pool] (el mazo ya resuelto) y, para los IDs que no estén ahí
   /// (p. ej. cuando el servidor repartió de un mazo por defecto), los carga del
@@ -1285,11 +1307,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       }
       _miEjercitoId = ejercitoId;
 
-      // ── 3. Cargar mazo filtrado por ejército (vía API, sin Firestore) ──
-      final mazoCartas = await _api.obtenerMazo(
-        widget.localPlayerUid,
-        ejercitoId: ejercitoId,
-      );
+      // ── 3. Cargar el POOL DE ROBO FIJADO de la partida ────────────────
+      // FIX (incidencia: editar/crear un mazo cambiaba las cartas de una
+      // partida YA EMPEZADA). El pool de robo (`_mazoCompleto`) NO debe releerse
+      // del mazo vivo del jugador en cada entrada: el servidor ya congela el
+      // mazo repartido en statsPartida.{uid}.mazoPool al arrancar la partida
+      // (RepartirManoAsync). Ese pool es la FUENTE DE VERDAD y no cambia aunque
+      // el jugador edite sus mazos después. Solo si la partida no tiene mazoPool
+      // (partidas antiguas anteriores a este campo) se cae al mazo vivo.
+      final mazoPoolIds = _leerMazoPoolFijado(data);
+      final List<CartaModel> mazoCartas = mazoPoolIds.isNotEmpty
+          // IDs congelados → resolver a modelos desde el catálogo. No se filtra
+          // por ejército: el servidor ya lo hizo al fijar el pool.
+          ? await _resolverCartasPorIds(mazoPoolIds, const [])
+          // Compatibilidad: sin mazoPool → mazo vivo filtrado por ejército.
+          : await _api.obtenerMazo(
+              widget.localPlayerUid,
+              ejercitoId: ejercitoId,
+            );
       if (!mounted) return;
 
       // Pool de robo por turno: el mazo completo sin evoluciones ni especiales.
@@ -4778,7 +4813,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ],
       ),
     );
-    if (!mounted) return;
     if (seguir == false && Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
@@ -4787,6 +4821,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // ── Diálogo de fin de partida ─────────────────────────────
   void _showFinPartidaDialog() {
     if (!mounted) return;
+
+    // Modo historia: diálogo propio (victoria/derrota + siguiente/reintentar),
+    // sin el flujo de puntuaciones/recompensas del PvP.
+    if (widget.historia != null) {
+      HistoriaService().mostrarFinHistoria(
+        context,
+        historia: widget.historia!,
+        gano: _ganadorUid == widget.localPlayerUid,
+        uid: widget.localPlayerUid,
+      );
+      return;
+    }
+
     final somoGanador = _ganadorUid == widget.localPlayerUid;
     showDialog(
       context: context,
@@ -5137,9 +5184,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     onCellTap: _onCellTap,
                   ),
                 ),
-                if (_yoCerreElTurno)
+                // Banner de cierre de turno (mismo sitio para los dos casos):
+                //  · Antes de cerrar (diario/12 h): avisa de la hora a la que el
+                //    turno se cierra "sí o sí" aunque no muevas.
+                //  · Después de cerrar: espera a que cierre el resto / se resuelva.
+                if (_yoCerreElTurno ||
+                    (!_estoyEliminado &&
+                        (_modoTurno == ModoTurno.diario ||
+                            _modoTurno == ModoTurno.turno12h)))
                   _TurnWaitBanner(
                     modoTurno: _modoTurno,
+                    yaCerre: _yoCerreElTurno,
                     cerradoPor: _cerradoPor.length,
                     totalJugadores: _jugadoresActivos,
                     fechaResolucionMs: _fechaResolucionMs,
@@ -5306,6 +5361,12 @@ class _PhaseBanner extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _TurnWaitBanner extends StatefulWidget {
   final ModoTurno modoTurno;
+
+  /// `true` si el jugador local YA cerró su turno (banner de espera de siempre);
+  /// `false` si aún NO ha cerrado (aviso de la hora a la que el turno se cierra
+  /// "sí o sí" aunque no mueva).
+  final bool yaCerre;
+
   final int cerradoPor;
   final int totalJugadores;
   final int? fechaResolucionMs;
@@ -5313,6 +5374,7 @@ class _TurnWaitBanner extends StatefulWidget {
 
   const _TurnWaitBanner({
     required this.modoTurno,
+    required this.yaCerre,
     required this.cerradoPor,
     required this.totalJugadores,
     this.fechaResolucionMs,
@@ -5333,95 +5395,175 @@ class _TurnWaitBannerState extends State<_TurnWaitBanner> {
     if (mounted) setState(() => _refreshing = false);
   }
 
+  /// Formatea la hora de cierre en la zona horaria LOCAL del jugador, con
+  /// "hoy" / "mañana" / "dd/MM" para que se entienda a simple vista a qué hora
+  /// pierde el turno si no mueve. `cierreLocal` ya debe venir en local.
+  static String _fmtDiaHora(DateTime cierreLocal) {
+    final ahora = DateTime.now();
+    final hoy = DateTime(ahora.year, ahora.month, ahora.day);
+    final diaCierre =
+        DateTime(cierreLocal.year, cierreLocal.month, cierreLocal.day);
+    final difDias = diaCierre.difference(hoy).inDays;
+
+    final hh = cierreLocal.hour.toString().padLeft(2, '0');
+    final mm = cierreLocal.minute.toString().padLeft(2, '0');
+
+    final String dia;
+    if (difDias == 0) {
+      dia = 'hoy';
+    } else if (difDias == 1) {
+      dia = 'mañana';
+    } else {
+      dia = '${cierreLocal.day.toString().padLeft(2, '0')}/'
+          '${cierreLocal.month.toString().padLeft(2, '0')}';
+    }
+    return '$dia a las $hh:$mm';
+  }
+
+  /// Semáforo de urgencia según el tiempo que queda hasta el cierre forzoso:
+  /// ROJO si queda < 2 h (o ya venció), ÁMBAR si queda < 5 h, VERDE el resto
+  /// (y también cuando no hay contador: modo rápida o cierre desconocido).
+  static ({Color fondo, Color acento, Color texto}) _paleta(
+      Duration? restante) {
+    const verde = (
+      fondo: Color(0xFF0A2A0A),
+      acento: Color(0xFF55FF70),
+      texto: Color(0xFFCCFFCC),
+    );
+    const ambar = (
+      fondo: Color(0xFF2A2205),
+      acento: Color(0xFFFFC24D),
+      texto: Color(0xFFFFECC0),
+    );
+    const rojo = (
+      fondo: Color(0xFF2A0808),
+      acento: Color(0xFFFF5A5A),
+      texto: Color(0xFFFFCFCF),
+    );
+
+    if (restante == null) return verde; // rápida / cierre desconocido
+    if (restante.isNegative) return rojo; // cierre vencido
+    if (restante < const Duration(hours: 2)) return rojo;
+    if (restante < const Duration(hours: 5)) return ambar;
+    return verde;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final esDiario = widget.modoTurno == ModoTurno.diario;
+    final esPorHoras = esDiario || widget.modoTurno == ModoTurno.turno12h;
     final pending = widget.totalJugadores - widget.cerradoPor;
+
     final String msg;
-    if (widget.modoTurno == ModoTurno.diario ||
-        widget.modoTurno == ModoTurno.turno12h) {
+    // Tiempo restante hasta el cierre forzoso (null = sin contador -> verde).
+    Duration? restante;
+
+    if (esPorHoras) {
       // Cierre real = fechaResolucion del servidor. En diario es 00:00 UTC; en
       // turno12h es la hora de resolución + 12 h (la calcula el servidor, así
       // que sin ese dato no hay fallback local fiable).
-      final esDiario = widget.modoTurno == ModoTurno.diario;
-      final ref = esDiario ? '(00:00 UTC)' : '(UTC +12 h)';
       final cierreMs = widget.fechaResolucionMs;
-      final DateTime? cierre = cierreMs != null
+      final DateTime? cierreUtc = cierreMs != null
           ? DateTime.fromMillisecondsSinceEpoch(cierreMs, isUtc: true)
           : (esDiario ? TurnService.proximoCierreUTC() : null);
-      if (cierre == null) {
+
+      if (cierreUtc == null) {
+        // Solo ocurre en turno12h sin fechaResolucion aún fijada. Antes de
+        // cerrar no mostramos un banner vacío/ruidoso.
+        if (!widget.yaCerre) return const SizedBox.shrink();
         msg = 'Esperando cierre del turno…';
       } else {
-        final diff = cierre.difference(DateTime.now().toUtc());
+        final diff = cierreUtc.difference(DateTime.now().toUtc());
+        restante = diff;
+        // Hora exacta a la que se cierra "sí o sí" (y el jugador pierde el turno
+        // si no ha movido), en la hora local del dispositivo. No cambia hasta
+        // que se cierra el turno, así que no hace falta refrescarla en vivo.
+        final horaLocal = _fmtDiaHora(cierreUtc.toLocal());
         if (diff.isNegative) {
-          msg = 'Cierre vencido $ref. Resolviendo…';
+          msg = 'Cierre vencido ($horaLocal). Resolviendo…';
         } else {
           final h = diff.inHours;
           final m = diff.inMinutes % 60;
-          msg = 'Esperando. Cierre en ${h}h ${m}m $ref';
+          final resto = '${h}h ${m.toString().padLeft(2, '0')}m';
+          msg = widget.yaCerre
+              ? 'Esperando. Se cierra $horaLocal (en $resto)'
+              : 'Se cierra sí o sí $horaLocal (en $resto)';
         }
       }
     } else {
+      // Modo rápida: el banner solo aplica tras cerrar (recuento de jugadores).
+      if (!widget.yaCerre) return const SizedBox.shrink();
       final suf = pending == 1 ? '' : 'es';
       msg = '$pending jugador$suf sin cerrar.';
     }
+
+    final pal = _paleta(restante);
+
+    // El botón ACTUALIZAR solo tiene sentido cuando ya cerraste y esperas al
+    // resto; antes de cerrar estás jugando y no hay nada que refrescar.
+    final mostrarRefresh = widget.yaCerre && widget.onRefresh != null;
+
+    // Colores del botón derivados del acento de la paleta para que combinen con
+    // el semáforo (verde / ámbar / rojo) sin hardcodear tres juegos de colores.
+    final botonFondo = _refreshing
+        ? pal.fondo
+        : Color.alphaBlend(pal.acento.withOpacity(0.14), pal.fondo);
+    final botonBorde = pal.acento.withOpacity(_refreshing ? 0.25 : 0.5);
+
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      color: const Color(0xFF0A2A0A),
+      color: pal.fondo,
       child: Row(children: [
-        const Icon(Icons.hourglass_top, size: 12, color: Color(0xFF55FF70)),
+        Icon(widget.yaCerre ? Icons.hourglass_top : Icons.schedule,
+            size: 12, color: pal.acento),
         const SizedBox(width: 8),
         Expanded(
           child: Text(msg,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 9,
-                color: Color(0xFFCCFFCC),
+                color: pal.texto,
                 fontFamily: 'Cinzel',
                 height: 1.5,
                 letterSpacing: 0.3,
               )),
         ),
-        const SizedBox(width: 8),
-        GestureDetector(
-          onTap: _refreshing ? null : _handleRefresh,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: _refreshing
-                  ? const Color(0xFF0A2A0A)
-                  : const Color(0xFF0D3A1A),
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(
-                color: _refreshing
-                    ? const Color(0xFF1A4A2A)
-                    : const Color(0xFF2A8040),
-                width: 1,
+        if (mostrarRefresh) ...[
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: _refreshing ? null : _handleRefresh,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: botonFondo,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: botonBorde, width: 1),
               ),
+              child: _refreshing
+                  ? SizedBox(
+                      width: 10,
+                      height: 10,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 1.5, color: pal.acento),
+                    )
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.refresh, size: 11, color: pal.acento),
+                        const SizedBox(width: 4),
+                        Text('ACTUALIZAR',
+                            style: TextStyle(
+                              fontFamily: 'Cinzel',
+                              fontSize: 7,
+                              letterSpacing: 1,
+                              color: pal.acento,
+                            )),
+                      ],
+                    ),
             ),
-            child: _refreshing
-                ? const SizedBox(
-                    width: 10,
-                    height: 10,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 1.5, color: Color(0xFF55FF70)),
-                  )
-                : const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.refresh, size: 11, color: Color(0xFF55FF70)),
-                      SizedBox(width: 4),
-                      Text('ACTUALIZAR',
-                          style: TextStyle(
-                            fontFamily: 'Cinzel',
-                            fontSize: 7,
-                            letterSpacing: 1,
-                            color: Color(0xFF55FF70),
-                          )),
-                    ],
-                  ),
           ),
-        ),
+        ],
       ]),
     );
   }

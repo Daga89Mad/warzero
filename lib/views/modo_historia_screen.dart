@@ -1,13 +1,29 @@
 // lib/views/modo_historia_screen.dart
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:warzero/models/lobby_model.dart'; // kEjercitos
+import 'package:warzero/services/historia_service.dart';
 import 'package:warzero/services/settings_controller.dart';
 
-/// Modo Historia: pestañas con los 4 ejércitos y una quinta de Retos.
-/// De momento todas las entradas aparecen bloqueadas (se desarrollarán
-/// más adelante): 10 historias por ejército y 10 retos.
+/// Una batalla de historia YA disponible (jugable). El resto de entradas
+/// aparecen bloqueadas hasta que se desarrollen.
+///
+/// Clave del mapa: '<ejercitoId>-<orden>' (p. ej. '3-1' = Demonios, historia 1).
+class _BatallaDisponible {
+  final String id; // historiaId del catálogo del servidor (p. ej. 'demonios_1')
+  final String titulo;
+  const _BatallaDisponible(this.id, this.titulo);
+}
+
+const Map<String, _BatallaDisponible> _batallasDisponibles = {
+  '3-1': _BatallaDisponible('demonios_1', 'El asedio de Diente de Invierno'),
+};
+
+/// Modo Historia: pestañas con los 4 ejércitos. Cada ejército tiene 10 historias.
+/// Las disponibles arrancan una partida contra la máquina al pulsarlas; el resto
+/// permanecen bloqueadas.
 class ModoHistoriaScreen extends StatelessWidget {
   const ModoHistoriaScreen({super.key});
 
@@ -17,16 +33,8 @@ class ModoHistoriaScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final war = context.war;
 
-    final tabs = <_TabInfo>[
-      for (final e in kEjercitos)
-        _TabInfo(
-          label: e.nombre.toUpperCase(),
-          icono: e.icono,
-        ),
-    ];
-
     return DefaultTabController(
-      length: tabs.length,
+      length: kEjercitos.length,
       child: Scaffold(
         backgroundColor: war.fondo,
         appBar: AppBar(
@@ -58,13 +66,15 @@ class ModoHistoriaScreen extends StatelessWidget {
               letterSpacing: 1,
             ),
             tabs: [
-              for (final t in tabs) Tab(text: '${t.icono} ${t.label}'),
+              for (final e in kEjercitos)
+                Tab(text: '${e.icono} ${e.nombre.toUpperCase()}'),
             ],
           ),
         ),
         body: TabBarView(
           children: [
-            for (final t in tabs) const _ListaBloqueada(slots: _slots),
+            for (final e in kEjercitos)
+              _ListaHistorias(ejercitoId: e.id, slots: _slots),
           ],
         ),
       ),
@@ -72,21 +82,11 @@ class ModoHistoriaScreen extends StatelessWidget {
   }
 }
 
-class _TabInfo {
-  final String label;
-  final String icono;
-  const _TabInfo({
-    required this.label,
-    required this.icono,
-  });
-}
-
-class _ListaBloqueada extends StatelessWidget {
+class _ListaHistorias extends StatelessWidget {
+  final int ejercitoId;
   final int slots;
 
-  const _ListaBloqueada({
-    required this.slots,
-  });
+  const _ListaHistorias({required this.ejercitoId, required this.slots});
 
   @override
   Widget build(BuildContext context) {
@@ -101,7 +101,7 @@ class _ListaBloqueada extends StatelessWidget {
           return Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Text(
-              'PRÓXIMAMENTE · $slots HISTORIAS',
+              '$slots HISTORIAS',
               style: TextStyle(
                 fontSize: 9,
                 fontFamily: 'Cinzel',
@@ -112,20 +112,99 @@ class _ListaBloqueada extends StatelessWidget {
           );
         }
 
-        return _EntradaBloqueada(
-          numero: i,
-        );
+        final orden = i;
+        final disponible = _batallasDisponibles['$ejercitoId-$orden'];
+        if (disponible != null) {
+          return _EntradaDisponible(numero: orden, batalla: disponible);
+        }
+        return _EntradaBloqueada(numero: orden);
       },
     );
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// ENTRADA DISPONIBLE (jugable)
+// ─────────────────────────────────────────────────────────────
+class _EntradaDisponible extends StatelessWidget {
+  final int numero;
+  final _BatallaDisponible batalla;
+
+  const _EntradaDisponible({required this.numero, required this.batalla});
+
+  Future<void> _jugar(BuildContext context) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    await HistoriaService().lanzarHistoria(
+      context,
+      uid: uid,
+      historiaId: batalla.id,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final accent = war.primario;
+
+    return GestureDetector(
+      onTap: () => _jugar(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        decoration: BoxDecoration(
+          color: war.superficie,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: accent.withOpacity(0.45)),
+          boxShadow: [
+            BoxShadow(
+              color: accent.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 26,
+              child: Text(
+                '$numero.',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'Cinzel',
+                  color: accent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                batalla.titulo,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'Cinzel',
+                  letterSpacing: 0.5,
+                  color: war.texto,
+                ),
+              ),
+            ),
+            Icon(Icons.play_arrow_rounded, size: 22, color: accent),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENTRADA BLOQUEADA
+// ─────────────────────────────────────────────────────────────
 class _EntradaBloqueada extends StatelessWidget {
   final int numero;
 
-  const _EntradaBloqueada({
-    required this.numero,
-  });
+  const _EntradaBloqueada({required this.numero});
 
   @override
   Widget build(BuildContext context) {
@@ -133,16 +212,11 @@ class _EntradaBloqueada extends StatelessWidget {
     final accent = war.textoTenue;
 
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 12,
-        vertical: 14,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
       decoration: BoxDecoration(
         color: war.superficie,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: accent.withOpacity(0.12),
-        ),
+        border: Border.all(color: accent.withOpacity(0.12)),
       ),
       child: Row(
         children: [
@@ -173,11 +247,7 @@ class _EntradaBloqueada extends StatelessWidget {
               ),
             ),
           ),
-          Icon(
-            Icons.lock_outline,
-            size: 18,
-            color: accent.withOpacity(0.6),
-          ),
+          Icon(Icons.lock_outline, size: 18, color: accent.withOpacity(0.6)),
         ],
       ),
     );

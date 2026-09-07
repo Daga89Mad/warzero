@@ -600,15 +600,6 @@ class _PlayerSlot extends StatelessWidget {
                               letterSpacing: 1,
                             ),
                           ),
-                          Text(
-                            jugador!.alias.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 9,
-                              color: war.primario,
-                              fontFamily: 'Cinzel',
-                              letterSpacing: 1,
-                            ),
-                          ),
                           if (isHost) ...[
                             const SizedBox(width: 5),
                             Icon(Icons.star, size: 9, color: war.primario),
