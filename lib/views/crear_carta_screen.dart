@@ -129,9 +129,60 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         ),
       ),
     );
-    if (result != null && mounted) {
-      setState(() => _evolucionCarta = result);
+    if (result == null || !mounted) return;
+
+    // Una evolución puede evolucionar a su vez (27 → 28), pero la cadena NO
+    // puede volver sobre sí misma (27 → 28 → 27): el backend se protege con un
+    // tope de 10 eslabones, pero el resultado sería una colección incoherente.
+    final error = await _validarCadenaEvolucion(result);
+    if (!mounted) return;
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error, style: const TextStyle(fontFamily: 'Cinzel')),
+          backgroundColor: const Color(0xFF2A0A0A),
+        ),
+      );
+      return;
     }
+    setState(() => _evolucionCarta = result);
+  }
+
+  /// Recorre la cadena que cuelga de [elegida] siguiendo `IdEvolucion`. Devuelve
+  /// null si es válida, o el texto del error si vuelve a esta misma carta o si
+  /// supera los 10 eslabones (mismo tope que `MaxCadenaEvolucion` en el backend).
+  Future<String?> _validarCadenaEvolucion(CartaModel elegida) async {
+    final propioId = widget.cartaEditar?.id;
+    // Carta nueva: aún no tiene id, no puede formar un ciclo consigo misma.
+    if (propioId == null || propioId.isEmpty) return null;
+    if (elegida.id == propioId) {
+      return 'Una carta no puede evolucionar en sí misma.';
+    }
+
+    final vistos = <String>{propioId, elegida.id};
+    var actual = elegida.idEvolucion;
+    var eslabones = 1; // la propia `elegida` ya es el primer eslabón
+
+    while (actual.isNotEmpty && eslabones < 10) {
+      if (actual == propioId) {
+        return 'Cadena circular: esa carta acaba evolucionando de nuevo en '
+            '"${_nombreCtrl.text.trim()}".';
+      }
+      if (!vistos.add(actual)) break; // ciclo entre terceras cartas: ya existía
+      try {
+        final doc = await _db.collection('Cartas').doc(actual).get();
+        if (!doc.exists) break;
+        actual = CartaModel.fromFirestore(doc).idEvolucion;
+      } catch (_) {
+        break; // sin red: no bloqueamos la edición
+      }
+      eslabones++;
+    }
+
+    if (actual.isNotEmpty && eslabones >= 10) {
+      return 'La cadena de evolución supera los 10 eslabones.';
+    }
+    return null;
   }
 
   /// Opciones de rareza para la probabilidad de sobre. Cada una es un PESO
@@ -196,6 +247,12 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
         // Crear documento nuevo con ID auto
         await _db.collection('Cartas').add(_buildData());
       }
+
+      // El backend cachea el catálogo de cartas 10 minutos: sin esto, los
+      // cambios de número o de cadena de evolución no se ven en "Mi colección"
+      // hasta que caduca el TTL. Best-effort: si falla, no rompe el guardado.
+      await _api.invalidarCatalogo();
+
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

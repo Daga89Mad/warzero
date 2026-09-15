@@ -144,6 +144,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int _segundosRestantes = _duracionTurnoRapidoSeg;
   bool _timerActivo = false;
 
+  /// Reloj del turno (modo rápida). Se guarda para poder CANCELARLO de verdad:
+  /// antes era un `Future.doWhile` que solo miraba `_timerActivo` en su
+  /// siguiente tick, así que dos arranques seguidos dejaban dos bucles
+  /// descontando a la vez y el turno se cerraba a mitad de tiempo.
+  Timer? _turnoTimer;
+
+  /// True mientras la pantalla de REVISIÓN de turno está encima del tablero.
+  /// Junto con `_informeAbierto` pausa la cuenta atrás: el jugador no puede
+  /// jugar su turno mientras lee, así que tampoco debe consumirlo.
+  bool _revisionAbierta = false;
+
+  /// El reloj del turno no corre mientras haya una pantalla modal encima
+  /// (informe de batalla o revisión del turno anterior).
+  bool get _relojEnPausa => _informeAbierto || _revisionAbierta;
+
   bool _resolviendo = false;
   bool _isSendingTurn = false;
   bool _sondeoActivo = false;
@@ -204,6 +219,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   int _turnoConfirmadoStream = 0;
 
   bool get _yoCerreElTurno => _cerradoPor.contains(widget.localPlayerUid);
+
+  /// True si esta partida es una batalla del MODO HISTORIA. En historia el
+  /// jugador NO tiene mano ni mazo: todas sus cartas nacen ya desplegadas en su
+  /// cuartel (WarZeroHistoria.SembrarBando) y el servidor bloquea cualquier
+  /// ampliación de mano/mazo (ActualizarStatsAsync). El cliente tiene que
+  /// respetarlo o se pinta una mano fantasma que se evapora al resolver el turno.
+  bool get _esHistoria => widget.historia != null;
 
   /// Número de jugadores activos (no eliminados).
   int get _jugadoresActivos =>
@@ -853,6 +875,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // ── Persistir mano y mazo restante vía API (sin Firestore) ─
   void _saveHandAndDeck() {
     if (widget.lobbyId == null) return;
+    // En historia no hay mano que persistir: el servidor ignora estos campos
+    // (ActualizarStatsAsync bloquea mano/mazoRestante cuando esHistoria), así
+    // que la llamada solo gastaría red y daría falsa sensación de guardado.
+    if (_esHistoria) return;
     _api
         .actualizarStats(
           lobbyId: widget.lobbyId!,
@@ -867,7 +893,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// turno y SIN haber jugado nada (para no dejar cartas desplegadas sin
   /// consolidar fuera de la mano). Un sacrificio no lo impide (no deja cartas en
   /// el tablero), pero un despliegue sí (haría _hand ≠ _handInicial en tamaño).
+  /// En HISTORIA nunca: no hay mano ni mazo del que repartir.
   bool get _puedeVolverARepartir =>
+      !_esHistoria &&
       _boardState.turnoActual == 1 &&
       !_yoCerreElTurno &&
       !_estoyEliminado &&
@@ -878,6 +906,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Descarta la mano del primer turno y reparte una nueva, barajando la mano
   /// actual junto al mazo restante. Solo disponible en el primer turno.
   void _volverARepartir() {
+    if (_esHistoria) return;
     if (_boardState.turnoActual != 1 || _yoCerreElTurno || _estoyEliminado) {
       return;
     }
@@ -1316,15 +1345,21 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // el jugador edite sus mazos después. Solo si la partida no tiene mazoPool
       // (partidas antiguas anteriores a este campo) se cae al mazo vivo.
       final mazoPoolIds = _leerMazoPoolFijado(data);
-      final List<CartaModel> mazoCartas = mazoPoolIds.isNotEmpty
-          // IDs congelados → resolver a modelos desde el catálogo. No se filtra
-          // por ejército: el servidor ya lo hizo al fijar el pool.
-          ? await _resolverCartasPorIds(mazoPoolIds, const [])
-          // Compatibilidad: sin mazoPool → mazo vivo filtrado por ejército.
-          : await _api.obtenerMazo(
-              widget.localPlayerUid,
-              ejercitoId: ejercitoId,
-            );
+      // MODO HISTORIA: no hay pool de robo ni mazo que cargar. Sin este corte se
+      // caía al "mazo vivo" del jugador (que suele ser de OTRO ejército, p. ej.
+      // Humanos jugando la campaña de Demonios) y ese mazo acababa pintado en la
+      // mano y mandando en `_miEjercitoId` / el cuartel.
+      final List<CartaModel> mazoCartas = _esHistoria
+          ? const <CartaModel>[]
+          : mazoPoolIds.isNotEmpty
+              // IDs congelados → resolver a modelos desde el catálogo. No se
+              // filtra por ejército: el servidor ya lo hizo al fijar el pool.
+              ? await _resolverCartasPorIds(mazoPoolIds, const [])
+              // Compatibilidad: sin mazoPool → mazo vivo filtrado por ejército.
+              : await _api.obtenerMazo(
+                  widget.localPlayerUid,
+                  ejercitoId: ejercitoId,
+                );
       if (!mounted) return;
 
       // Pool de robo por turno: el mazo completo sin evoluciones ni especiales.
@@ -1589,7 +1624,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         }
 
         // Fallback: si el servidor no repartió (mano vacía) → repartir en cliente.
-        if (manoFinal.isEmpty && !_estoyEliminado) {
+        // NUNCA en historia: ahí la mano vacía es la situación CORRECTA (el
+        // jugador solo juega con lo que ya tiene en el tablero). Repartir aquí
+        // pintaba cartas que el servidor rechaza y que desaparecían al resolver.
+        if (manoFinal.isEmpty && !_estoyEliminado && !_esHistoria) {
           final cartasEnTablero = _boardState.celdas.values
               .expand((c) => c.cartas)
               .where((c) => c.ownerUid == _localPlayer.datos.uid)
@@ -2106,21 +2144,47 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// (Re)arranca la cuenta atrás del turno en modo rápida. Cancela siempre el
+  /// reloj anterior, de modo que llamarlo dos veces seguidas (carga + avance de
+  /// turno + refresco HTTP) no deja relojes solapados.
   void _startTimer() {
-    if (_timerActivo) return;
+    if (!mounted) return;
+    if (_modoTurno != ModoTurno.rapida) return;
+
+    _turnoTimer?.cancel();
     _timerActivo = true;
     _segundosRestantes = _duracionTurnoRapidoSeg;
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 1));
-      if (!mounted || !_timerActivo) return false;
-      if (mounted) setState(() => _segundosRestantes--);
-      if (_segundosRestantes <= 0) {
-        _timerActivo = false;
-        if (mounted) _cerrarTurno();
-        return false;
+
+    _turnoTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted || !_timerActivo) {
+        t.cancel();
+        return;
       }
-      return true;
+      // PAUSA: informe de batalla o revisión abiertos. El jugador no está en el
+      // tablero y no puede jugar, así que el turno no se le consume (antes se
+      // auto-cerraba mientras leía el informe y encadenaba turnos fantasma).
+      if (_relojEnPausa) return;
+
+      // Estados en los que ya no hay turno que contar.
+      if (_yoCerreElTurno || _estoyEliminado || _juegoTerminado) {
+        _stopTimer();
+        return;
+      }
+
+      setState(() => _segundosRestantes--);
+
+      if (_segundosRestantes <= 0) {
+        _stopTimer();
+        _cerrarTurno();
+      }
     });
+  }
+
+  /// Detiene la cuenta atrás del turno (cancelación real, no diferida).
+  void _stopTimer() {
+    _turnoTimer?.cancel();
+    _turnoTimer = null;
+    _timerActivo = false;
   }
 
   @override
@@ -2132,7 +2196,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     _revertirCambiosPorSalidaSiProcede(permitirSetState: false);
     WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
-    _timerActivo = false;
+    _stopTimer();
     super.dispose();
   }
 
@@ -2475,6 +2539,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Abre la pantalla del cuartel para comprar cartas especiales.
   void _abrirCuartel() {
     final puedeComprar = !_yoCerreElTurno && !_estoyEliminado;
+    // MODO HISTORIA: el jugador nace con TODAS sus cartas ya en el tablero y
+    // no debe poder ampliar su mano a mitad de partida — solo juega con lo
+    // que ya tiene. Pasando `onRobarCarta: null`, CuartelScreen deja de
+    // mostrar la opción "Robar carta" (ver su doc: "Si es null, la opción de
+    // robar no se muestra"). El servidor además lo bloquea de forma
+    // autoritativa en ActualizarStatsAsync, por si algún cliente desincronizado
+    // llegara a invocarlo.
+    final esHistoria = widget.historia != null;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => CuartelScreen(
         ejercitoId: _miEjercitoId,
@@ -2484,7 +2556,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         compradasIniciales: _especialesCompradas,
         onComprar: _comprarEspecial,
         robosCompradosIniciales: _robosComprados,
-        onRobarCarta: _robarCartaCuartel,
+        onRobarCarta: esHistoria ? null : _robarCartaCuartel,
       ),
     ));
   }
@@ -2915,6 +2987,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     CompraResult fallo(String m) => CompraResult(
         ok: false, mensaje: m, energiasRestantes: _localPlayer.puntos);
 
+    // MODO HISTORIA: no se puede ampliar la mano (ver _abrirCuartel). Esta
+    // comprobación es defensiva: _abrirCuartel ya no pasa este callback a
+    // CuartelScreen cuando hay historia, así que en circunstancias normales
+    // no debería alcanzarse.
+    if (widget.historia != null) {
+      return fallo(
+          'En esta batalla solo puedes jugar con las cartas que ya tienes.');
+    }
     if (_yoCerreElTurno) return fallo('Ya cerraste el turno. No puedes robar.');
     if (_estoyEliminado) return fallo('Estás eliminado.');
 
@@ -4190,7 +4270,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _cerrarTurno() async {
+    if (!mounted) return;
     if (_yoCerreElTurno || _isSendingTurn || _estoyEliminado) return;
+
+    // El reloj se para AQUÍ y de verdad (cancelando el Timer): si solo se
+    // bajaba el flag, un tick pendiente podía volver a entrar.
+    _stopTimer();
+
     // Instantánea de revisión ANTES de tocar nada: se mostrará sobre el tablero
     // hasta que el turno se resuelva.
     _capturarRevisionTurno();
@@ -4199,7 +4285,6 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _selectedHandIndex = null;
       _cancelMoveMode();
       _sidebarOpen = false;
-      _timerActivo = false;
       // Marcar mi cierre de forma optimista: así el banner de espera y la capa
       // de revisión (flechas/acciones) aparecen al instante, sin esperar a que
       // el servidor confirme en el siguiente sondeo. El poll lo reconcilia.
@@ -4214,16 +4299,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // para que el servidor reparta la carta de fin de turno sobre la mano
       // correcta (ya sin las cartas desplegadas este turno). Ya NO se persiste
       // DESPUÉS de cerrar, porque machacaría la carta que el servidor repartió.
-      try {
-        await _api
-            .actualizarStats(
-              lobbyId: widget.lobbyId!,
-              uid: widget.localPlayerUid,
-              mano: _hand.map((c) => c.id).toList(),
-              mazoRestante: _mazoRestante.map((c) => c.id).toList(),
-            )
-            .timeout(const Duration(seconds: 15));
-      } catch (_) {/* el cierre puede continuar; el servidor usa lo último */}
+      // En historia se omite: no hay mano y el servidor ignora estos campos.
+      if (!_esHistoria) {
+        try {
+          await _api
+              .actualizarStats(
+                lobbyId: widget.lobbyId!,
+                uid: widget.localPlayerUid,
+                mano: _hand.map((c) => c.id).toList(),
+                mazoRestante: _mazoRestante.map((c) => c.id).toList(),
+              )
+              .timeout(const Duration(seconds: 15));
+        } catch (_) {/* el cierre puede continuar; el servidor usa lo último */}
+      }
       try {
         await turnService
             .cerrarTurno(
@@ -4255,7 +4343,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         }
         if (!mounted) return;
         if (!reintentado) {
-          setState(() => _isSendingTurn = false);
+          // El cierre NO llegó al servidor: deshacemos la marca optimista para
+          // que el jugador pueda reintentarlo (antes se quedaba con el botón en
+          // "TURNO CERRADO" y el servidor sin enterarse: el estado raro).
+          setState(() {
+            _isSendingTurn = false;
+            _cerradoPor =
+                _cerradoPor.where((u) => u != widget.localPlayerUid).toList();
+          });
           _toast('Error: ${e.toString().split(']').last.trim()}', error: true);
           return;
         }
@@ -4654,6 +4749,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   ///
   /// Devuelve el Future del push para poder encadenar lo que deba ocurrir DESPUÉS
   /// de cerrarla (p. ej. el aviso de eliminación con sus recompensas).
+  /// Abre la pantalla de revisión del turno con los eventos del último
+  /// turno resuelto. Se llama tras cerrar el informe de batalla.
+  ///
+  /// Devuelve el Future del push para poder encadenar lo que deba ocurrir DESPUÉS
+  /// de cerrarla (p. ej. el aviso de eliminación con sus recompensas).
   Future<void> _abrirRevisionTurno({required int turnoRevisar}) async {
     if (!mounted) return;
     Map<String, dynamic>? entry;
@@ -4672,19 +4772,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       'conquistasLog': const [],
     };
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => RevisionTurnoScreen(
-          config: _config,
-          boardState: _boardState,
-          historialEntry: entry!,
-          localUid: widget.localPlayerUid,
-          playerColors: _playerColors,
-          obeliscoLocal: _obeliscoLocal,
-          obeliscosPorJugador: _obeliscosPorJugador,
+    // Mientras la revisión está encima del tablero el reloj del turno queda en
+    // pausa (ver `_relojEnPausa`). El `finally` garantiza que se reanuda aunque
+    // la pantalla se cierre con el botón atrás del sistema.
+    _revisionAbierta = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => RevisionTurnoScreen(
+            config: _config,
+            boardState: _boardState,
+            historialEntry: entry!,
+            localUid: widget.localPlayerUid,
+            playerColors: _playerColors,
+            obeliscoLocal: _obeliscoLocal,
+            obeliscosPorJugador: _obeliscosPorJugador,
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      _revisionAbierta = false;
+    }
   }
 
   // ── Eliminación: aviso + acceso al desglose ───────────────
@@ -5102,8 +5210,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                       !_estoyEliminado,
                   onDeshacer: _pedirDeshacer,
                 ),
-                // ── Volver a repartir (SOLO primer turno) ──
-                if (_boardState.turnoActual == 1 &&
+                // ── Volver a repartir (SOLO primer turno, nunca en historia) ──
+                if (!_esHistoria &&
+                    _boardState.turnoActual == 1 &&
                     !_yoCerreElTurno &&
                     !_estoyEliminado)
                   Container(

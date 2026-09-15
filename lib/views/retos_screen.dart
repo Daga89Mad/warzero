@@ -1,9 +1,14 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'package:warzero/services/reto_service.dart';
 import 'package:warzero/services/settings_controller.dart';
 
 /// Pantalla de Retos.
-/// De momento muestra 10 retos bloqueados.
+///
+/// Muestra 10 huecos. Los que estén en `kRetosDisponibles` (ver
+/// reto_service.dart) son jugables y arrancan la partida al pulsarlos; el resto
+/// aparecen bloqueados hasta que se desarrollen.
 class RetosScreen extends StatelessWidget {
   const RetosScreen({super.key});
 
@@ -67,9 +72,18 @@ class _ListaRetos extends StatelessWidget {
     required this.slots,
   });
 
+  /// Reto jugable en la posición [numero], o null si ese hueco está bloqueado.
+  RetoInfo? _disponible(int numero) {
+    for (final r in kRetosDisponibles) {
+      if (r.numero == numero) return r;
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final war = context.war;
+    final libres = slots - kRetosDisponibles.length;
 
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(
@@ -89,7 +103,7 @@ class _ListaRetos extends StatelessWidget {
               bottom: 6,
             ),
             child: Text(
-              'PRÓXIMAMENTE · $slots RETOS',
+              '${kRetosDisponibles.length} DISPONIBLES · $libres PRÓXIMAMENTE',
               style: TextStyle(
                 fontSize: 9,
                 fontFamily: 'Cinzel',
@@ -100,6 +114,11 @@ class _ListaRetos extends StatelessWidget {
           );
         }
 
+        final reto = _disponible(i);
+        if (reto != null) {
+          return _EntradaRetoDisponible(reto: reto);
+        }
+
         return _EntradaRetoBloqueado(
           numero: i,
         );
@@ -108,6 +127,147 @@ class _ListaRetos extends StatelessWidget {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// ENTRADA DISPONIBLE (jugable)
+// ─────────────────────────────────────────────────────────────
+class _EntradaRetoDisponible extends StatelessWidget {
+  final RetoInfo reto;
+
+  const _EntradaRetoDisponible({
+    required this.reto,
+  });
+
+  Future<void> _jugar(BuildContext context) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    await RetoService().lanzarReto(
+      context,
+      uid: uid,
+      retoId: reto.id,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final accent = war.primario;
+
+    return GestureDetector(
+      onTap: () => _jugar(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 14,
+        ),
+        decoration: BoxDecoration(
+          color: war.superficie,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: accent.withOpacity(0.45),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: accent.withOpacity(0.06),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 26,
+              child: Text(
+                '${reto.numero}.',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontFamily: 'Cinzel',
+                  color: accent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    reto.titulo,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 0.5,
+                      color: war.texto,
+                    ),
+                  ),
+                  if (reto.descripcion.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      reto.descripcion,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontFamily: 'Cinzel',
+                        height: 1.4,
+                        color: war.textoTenue,
+                      ),
+                    ),
+                  ],
+                  if (reto.etiquetas.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        for (final e in reto.etiquetas)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: accent.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: accent.withOpacity(0.25),
+                              ),
+                            ),
+                            child: Text(
+                              e,
+                              style: TextStyle(
+                                fontSize: 8,
+                                fontFamily: 'Cinzel',
+                                letterSpacing: 0.5,
+                                color: accent,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.play_arrow_rounded,
+              size: 22,
+              color: accent,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENTRADA BLOQUEADA
+// ─────────────────────────────────────────────────────────────
 class _EntradaRetoBloqueado extends StatelessWidget {
   final int numero;
 

@@ -45,6 +45,11 @@ class _CartasScreenState extends State<CartasScreen>
   Map<int, _EjercitoPct> _porcentajes = {};
   Map<int, List<_SlotNumerado>> _numeradoPorEjercito = {};
 
+  /// Ids de TODAS las cartas que tienen hueco numerado propio (en cualquier
+  /// ejército). Una evolución numerada ya se pinta en su hueco, así que no debe
+  /// repetirse como celda de "preview" colgando de su carta base.
+  Set<String> _numeradosGlobal = {};
+
   late TabController _tabController;
   bool _hasTabController = false;
 
@@ -79,6 +84,8 @@ class _CartasScreenState extends State<CartasScreen>
           _coleccion = {};
           _cartasPorEjercito = {};
           _ejercitosConCartas = [];
+          _numeradoPorEjercito = {};
+          _numeradosGlobal = {};
           _jugadorStats = null;
           _loading = false;
         });
@@ -176,16 +183,36 @@ class _CartasScreenState extends State<CartasScreen>
         final m = Map<String, dynamic>.from(raw as Map);
         final ej = (m['ejercito'] as num?)?.toInt() ?? 0;
         if (ej == 0) continue;
+        final idEvo = m['idEvolucion']?.toString() ?? '';
+        // Cadena COMPLETA de evoluciones (evo → evo de la evo → …). Si el
+        // backend aún no la envía, se degrada al primer eslabón de siempre.
+        final cadena = ((m['cadenaEvolucion'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .where((e) => e.isNotEmpty)
+            .toList();
         numerado.putIfAbsent(ej, () => []).add(_SlotNumerado(
               cartaId: m['cartaId']?.toString() ?? '',
               numero: (m['numero'] as num?)?.toInt() ?? 0,
               poseida: m['poseida'] == true,
-              idEvolucion: m['idEvolucion']?.toString() ?? '',
+              // El backend marca las EVOLUCIONES que tienen número propio: se
+              // pintan en su hueco (con su nº) pero con el acento morado.
+              esEvolucion: m['esEvolucion'] == true,
+              idEvolucion: idEvo,
+              cadenaEvolucion: cadena.isNotEmpty
+                  ? cadena
+                  : (idEvo.isEmpty ? const <String>[] : <String>[idEvo]),
             ));
       }
       numerado.forEach((_, list) {
         list.sort((a, b) => a.numero.compareTo(b.numero));
       });
+
+      // Todos los ids con hueco numerado propio (de cualquier ejército).
+      final numeradosGlobal = <String>{
+        for (final lista in numerado.values)
+          for (final slot in lista)
+            if (slot.cartaId.isNotEmpty) slot.cartaId,
+      };
 
       // Tabs = ejércitos con cartas poseídas O con catálogo numerado (para que
       // se muestren las bloqueadas aunque aún no tengas ninguna de ese ejército).
@@ -208,6 +235,7 @@ class _CartasScreenState extends State<CartasScreen>
         _ejercitosConCartas = ejercitosConCartas;
         _porcentajes = porcentajes;
         _numeradoPorEjercito = numerado;
+        _numeradosGlobal = numeradosGlobal;
         _jugadorStats = stats;
         _skinImageCache
           ..clear()
@@ -328,24 +356,31 @@ class _CartasScreenState extends State<CartasScreen>
 
   /// Construye la lista ordenada de celdas para un ejército: cada carta
   /// numerada aparece en su posición (poseída → carta real; no poseída →
-  /// bloqueada) y, JUSTO DETRÁS, su evolución si la tiene. Las evoluciones se
-  /// muestran como celda propia SIN duplicar: si dos básicas evolucionan a la
-  /// misma, o si ya aparece con su propio número, solo se pinta una vez.
+  /// bloqueada) y, JUSTO DETRÁS, TODA su cadena de evoluciones: la evolución,
+  /// la evolución de esa evolución, etc. Las evoluciones se muestran como celda
+  /// propia SIN duplicar: si dos básicas evolucionan a la misma, o si ya
+  /// aparece con su propio número, solo se pinta una vez.
   ///
-  /// La evolución se revela (con imagen/datos) solo cuando su base es poseída
-  /// —su definición llega en `evoluciones` y por tanto está en el catálogo—; en
-  /// caso contrario se pinta como celda de evolución BLOQUEADA (igual que una
-  /// básica bloqueada, sin revelar nada).
+  /// Cada evolución se revela (con imagen/datos) solo cuando su definición ha
+  /// llegado en `evoluciones` —el backend envía la cadena completa de las
+  /// cartas poseídas—; en caso contrario se pinta como celda de evolución
+  /// BLOQUEADA (igual que una básica bloqueada, sin revelar nada).
+  ///
+  /// IMPORTANTE: si la evolución tiene Nº de carta propio (p. ej. la 27 y la
+  /// 28), el backend la envía dentro de `catalogoNumerado` con
+  /// `esEvolucion: true`, así que ocupa SU hueco por número y NO se duplica
+  /// como preview de la base. Así se ve toda la cadena (base → 27 → 28) aunque
+  /// tenga varios eslabones.
   List<_GridItem> _itemsDeEjercito(int ejercitoId) {
     final items = <_GridItem>[];
     final usados = <String>{};
 
-    // Cartas que YA tienen su propia celda (con su número): huecos numerados
-    // (poseídos o bloqueados) + poseídas sin numerar. Una evolución que sea una
-    // de estas NO se repite como preview.
+    // Cartas que YA tienen su propia celda (con su número): huecos numerados de
+    // CUALQUIER ejército (una evolución puede estar numerada en otro) +
+    // poseídas sin numerar de este ejército. Una evolución que sea una de estas
+    // NO se repite como preview colgando de su base.
     final propios = <String>{
-      for (final slot in (_numeradoPorEjercito[ejercitoId] ?? const []))
-        slot.cartaId,
+      ..._numeradosGlobal,
       for (final carta in (_cartasPorEjercito[ejercitoId] ?? const []))
         if (carta.numero == 0) carta.id,
     };
@@ -364,36 +399,71 @@ class _CartasScreenState extends State<CartasScreen>
       }
     }
 
-    void agregarEvolucion(String idEvo) {
-      if (idEvo.isEmpty) return;
-      if (propios.contains(idEvo)) return; // ya aparece con su propio número
-      if (!evosPuestas.add(idEvo)) return; // ya la puso otra básica
-      final evo = _catalogoGlobal[idEvo];
-      items.add(
-          evo != null ? _GridItem.evolucion(evo) : _GridItem.evolucionLocked());
+    // Cadena de evoluciones resuelta con el catálogo LOCAL. Solo sirve cuando
+    // la definición de cada eslabón ha llegado (base poseída). Protegida contra
+    // ciclos (A→B→A) y con tope de profundidad.
+    List<String> cadenaLocal(String cartaId) {
+      final cadena = <String>[];
+      final vistos = <String>{cartaId};
+      var actual = cartaId;
+      while (cadena.length < 10) {
+        final idEvo = _catalogoGlobal[actual]?.idEvolucion ?? '';
+        if (idEvo.isEmpty || !vistos.add(idEvo)) break;
+        cadena.add(idEvo);
+        actual = idEvo;
+      }
+      return cadena;
+    }
+
+    // Añade una celda por CADA eslabón de la cadena, en orden. Se corta en el
+    // primer eslabón que ya tiene celda propia (su número) o que ya pintó otra
+    // base: a partir de ahí el resto de la cadena también estaría duplicado.
+    void agregarCadena(List<String> cadena) {
+      var nivel = 1;
+      for (final idEvo in cadena) {
+        if (idEvo.isEmpty) break;
+        if (propios.contains(idEvo)) break; // ya aparece con su propio número
+        if (!evosPuestas.add(idEvo)) break; // ya la puso otra básica
+        final evo = _catalogoGlobal[idEvo];
+        items.add(evo != null
+            ? _GridItem.evolucion(evo, nivel)
+            : _GridItem.evolucionLocked(nivel));
+        nivel++;
+      }
     }
 
     for (final slot in (_numeradoPorEjercito[ejercitoId] ?? const [])) {
       final carta = _catalogoGlobal[slot.cartaId];
       final poseida =
           slot.poseida && carta != null && _coleccion.containsKey(slot.cartaId);
+      // La cadena del servidor es la fuente completa (incluye eslabones cuya
+      // definición no se ha enviado). Solo si no viene se resuelve en local.
+      final cadena = slot.cadenaEvolucion.isNotEmpty
+          ? slot.cadenaEvolucion
+          : cadenaLocal(slot.cartaId);
+      // Una evolución CON número se dibuja en su propio hueco: marcarla como ya
+      // colocada evita que se repita como preview de su carta base.
+      if (slot.esEvolucion) evosPuestas.add(slot.cartaId);
+
       if (poseida) {
         agregarCartaConSkins(carta!, slot.numero);
         usados.add(slot.cartaId);
-        agregarEvolucion(carta.idEvolucion);
       } else {
-        items.add(_GridItem.locked(slot.numero));
-        // Aunque la base esté bloqueada, si el catálogo indica que tiene
-        // evolución la mostramos como celda de evolución bloqueada a su lado.
-        agregarEvolucion(slot.idEvolucion);
+        // Bloqueada. Si el slot es una evolución se pinta con el acento morado
+        // (y su número), pero sin revelar imagen ni estadísticas.
+        items.add(_GridItem.locked(slot.numero, esEvolucion: slot.esEvolucion));
       }
+      // Aunque la base esté bloqueada, si el catálogo indica que tiene
+      // evoluciones SIN número las mostramos como celdas bloqueadas a su lado
+      // (una por eslabón: evolución, evolución de la evolución, …).
+      agregarCadena(cadena);
     }
 
     // Poseídas sin número (no vienen en el catálogo numerado).
     for (final carta in (_cartasPorEjercito[ejercitoId] ?? const [])) {
       if (usados.contains(carta.id) || carta.numero > 0) continue;
       agregarCartaConSkins(carta, 0);
-      agregarEvolucion(carta.idEvolucion);
+      agregarCadena(cadenaLocal(carta.id));
     }
     return items;
   }
@@ -713,7 +783,10 @@ class _CartasGrid extends StatelessWidget {
 
         if (item.bloqueada) {
           return _LockedCarta(
-              numero: item.numero, esEvolucion: item.esEvolucion);
+            numero: item.numero,
+            esEvolucion: item.esEvolucion,
+            nivelEvolucion: item.nivelEvolucion,
+          );
         }
 
         final carta = item.carta!;
@@ -801,13 +874,37 @@ class _LockedCarta extends StatelessWidget {
   /// Se pinta con el acento morado de evolución y sin número de colección.
   final bool esEvolucion;
 
-  const _LockedCarta({required this.numero, this.esEvolucion = false});
+  /// Eslabón de la cadena: 1 = evolución de la base, 2 = evolución de la
+  /// evolución… A partir de 2 se muestra el número romano para distinguirlas.
+  final int nivelEvolucion;
+
+  const _LockedCarta({
+    required this.numero,
+    this.esEvolucion = false,
+    this.nivelEvolucion = 0,
+  });
+
+  /// 'EVOLUCIÓN', 'EVOLUCIÓN II', 'EVOLUCIÓN III'… según el eslabón.
+  static String _etiquetaEvolucion(int nivel) {
+    const romanos = ['', '', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII'];
+    if (nivel <= 1) return 'EVOLUCIÓN';
+    final r = nivel < romanos.length ? romanos[nivel] : '$nivel';
+    return 'EVOLUCIÓN $r';
+  }
 
   @override
   Widget build(BuildContext context) {
     final war = context.war;
     const evoPurple = Color(0xFFC060E0);
     final acento = esEvolucion ? evoPurple : war.borde;
+
+    // Una evolución NUMERADA ocupa su hueco: se muestra su número (como
+    // cualquier bloqueada) y, debajo, la etiqueta EVOLUCIÓN. Una evolución sin
+    // número es un "preview" colgando de su base: solo etiqueta.
+    final numerada = numero > 0;
+    final titulo = (esEvolucion && !numerada)
+        ? _etiquetaEvolucion(nivelEvolucion)
+        : 'Nº $numero';
 
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -826,14 +923,26 @@ class _LockedCarta extends StatelessWidget {
               size: 26, color: acento),
           const SizedBox(height: 8),
           Text(
-            esEvolucion ? 'EVOLUCIÓN' : 'Nº $numero',
+            titulo,
             style: TextStyle(
                 fontFamily: 'Cinzel',
-                fontSize: esEvolucion ? 8 : 9,
+                fontSize: (esEvolucion && !numerada) ? 8 : 9,
                 letterSpacing: 1,
                 fontWeight: esEvolucion ? FontWeight.bold : FontWeight.normal,
                 color: esEvolucion ? evoPurple : war.textoTenue),
           ),
+          if (esEvolucion && numerada) ...[
+            const SizedBox(height: 2),
+            Text(
+              'EVOLUCIÓN',
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 7,
+                  letterSpacing: 1,
+                  fontWeight: FontWeight.bold,
+                  color: evoPurple.withOpacity(0.85)),
+            ),
+          ],
           const SizedBox(height: 2),
           Text(
             'BLOQUEADA',
@@ -1277,15 +1386,26 @@ class _SlotNumerado {
   final int numero;
   final bool poseida;
 
-  /// Id de la evolución de esta carta (vacío si no tiene). Permite pintar una
-  /// celda de "evolución bloqueada" junto a las básicas que aún no posees.
+  /// True si la carta de este hueco tiene Condicion == evolución. Se sigue
+  /// pintando en su número, pero con el acento morado de evolución.
+  final bool esEvolucion;
+
+  /// Id de la evolución directa de esta carta (vacío si no tiene). Se mantiene
+  /// por compatibilidad con backends que aún no envían `cadenaEvolucion`.
   final String idEvolucion;
+
+  /// Cadena COMPLETA de evoluciones en orden: [evo, evo de la evo, …]. Solo
+  /// IDs (no revela datos). Permite pintar una celda de "evolución bloqueada"
+  /// por cada eslabón junto a las básicas que aún no posees.
+  final List<String> cadenaEvolucion;
 
   const _SlotNumerado({
     required this.cartaId,
     required this.numero,
     required this.poseida,
+    this.esEvolucion = false,
     this.idEvolucion = '',
+    this.cadenaEvolucion = const [],
   });
 }
 
@@ -1312,6 +1432,10 @@ class _GridItem {
   /// tira de skins).
   final bool esEvolucion;
 
+  /// Posición dentro de la cadena de evoluciones: 1 = evolución directa de la
+  /// base, 2 = evolución de esa evolución, etc. 0 si no es una evolución.
+  final int nivelEvolucion;
+
   /// Non-null → esta celda representa una SKIN (modo "Ver todo").
   final _SkinInfo? skin;
 
@@ -1319,14 +1443,20 @@ class _GridItem {
   final CartaModel? skinParent;
 
   const _GridItem._(this.carta, this.numero, this.esEvolucion,
-      {this.skin, this.skinParent});
+      {this.nivelEvolucion = 0, this.skin, this.skinParent});
   factory _GridItem.owned(CartaModel c, int numero) =>
       _GridItem._(c, numero, false);
-  factory _GridItem.locked(int numero) => _GridItem._(null, numero, false);
-  factory _GridItem.evolucion(CartaModel c) => _GridItem._(c, 0, true);
+
+  /// Hueco numerado NO poseído. [esEvolucion] pinta el acento morado cuando la
+  /// carta que ocupa ese número es una evolución (sigue sin revelar datos).
+  factory _GridItem.locked(int numero, {bool esEvolucion = false}) =>
+      _GridItem._(null, numero, esEvolucion);
+  factory _GridItem.evolucion(CartaModel c, [int nivel = 1]) =>
+      _GridItem._(c, 0, true, nivelEvolucion: nivel);
 
   /// Evolución de una base bloqueada: se sabe que existe pero no se revela.
-  factory _GridItem.evolucionLocked() => _GridItem._(null, 0, true);
+  factory _GridItem.evolucionLocked([int nivel = 1]) =>
+      _GridItem._(null, 0, true, nivelEvolucion: nivel);
 
   /// Celda de skin (modo "Ver todo"), asociada a su carta.
   factory _GridItem.skin(_SkinInfo s, CartaModel parent) =>

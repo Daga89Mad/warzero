@@ -17,7 +17,20 @@ import 'apertura_sobre_screen.dart';
 //   • Doble normal   → 18 (8 cartas)
 // El sobre de un ejército se paga con su Cristal + el Cristal Puro (el Puro
 // cubre lo que falte). El Puro se recarga +10 cada 12 h (al entrar aquí).
+//
+// Sobre TODOS (ejercitoId = 0): se paga SOLO con Cristal Zero Puro y mezcla
+// cartas de los 4 ejércitos. Usa SobreTodos.png y FondoTodos.png.
 // ─────────────────────────────────────────────────────────────────────────────
+/// Id "virtual" del sobre genérico (paga con Puro, mezcla los 4 ejércitos).
+const int kEjercitoTodosId = 0;
+
+const EjercitoInfo kEjercitoTodos = EjercitoInfo(
+  id: kEjercitoTodosId,
+  nombre: 'Todos los ejércitos',
+  descripcion: '',
+  icono: '🌐',
+);
+
 class CentroMandoScreen extends StatefulWidget {
   const CentroMandoScreen({super.key});
 
@@ -72,17 +85,29 @@ class _CentroMandoScreenState extends State<CentroMandoScreen> {
   }
 
   int get _puro => _cristales[MonedaZero.puro] ?? 0;
-  int _disponiblePara(int ejercitoId) =>
-      (_cristales[MonedaZeroExt.fromEjercito(ejercitoId)] ?? 0) + _puro;
+  int _disponiblePara(int ejercitoId) {
+    // El sobre "Todos" solo se paga con Cristal Puro.
+    if (ejercitoId == kEjercitoTodosId) return _puro;
+    return (_cristales[MonedaZeroExt.fromEjercito(ejercitoId)] ?? 0) + _puro;
+  }
 
   /// Ruta del asset del sobre según ejército y tipo.
   ///   normal/doble → assets/images/Sobre<Color>.png
   ///   especial     → assets/images/SobreEspecial<Color>.png
   /// donde <Color> = Celeste/Escarlata/Fuego/Natural.
+  ///   Sobre "Todos" (cualquier tipo) → assets/images/SobreTodos.png
   String _imagenSobre(int ejercitoId, String tipo) {
+    if (ejercitoId == kEjercitoTodosId) return 'assets/images/SobreTodos.png';
     final color = MonedaZeroExt.fromEjercito(ejercitoId).colorNombre;
     final prefijo = tipo == 'especial' ? 'SobreEspecial' : 'Sobre';
     return 'assets/images/$prefijo$color.png';
+  }
+
+  /// Ruta del fondo de la animación de apertura.
+  String _fondoSobre(int ejercitoId) {
+    if (ejercitoId == kEjercitoTodosId) return 'assets/images/FondoTodos.png';
+    final color = MonedaZeroExt.fromEjercito(ejercitoId).colorNombre;
+    return 'assets/images/Fondo$color.png';
   }
 
   Future<void> _abrir(EjercitoInfo ejercito, String tipo) async {
@@ -109,15 +134,17 @@ class _CentroMandoScreenState extends State<CentroMandoScreen> {
         return;
       }
 
+      // Para "Todos" fromEjercito(0) devuelve Puro → acento amarillo.
       final acento = MonedaZeroExt.fromEjercito(ejercito.id).color;
-      final color = MonedaZeroExt.fromEjercito(ejercito.id).colorNombre;
       await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => AperturaSobreScreen(
           cartas: cartas,
           acento: acento,
           imagenSobre: _imagenSobre(ejercito.id, tipo),
-          fondo: 'assets/images/Fondo$color.png',
-          titulo: 'SOBRE ${ejercito.nombre}',
+          fondo: _fondoSobre(ejercito.id),
+          titulo: ejercito.id == kEjercitoTodosId
+              ? 'SOBRE DE TODOS LOS EJÉRCITOS'
+              : 'SOBRE ${ejercito.nombre}',
         ),
       ));
       await _cargar();
@@ -178,6 +205,18 @@ class _CentroMandoScreenState extends State<CentroMandoScreen> {
                             fontSize: 8,
                             letterSpacing: 2,
                             color: war.textoTenue)),
+                    const SizedBox(height: 12),
+                    // Sobre genérico: solo Cristal Puro, mezcla los 4 ejércitos.
+                    _EjercitoSobres(
+                      ejercito: kEjercitoTodos,
+                      subtitulo:
+                          'Solo Cristal Zero Puro · cartas de los 4 ejércitos',
+                      disponible: _disponiblePara(kEjercitoTodosId),
+                      abriendo: _abriendoEjercito == kEjercitoTodosId,
+                      bloqueadoOtro: _abriendoEjercito != null &&
+                          _abriendoEjercito != kEjercitoTodosId,
+                      onAbrir: (tipo) => _abrir(kEjercitoTodos, tipo),
+                    ),
                     const SizedBox(height: 12),
                     for (final e in kEjercitos) ...[
                       _EjercitoSobres(
@@ -276,13 +315,15 @@ class _CristalesBar extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _EjercitoSobres extends StatelessWidget {
   final EjercitoInfo ejercito;
-  final int disponible; // cristales del ejército + puro
+  final int disponible; // cristales del ejército + puro (Todos: solo puro)
   final bool abriendo;
   final bool bloqueadoOtro;
   final void Function(String tipo) onAbrir;
+  final String? subtitulo;
 
   const _EjercitoSobres({
     required this.ejercito,
+    this.subtitulo,
     required this.disponible,
     required this.abriendo,
     required this.bloqueadoOtro,
@@ -322,6 +363,15 @@ class _EjercitoSobres extends StatelessWidget {
                     fontWeight: FontWeight.bold,
                     color: color)),
           ]),
+          if (subtitulo != null) ...[
+            const SizedBox(height: 4),
+            Text(subtitulo!,
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 7,
+                    letterSpacing: 0.5,
+                    color: war.textoTenue)),
+          ],
           const SizedBox(height: 10),
           Row(children: [
             Expanded(

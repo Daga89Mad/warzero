@@ -390,6 +390,26 @@ class WarZeroApi {
     throw Exception('obtenerColeccion HTTP ${res.statusCode}: ${res.body}');
   }
 
+  /// Invalida el caché del catálogo de cartas del servidor (TTL 10 min). Lo
+  /// llama el editor tras crear/editar una carta, para que los cambios (número
+  /// de carta, cadena de evolución, etc.) se vean de inmediato en la colección
+  /// sin esperar a que caduque el caché. Best-effort: nunca lanza.
+  Future<bool> invalidarCatalogo() async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/warzero/catalogo/invalidar'),
+            headers: _headers,
+          )
+          .timeout(_postTimeout);
+      debugPrint('[WZ][api] POST catalogo/invalidar status=${res.statusCode}');
+      return res.statusCode >= 200 && res.statusCode < 300;
+    } catch (e) {
+      debugPrint('[WZ][api] catalogo/invalidar falló (seguimos): $e');
+      return false;
+    }
+  }
+
   /// Porcentaje de completado por ejército + monedas Zero del jugador, para el
   /// perfil. Devuelve el mapa con claves `porcentajes` (lista de
   /// {ejercito, conseguidas, total, porcentaje}) y `zeros` (mapa de las 5
