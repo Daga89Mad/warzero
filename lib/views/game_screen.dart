@@ -227,6 +227,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// respetarlo o se pinta una mano fantasma que se evapora al resolver el turno.
   bool get _esHistoria => widget.historia != null;
 
+  /// Batalla de historia en PARTIDA NORMAL (`historia.conMano`, p. ej. la
+  /// parte 3 de Diente de Invierno): hay mano, mazo fijo, robo de fin de turno
+  /// y robo en el cuartel, exactamente como en PvP. El servidor lo permite
+  /// (ActualizarStatsAsync solo bloquea la mano en los asedios).
+  bool get _historiaConMano =>
+      _esHistoria && widget.historia!['conMano'] == true;
+
+  /// Batalla de historia SIN mano (asedio clásico): todo nace en el tablero.
+  /// Es la condición que bloquea mano, robo, reparto y persistencia de mano.
+  bool get _historiaSinMano => _esHistoria && !_historiaConMano;
+
   /// Número de jugadores activos (no eliminados).
   int get _jugadoresActivos =>
       math.max(1, _jugadoresEnPartida - _jugadoresEliminados.length);
@@ -878,7 +889,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // En historia no hay mano que persistir: el servidor ignora estos campos
     // (ActualizarStatsAsync bloquea mano/mazoRestante cuando esHistoria), así
     // que la llamada solo gastaría red y daría falsa sensación de guardado.
-    if (_esHistoria) return;
+    if (_historiaSinMano) return;
     _api
         .actualizarStats(
           lobbyId: widget.lobbyId!,
@@ -895,7 +906,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// el tablero), pero un despliegue sí (haría _hand ≠ _handInicial en tamaño).
   /// En HISTORIA nunca: no hay mano ni mazo del que repartir.
   bool get _puedeVolverARepartir =>
-      !_esHistoria &&
+      !_historiaSinMano &&
       _boardState.turnoActual == 1 &&
       !_yoCerreElTurno &&
       !_estoyEliminado &&
@@ -906,7 +917,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Descarta la mano del primer turno y reparte una nueva, barajando la mano
   /// actual junto al mazo restante. Solo disponible en el primer turno.
   void _volverARepartir() {
-    if (_esHistoria) return;
+    if (_historiaSinMano) return;
     if (_boardState.turnoActual != 1 || _yoCerreElTurno || _estoyEliminado) {
       return;
     }
@@ -1349,7 +1360,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // caía al "mazo vivo" del jugador (que suele ser de OTRO ejército, p. ej.
       // Humanos jugando la campaña de Demonios) y ese mazo acababa pintado en la
       // mano y mandando en `_miEjercitoId` / el cuartel.
-      final List<CartaModel> mazoCartas = _esHistoria
+      // En historia de PARTIDA NORMAL sí hay mazo: el servidor lo fija en
+      // mazoPool al crear la batalla (mazo de historia, puede mezclar ejércitos).
+      final List<CartaModel> mazoCartas = _historiaSinMano
           ? const <CartaModel>[]
           : mazoPoolIds.isNotEmpty
               // IDs congelados → resolver a modelos desde el catálogo. No se
@@ -1627,6 +1640,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // NUNCA en historia: ahí la mano vacía es la situación CORRECTA (el
         // jugador solo juega con lo que ya tiene en el tablero). Repartir aquí
         // pintaba cartas que el servidor rechaza y que desaparecían al resolver.
+        // En historia de partida normal tampoco: la mano la fija el servidor
+        // desde el mazo de la batalla, nunca desde el mazo personal.
         if (manoFinal.isEmpty && !_estoyEliminado && !_esHistoria) {
           final cartasEnTablero = _boardState.celdas.values
               .expand((c) => c.cartas)
@@ -2546,7 +2561,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // robar no se muestra"). El servidor además lo bloquea de forma
     // autoritativa en ActualizarStatsAsync, por si algún cliente desincronizado
     // llegara a invocarlo.
-    final esHistoria = widget.historia != null;
+    // En historia de PARTIDA NORMAL sí se puede robar, como en PvP.
+    final sinRobo = _historiaSinMano;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => CuartelScreen(
         ejercitoId: _miEjercitoId,
@@ -2556,7 +2572,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         compradasIniciales: _especialesCompradas,
         onComprar: _comprarEspecial,
         robosCompradosIniciales: _robosComprados,
-        onRobarCarta: esHistoria ? null : _robarCartaCuartel,
+        onRobarCarta: sinRobo ? null : _robarCartaCuartel,
       ),
     ));
   }
@@ -2991,7 +3007,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // comprobación es defensiva: _abrirCuartel ya no pasa este callback a
     // CuartelScreen cuando hay historia, así que en circunstancias normales
     // no debería alcanzarse.
-    if (widget.historia != null) {
+    if (_historiaSinMano) {
       return fallo(
           'En esta batalla solo puedes jugar con las cartas que ya tienes.');
     }
@@ -4300,7 +4316,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // correcta (ya sin las cartas desplegadas este turno). Ya NO se persiste
       // DESPUÉS de cerrar, porque machacaría la carta que el servidor repartió.
       // En historia se omite: no hay mano y el servidor ignora estos campos.
-      if (!_esHistoria) {
+      if (!_historiaSinMano) {
         try {
           await _api
               .actualizarStats(
@@ -5211,7 +5227,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   onDeshacer: _pedirDeshacer,
                 ),
                 // ── Volver a repartir (SOLO primer turno, nunca en historia) ──
-                if (!_esHistoria &&
+                if (!_historiaSinMano &&
                     _boardState.turnoActual == 1 &&
                     !_yoCerreElTurno &&
                     !_estoyEliminado)

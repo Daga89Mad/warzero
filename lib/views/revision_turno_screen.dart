@@ -10,6 +10,7 @@ const _cAccion = Color(0xFF40C0FF);
 const _cConquista = Color(0xFFE8C870);
 const _cMovRival = Color(0xFFE0C040);
 const _cRayo = Color(0xFFD4A800);
+const _cDescarga = Color(0xFFFF6B3D);
 
 /// Pantalla intermedia que se muestra tras cerrar el informe de batalla.
 ///
@@ -19,6 +20,7 @@ const _cRayo = Color(0xFFD4A800);
 ///     hayan impactado o no.
 ///   - Celdas con presencia de cartas rivales (fondo amarillo translúcido).
 ///   - Cuarteles conquistados (borde dorado + corona).
+///   - Cuarteles donde su dueño usó la DESCARGA (borde naranja + rayo).
 ///
 /// La pantalla es solo visual: contiene un botón "EMPEZAR TURNO" arriba que
 /// la cierra. Al volver, el flujo del juego continúa con el turno ya
@@ -107,6 +109,20 @@ class RevisionTurnoScreen extends StatelessWidget {
     return result;
   }
 
+  /// Coords de cuarteles donde se ejecutó una DESCARGA este turno.
+  /// (El log de descarga usa `coord`, no `origen`/`objetivo`.)
+  Set<String> _descargaCoords() {
+    final result = <String>{};
+    final log = historialEntry['accionesLog'] as List? ?? [];
+    for (final e in log) {
+      final m = Map<String, dynamic>.from(e as Map);
+      if (m['tipo'] != 'descarga') continue;
+      final coord = m['coord'] as String?;
+      if (coord != null && coord.isNotEmpty) result.add(coord);
+    }
+    return result;
+  }
+
   /// Coords donde aparecen cartas rivales en el `movimientosLog`.
   /// Es la "huella" de las cartas enemigas tras cerrar el turno.
   Set<String> _movimientoRivalCoords() {
@@ -143,6 +159,7 @@ class RevisionTurnoScreen extends StatelessWidget {
 
   /// ¿La acción [a] toca la celda [coord] (como origen, objetivo o destino)?
   bool _accionTocaCoord(Map<String, dynamic> a, String coord) {
+    if (a['tipo'] == 'descarga') return a['coord'] == coord;
     if (a['origen'] == coord) return true;
     if (a['objetivo'] == coord) return true;
     if (a['destino'] == coord) return true;
@@ -176,6 +193,10 @@ class RevisionTurnoScreen extends StatelessWidget {
         );
       case 'fallida':
         return (Icons.block, const Color(0xFF9AA0A6), 'Acción fallida');
+      case 'descarga':
+        return (Icons.bolt, _cDescarga, 'Descarga de cuartel');
+      case 'descarga_fallida':
+        return (Icons.block, const Color(0xFF9AA0A6), 'Descarga fallida');
       default:
         return (Icons.flash_on, _cAccion, tipo.isEmpty ? 'Acción' : tipo);
     }
@@ -272,6 +293,14 @@ class RevisionTurnoScreen extends StatelessWidget {
         case 'fallida':
           final motivo = (a['motivo'] as String?) ?? 'no se pudo resolver';
           detalle.write('\n$motivo');
+          break;
+        case 'descarga':
+          // No se nombran las cartas: la guarnición del cuartel es protegida.
+          final n = (a['cartasDestruidas'] as List? ?? const []).length;
+          detalle.write(n == 0
+              ? '\nDescargó su cuartel (estaba vacío)'
+              : '\nDescargó su cuartel · $n carta(s) destruida(s)');
+          detalle.write('\nDefensa del cuartel a 0 · recupera +10 por turno');
           break;
       }
 
@@ -472,6 +501,7 @@ class RevisionTurnoScreen extends StatelessWidget {
     final combate = _combateCoords();
     final conquista = _conquistaCoords();
     final accion = _accionCoords();
+    final descarga = _descargaCoords();
     final movRival = _movimientoRivalCoords();
     final turno = (historialEntry['turno'] as num?)?.toInt() ?? 0;
 
@@ -489,6 +519,7 @@ class RevisionTurnoScreen extends StatelessWidget {
               accion: accion.isNotEmpty,
               movRival: movRival.isNotEmpty,
               conquista: conquista.isNotEmpty,
+              descarga: descarga.isNotEmpty,
             ),
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
@@ -557,6 +588,7 @@ class RevisionTurnoScreen extends StatelessWidget {
                             labelGutter: labelGutter,
                             combateCoords: combate,
                             accionCoords: accion,
+                            descargaCoords: descarga,
                             movimientoRivalCoords: movRival,
                             conquistaCoords: conquista,
                             localUid: localUid,
@@ -674,18 +706,20 @@ class _Legend extends StatelessWidget {
   final bool accion;
   final bool movRival;
   final bool conquista;
+  final bool descarga;
 
   const _Legend({
     required this.combate,
     required this.accion,
     required this.movRival,
     required this.conquista,
+    this.descarga = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final war = context.war;
-    if (!combate && !accion && !movRival && !conquista) {
+    if (!combate && !accion && !movRival && !conquista && !descarga) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Text(
@@ -729,6 +763,12 @@ class _Legend extends StatelessWidget {
               color: _cConquista,
               label: 'CONQUISTA',
               icon: Icons.castle,
+            ),
+          if (descarga)
+            const _LegendChip(
+              color: _cDescarga,
+              label: 'DESCARGA',
+              icon: Icons.bolt,
             ),
         ],
       ),
@@ -799,6 +839,7 @@ class _MiniBoard extends StatelessWidget {
   final double labelGutter;
   final Set<String> combateCoords;
   final Set<String> accionCoords;
+  final Set<String> descargaCoords;
   final Set<String> movimientoRivalCoords;
   final Set<String> conquistaCoords;
   final String localUid;
@@ -816,6 +857,7 @@ class _MiniBoard extends StatelessWidget {
     required this.labelGutter,
     required this.combateCoords,
     required this.accionCoords,
+    this.descargaCoords = const {},
     required this.movimientoRivalCoords,
     required this.conquistaCoords,
     required this.localUid,
@@ -900,6 +942,8 @@ class _MiniBoard extends StatelessWidget {
                   )._withFlags(
                     isCombate: combateCoords.contains(config.coordLabel(r, c)),
                     isAccion: accionCoords.contains(config.coordLabel(r, c)),
+                    isDescarga:
+                        descargaCoords.contains(config.coordLabel(r, c)),
                     isMovRival:
                         movimientoRivalCoords.contains(config.coordLabel(r, c)),
                     isConquista:
@@ -928,6 +972,7 @@ class _MiniCell extends StatelessWidget {
   final bool isConquista;
   final bool isObelisco;
   final bool isLocalObelisco;
+  final bool isDescarga;
   final String localUid;
   final Map<String, Color> playerColors;
 
@@ -935,6 +980,7 @@ class _MiniCell extends StatelessWidget {
   final void Function(String coord) onTapCoord;
 
   const _MiniCell({
+    this.isDescarga = false,
     required this.coord,
     required this.size,
     required this.boardState,
@@ -957,8 +1003,10 @@ class _MiniCell extends StatelessWidget {
     required bool isConquista,
     required bool isObelisco,
     required bool isLocalObelisco,
+    bool isDescarga = false,
   }) {
     return _MiniCell(
+      isDescarga: isDescarga,
       coord: coord,
       size: size,
       boardState: boardState,
@@ -992,6 +1040,9 @@ class _MiniCell extends StatelessWidget {
     if (isRayo && !isObelisco && !isMovRival) {
       bgColor = _cRayo.withOpacity(0.14); // tinte dorado rayo
     }
+    if (isDescarga) {
+      bgColor = _cDescarga.withOpacity(0.18); // cuartel descargado
+    }
     if (isMovRival) {
       // Amarillo translúcido (prioritario sobre el fondo de obelisco).
       bgColor = _cMovRival.withOpacity(0.22);
@@ -1007,6 +1058,12 @@ class _MiniCell extends StatelessWidget {
       borderWidth = 2.0;
       shadows = [
         BoxShadow(color: _cConquista.withOpacity(0.55), blurRadius: 10),
+      ];
+    } else if (isDescarga) {
+      borderColor = _cDescarga;
+      borderWidth = 2.0;
+      shadows = [
+        BoxShadow(color: _cDescarga.withOpacity(0.55), blurRadius: 10),
       ];
     } else if (isCombate) {
       borderColor = _cCombate;
@@ -1069,8 +1126,15 @@ class _MiniCell extends StatelessWidget {
                 right: 2,
                 child: Icon(Icons.castle, size: 10, color: _cConquista),
               ),
-            // Icono de acción (si no hay conquista para no chocar)
-            if (isAccion && !isConquista)
+            // Icono de DESCARGA (prioritario sobre el de acción genérica)
+            if (isDescarga && !isConquista)
+              const Positioned(
+                top: 2,
+                right: 2,
+                child: Icon(Icons.bolt, size: 10, color: _cDescarga),
+              ),
+            // Icono de acción (si no hay conquista ni descarga para no chocar)
+            if (isAccion && !isConquista && !isDescarga)
               const Positioned(
                 top: 2,
                 right: 2,

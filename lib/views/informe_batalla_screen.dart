@@ -809,8 +809,9 @@ class _DisparoTile extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Pestaña que lista TODAS las habilidades/acciones lanzadas este turno
-/// (teletransporte, disparo, veneno, parálisis, escudo, potenciaciones y
-/// acciones fallidas). Por cada una muestra: quién la lanzó y desde qué celda,
+/// (teletransporte, disparo, veneno, parálisis, escudo, potenciaciones,
+/// DESCARGA de cuartel y acciones fallidas). Las descargas fallidas solo las
+/// ve quien intentó lanzarlas (no se revela la intención al rival). Por cada una muestra: quién la lanzó y desde qué celda,
 /// la habilidad y su efecto (turnos y magnitud) y las cartas afectadas o
 /// destruidas.
 class _AccionesTab extends StatelessWidget {
@@ -836,6 +837,8 @@ class _AccionesTab extends StatelessWidget {
     'potDefensa',
     'potMovimiento',
     'fallida',
+    'descarga',
+    'descarga_fallida',
   };
 
   @override
@@ -843,6 +846,8 @@ class _AccionesTab extends StatelessWidget {
     final war = context.war;
     final base = accionesLog
         .where((a) => _tiposAccion.contains(a['tipo']))
+        // Una descarga FALLIDA solo la ve quien la intentó.
+        .where((a) => a['tipo'] != 'descarga_fallida' || a['uid'] == localUid)
         .map((e) => Map<String, dynamic>.from(e))
         .toList();
     // Agrupar acciones IDÉNTICAS (p. ej. dos disparos iguales de dos cartas
@@ -863,6 +868,7 @@ class _AccionesTab extends StatelessWidget {
         a['habilidadNombre'],
         a['origen'],
         a['cartaOrigenCoord'],
+        a['coord'],
         a['destino'],
         a['objetivo'],
         a['turnosRestantes'],
@@ -969,6 +975,10 @@ class _AccionTile extends StatelessWidget {
         );
       case 'fallida':
         return (Icons.block, const Color(0xFF9AA0A6), 'FALLIDA');
+      case 'descarga':
+        return (Icons.bolt, const Color(0xFFFF6B3D), 'DESCARGA');
+      case 'descarga_fallida':
+        return (Icons.block, const Color(0xFF9AA0A6), 'DESCARGA FALLIDA');
       default:
         return (Icons.flash_on, const Color(0xFF40C0FF), tipo.toUpperCase());
     }
@@ -985,10 +995,12 @@ class _AccionTile extends StatelessWidget {
     final lanzador = esLocal ? 'TÚ' : alias(uid).toUpperCase();
     final habilidad = (data['habilidadNombre'] as String?) ?? '';
     // "desde qué celda": preferimos el origen de la acción; si no, la celda de
-    // la carta que se teletransporta.
+    // la carta que se teletransporta (o la del cuartel en una DESCARGA).
     final origen = ((data['origen'] as String?)?.isNotEmpty ?? false)
         ? data['origen'] as String
-        : (data['cartaOrigenCoord'] as String?) ?? '';
+        : ((data['cartaOrigenCoord'] as String?)?.isNotEmpty ?? false)
+            ? data['cartaOrigenCoord'] as String
+            : (data['coord'] as String?) ?? '';
     final zonaColor = colorZona(zona);
 
     // Etiqueta de celda del encabezado, líneas de efecto y cartas destruidas.
@@ -1052,6 +1064,35 @@ class _AccionTile extends StatelessWidget {
             (origen.isNotEmpty ? origen : '');
         celdaLabel = obj.isNotEmpty ? 'CELDA $obj' : 'ACCIÓN FALLIDA';
         efecto.add((data['motivo'] as String?) ?? 'No se pudo resolver');
+        break;
+      case 'descarga':
+        final coord = (data['coord'] as String?) ?? '?';
+        celdaLabel = 'CUARTEL $coord';
+        final todas = (data['cartasDestruidas'] as List? ?? const [])
+            .map((c) => Map<String, dynamic>.from(c as Map))
+            .toList();
+        // La guarnición del cuartel es información protegida: si la descarga
+        // es de un rival, solo se nombran TUS cartas destruidas; el resto se
+        // cuenta sin revelar qué eran.
+        if (esLocal) {
+          destruidas.addAll(todas);
+        } else {
+          destruidas.addAll(
+              todas.where((c) => (c['ownerUid'] ?? '').toString() == localUid));
+        }
+        efecto.add('Descargó su cuartel: todo lo que había dentro murió');
+        efecto.add(todas.isEmpty
+            ? 'El cuartel estaba vacío (sin bajas)'
+            : 'Destruyó ${todas.length} carta(s)');
+        if (!esLocal && todas.length > destruidas.length) {
+          final ocultas = todas.length - destruidas.length;
+          efecto.add('$ocultas carta(s) de la guarnición rival (ocultas)');
+        }
+        efecto.add('Defensa del cuartel a 0 · recupera +10 por turno');
+        break;
+      case 'descarga_fallida':
+        celdaLabel = 'DESCARGA FALLIDA';
+        efecto.add((data['motivo'] as String?) ?? 'No se pudo ejecutar');
         break;
       default:
         celdaLabel = 'ACCIÓN';
@@ -1159,7 +1200,7 @@ class _AccionTile extends StatelessWidget {
                         ),
                       )),
                 ],
-                // Cartas destruidas (disparo).
+                // Cartas destruidas (disparo / descarga).
                 if (destruidas.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text('CARTAS DESTRUIDAS',
