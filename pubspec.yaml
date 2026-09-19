@@ -24,10 +24,6 @@ dependencies:
   # ID token de Firebase a cada petición al backend.
   http: ^1.2.0
 
-  # En iOS, las peticiones HTTP de Dart salen por NSURLSession (pila de red y
-  # TLS del sistema) en lugar del TLS propio de Dart.
-  cupertino_http: ^2.0.0
-
   # Abrir la política de privacidad en el navegador (Ajustes → Cuenta).
   url_launcher: ^6.3.0
 

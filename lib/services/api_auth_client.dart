@@ -12,14 +12,12 @@
 //      no la toca.
 //   2. Si el servidor responde 401, renueva el token una vez y reintenta
 //      (caso típico: el token caducó justo entre medias).
-//   3. En iOS usa la pila de red del SISTEMA (NSURLSession vía cupertino_http)
-//      en lugar del TLS propio de Dart. Así el tráfico HTTPS de la app usa el
-//      cifrado del sistema operativo, respeta ATS y la configuración de red
-//      del dispositivo (ver nota de cumplimiento de cifrado en la revisión).
+//
+// Nota: se usa IOClient (pila HTTP de Dart) en todas las plataformas. La
+// variante con cupertino_http (NSURLSession en iOS) se retiró porque su
+// dependencia nativa `objective_c` no se empaquetaba en los builds de
+// TestFlight y rompía todas las peticiones.
 
-import 'dart:io' show Platform;
-
-import 'package:cupertino_http/cupertino_http.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -36,21 +34,15 @@ class ApiAuthClient extends http.BaseClient {
   /// un cliente por llamada y lo cierran al terminar; por eso el envoltorio se
   /// crea cada vez pero el cliente interno (y su pool de conexiones) se
   /// reutiliza y nunca se cierra.
-  static final http.Client _compartido = _crearInterno();
+  ///
+  /// IOClient explícito: dentro de runWithClient, `http.Client()` volvería a
+  /// llamar a la fábrica y entraría en bucle.
+  static final http.Client _compartido = IOClient();
 
   final http.Client _interno;
 
   /// Fábrica para `http.runWithClient(..., ApiAuthClient.fabrica)`.
   static http.Client fabrica() => ApiAuthClient._(_compartido);
-
-  static http.Client _crearInterno() {
-    if (!kIsWeb && Platform.isIOS) {
-      return CupertinoClient.defaultSessionConfiguration();
-    }
-    // IOClient explícito: dentro de runWithClient, `http.Client()` volvería a
-    // llamar a la fábrica y entraría en bucle.
-    return IOClient();
-  }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
