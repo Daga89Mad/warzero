@@ -45,12 +45,21 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- Notificaciones push: permite despertar la app en segundo plano para
-	     recibir mensajes de FCM (turno resuelto). -->
+	<!-- Notificaciones push: solo remote-notification (FCM, turno resuelto).
+	     Se quita "fetch": la app no usa Background Fetch y declarar modos de
+	     segundo plano que no se usan es motivo habitual de rechazo (2.5.4). -->
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>fetch</string>
 		<string>remote-notification</string>
 	</array>
+	<!-- CIFRADO / EXPORT COMPLIANCE
+	     La app solo usa cifrado estándar para transporte (HTTPS/TLS) y el
+	     llavero del sistema; no implementa algoritmos propios ni cifrado de
+	     extremo a extremo. Con NO, App Store Connect no bloquea cada build en
+	     "Missing Compliance". Revisa la nota sobre Francia antes de publicar:
+	     si decides presentar la declaración ANSSI, cambia a <true/> y responde
+	     "algoritmos estándar" en App Store Connect. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

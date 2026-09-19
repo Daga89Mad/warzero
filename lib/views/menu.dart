@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:warzero/core/firebaseCrudService.dart';
 import 'package:warzero/services/settings_controller.dart';
 import 'package:warzero/services/permisos.dart';
 import 'package:warzero/views/loginBody.dart';
@@ -23,12 +24,15 @@ import 'package:warzero/views/edicion_mapas_screen.dart';
 import 'package:warzero/views/edicion_bots_screen.dart';
 import 'package:warzero/views/edicion_tienda_screen.dart';
 import 'package:warzero/views/edicion_trofeos_screen.dart';
+import 'package:warzero/views/admin_cuentas_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({Key? key}) : super(key: key);
 
   Future<void> _signOutAndGoToLogin(BuildContext context) async {
-    await FirebaseAuth.instance.signOut();
+    // Cierre MANUAL: marca el flag para que no haya reconexión automática.
+    await FirebaseCrudService().signOut();
+    if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginBody()),
       (route) => false,
@@ -299,6 +303,17 @@ class MenuScreen extends StatelessWidget {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const EdicionTiendaScreen()),
+                        ),
+                      ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.manage_accounts_outlined,
+                        label: 'CUENTAS',
+                        sublabel: 'Buscar jugadores\ny cambiar su correo',
+                        accent: const Color(0xFFD06040),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const AdminCuentasScreen()),
                         ),
                       ),
                   ],

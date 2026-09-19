@@ -2,12 +2,30 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FirebaseCrudService {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   FirebaseCrudService();
+
+  // Claves compartidas con LoginBody (Recuérdame).
+  static const String _kRememberMe = 'remember_me';
+  static const String _kSavedEmail = 'saved_email';
+  static const String _kSavedPass = 'saved_pass';
+
+  /// true  → el usuario pulsó "Cerrar sesión" (no reconectar solo).
+  /// false → la última vez entró con éxito (se puede reconectar solo).
+  /// Ausente → se trata como true (no reconectar) por seguridad.
+  static const String _kLogoutManual = 'logout_manual';
+
+  /// Correo nuevo solicitado desde el perfil que aún no se ha confirmado
+  /// (el usuario todavía no ha pulsado el enlace del email de verificación).
+  static const String _kEmailPendiente = 'email_pendiente';
+
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
 
   String? get currentUid => _auth.currentUser?.uid;
 
@@ -171,6 +189,15 @@ class FirebaseCrudService {
       );
       final uid = cred.user?.uid;
       if (uid != null) {
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setBool(_kLogoutManual, false);
+          final pendiente = prefs.getString(_kEmailPendiente);
+          final actual = cred.user?.email?.toLowerCase();
+          if (pendiente != null && actual == pendiente.toLowerCase()) {
+            await prefs.remove(_kEmailPendiente);
+          }
+        } catch (_) {}
         try {
           await _ensureSubcolecciones(uid);
         } catch (_) {
@@ -392,7 +419,69 @@ class FirebaseCrudService {
   // PERFIL
   // ───────────────────────────────────────────────────────────
 
-  Future<void> signOut() => _auth.signOut();
+  /// Cierre de sesión MANUAL (botón del menú). Marca el flag para que el
+  /// arranque NO vuelva a entrar solo con las credenciales guardadas.
+  Future<void> signOut() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kLogoutManual, true);
+    } catch (_) {}
+    await _auth.signOut();
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // RECONEXIÓN SILENCIOSA
+  // ───────────────────────────────────────────────────────────
+
+  /// Si Firebase ha perdido la sesión (reinstalación, fallo al leer el
+  /// almacenamiento local del dispositivo, sesión revocada...) pero el
+  /// usuario tenía "Recuérdame" activo y NO cerró sesión a mano, vuelve a
+  /// entrar sin mostrar el login. Devuelve null si no procede o si falla
+  /// (p. ej. la contraseña cambió) y entonces se muestra el login normal.
+  Future<User?> reloginSilencioso() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool(_kLogoutManual) ?? true) return null;
+      if (!(prefs.getBool(_kRememberMe) ?? false)) return null;
+
+      final email = prefs.getString(_kSavedEmail);
+      final pass = await _secureStorage.read(key: _kSavedPass);
+      if (email == null || email.isEmpty || pass == null || pass.isEmpty) {
+        return null;
+      }
+
+      // Si hay un cambio de correo pendiente y el usuario ya lo confirmó,
+      // Firebase habrá cerrado la sesión y el correo guardado ya no vale:
+      // se prueba primero el guardado y después el nuevo.
+      final pendiente = prefs.getString(_kEmailPendiente);
+      final candidatos = <String>[
+        email,
+        if (pendiente != null &&
+            pendiente.isNotEmpty &&
+            pendiente.toLowerCase() != email.toLowerCase())
+          pendiente,
+      ];
+
+      for (final candidato in candidatos) {
+        try {
+          final cred = await signInWithEmail(email: candidato, password: pass)
+              .timeout(const Duration(seconds: 15));
+          if (candidato != email) {
+            await prefs.setString(_kSavedEmail, candidato);
+            await prefs.remove(_kEmailPendiente);
+          }
+          print('[FirebaseCrudService] reloginSilencioso OK');
+          return cred.user;
+        } catch (e) {
+          print('[FirebaseCrudService] reloginSilencioso ($candidato): $e');
+        }
+      }
+      return null;
+    } catch (e) {
+      print('[FirebaseCrudService] reloginSilencioso falló: $e');
+      return null;
+    }
+  }
 
   Future<void> actualizarPerfil({
     String? uid,
@@ -435,9 +524,128 @@ class FirebaseCrudService {
     if (user == null) throw Exception('No hay un usuario autenticado.');
     try {
       await user.updatePassword(nuevaPassword);
+      // Mantener "Recuérdame" coherente para la reconexión automática.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getBool(_kRememberMe) ?? false) {
+          await _secureStorage.write(key: _kSavedPass, value: nuevaPassword);
+        }
+      } catch (_) {}
     } on FirebaseAuthException catch (e) {
       throw Exception(_mapAuthError(e));
     }
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // OLVIDÉ MI CONTRASEÑA
+  // ───────────────────────────────────────────────────────────
+
+  /// Envía el email de Firebase para crear una contraseña nueva.
+  ///
+  /// No usa Dynamic Links: el enlace abre la página de Firebase
+  /// (tuproyecto.firebaseapp.com/__/auth/action), donde el usuario escribe
+  /// la contraseña nueva. No hace falta configurar nada en la app.
+  ///
+  /// Por seguridad NO revela si el correo existe: si no hay cuenta, se
+  /// comporta igual que si la hubiera (Firebase lo hace así también con la
+  /// protección contra enumeración de correos activada).
+  Future<void> enviarRecuperacionPassword(String email) async {
+    final e = email.trim();
+    if (e.isEmpty) throw Exception('Introduce tu correo electrónico.');
+    try {
+      await _auth.setLanguageCode('es');
+      await _auth.sendPasswordResetEmail(email: e);
+    } on FirebaseAuthException catch (ex) {
+      if (ex.code == 'user-not-found') return;
+      throw Exception(_mapAuthError(ex));
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // CAMBIAR CORREO DE LOGIN
+  // ───────────────────────────────────────────────────────────
+
+  /// Solicita cambiar el correo de login.
+  ///
+  /// 1) Reautentica con la contraseña actual (Firebase lo exige para
+  ///    operaciones sensibles).
+  /// 2) Envía un enlace de verificación al CORREO NUEVO. El cambio solo se
+  ///    aplica cuando el usuario lo pulsa, así nadie puede quedarse sin
+  ///    acceso por un error al escribir el correo.
+  /// 3) Guarda el correo como "pendiente" para que la reconexión automática
+  ///    sepa usarlo cuando Firebase cierre la sesión tras el cambio.
+  ///
+  /// Se usa verifyBeforeUpdateEmail y no updateEmail, que está obsoleto y
+  /// Firebase bloquea con la protección contra enumeración de correos.
+  Future<void> solicitarCambioEmail({
+    required String nuevoEmail,
+    required String passwordActual,
+  }) async {
+    final user = _auth.currentUser;
+    final emailActual = user?.email;
+    if (user == null || emailActual == null) {
+      throw Exception('No hay un usuario autenticado.');
+    }
+    final nuevo = nuevoEmail.trim().toLowerCase();
+    if (nuevo.isEmpty) throw Exception('Introduce el correo nuevo.');
+    if (nuevo == emailActual.toLowerCase()) {
+      throw Exception('El correo nuevo es igual al actual.');
+    }
+    if (passwordActual.isEmpty) {
+      throw Exception('Introduce tu contraseña actual.');
+    }
+
+    try {
+      final credencial = EmailAuthProvider.credential(
+        email: emailActual,
+        password: passwordActual,
+      );
+      await user.reauthenticateWithCredential(credencial);
+      await _auth.setLanguageCode('es');
+      await user.verifyBeforeUpdateEmail(nuevo);
+    } on FirebaseAuthException catch (e) {
+      throw Exception(_mapAuthError(e));
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kEmailPendiente, nuevo);
+    } catch (_) {}
+  }
+
+  /// Recarga el usuario desde Firebase y, si el cambio de correo ya se
+  /// confirmó, actualiza el correo guardado de "Recuérdame".
+  /// Devuelve el correo que sigue pendiente de confirmar, o null.
+  Future<String?> sincronizarEmail() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      try {
+        await _auth.currentUser?.reload();
+      } catch (_) {}
+      final pendiente = prefs.getString(_kEmailPendiente);
+      if (pendiente == null || pendiente.isEmpty) return null;
+
+      final actual = _auth.currentUser?.email?.toLowerCase();
+      if (actual != null && actual == pendiente.toLowerCase()) {
+        await prefs.remove(_kEmailPendiente);
+        if (prefs.getBool(_kRememberMe) ?? false) {
+          await prefs.setString(_kSavedEmail, actual);
+        }
+        return null;
+      }
+      return pendiente;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Olvida el cambio de correo pendiente (solo el aviso local; si el
+  /// usuario pulsa después el enlace del email, el cambio se aplicará igual).
+  Future<void> descartarEmailPendiente() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kEmailPendiente);
+    } catch (_) {}
   }
 
   // ───────────────────────────────────────────────────────────
@@ -458,6 +666,18 @@ class FirebaseCrudService {
         return 'La contraseña debe tener al menos 6 caracteres.';
       case 'requires-recent-login':
         return 'Por seguridad, vuelve a iniciar sesión para realizar este cambio.';
+      case 'invalid-credential':
+        return 'Correo o contraseña incorrectos.';
+      case 'user-mismatch':
+        return 'Las credenciales no corresponden a esta cuenta.';
+      case 'user-disabled':
+        return 'Esta cuenta está deshabilitada.';
+      case 'too-many-requests':
+        return 'Demasiados intentos. Espera unos minutos y vuelve a probar.';
+      case 'network-request-failed':
+        return 'Sin conexión. Revisa tu red e inténtalo de nuevo.';
+      case 'missing-email':
+        return 'Introduce tu correo electrónico.';
       default:
         return e.message ?? 'Ocurrió un error de autenticación.';
     }

@@ -1,22 +1,44 @@
 // lib/main.dart
 
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:warzero/services/settings_controller.dart';
+import 'package:http/http.dart' as http;
+
+import 'core/firebaseCrudService.dart';
 import 'firebase_options.dart'; // ← generado por: flutterfire configure
+import 'services/api_auth_client.dart';
+import 'services/notificaciones_service.dart';
+import 'package:warzero/services/settings_controller.dart';
 import 'views/loginBody.dart';
 import 'views/menu.dart';
-import 'services/settings_controller.dart';
-import 'services/notificaciones_service.dart';
 
 /// Clave global del navegador: permite navegar desde fuera del árbol de widgets
 /// (p. ej. al pulsar una notificación push).
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
-void main() async {
+void main() {
+  // En RELEASE no se escribe nada en la consola del dispositivo: los logs
+  // incluyen uids, ids de partida y respuestas del servidor, y en iOS/Android
+  // cualquiera con el móvil conectado a un ordenador puede leerlos. El panel
+  // interno de DebugLog (appLog) sigue funcionando porque guarda en memoria.
+  if (kReleaseMode) {
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
+
+  // Todas las llamadas http.get/post de la app pasan por ApiAuthClient, que
+  // añade el ID token de Firebase a las peticiones de nuestro backend. Todo el
+  // arranque va DENTRO de la zona para que runApp y ensureInitialized
+  // compartan zona (Flutter avisa si no).
+  http.runWithClient(_arrancar, ApiAuthClient.fabrica);
+}
+
+Future<void> _arrancar() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   try {
@@ -98,29 +120,76 @@ class _AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<_AuthGate> {
-  late final Stream<User?> _authStream =
-      FirebaseAuth.instance.authStateChanges().timeout(
-            const Duration(seconds: 8),
-            onTimeout: (sink) => sink.add(FirebaseAuth.instance.currentUser),
-          );
+  final FirebaseCrudService _svc = FirebaseCrudService();
+  StreamSubscription<User?>? _sub;
+
+  bool _cargando = true;
+  bool _reconectando = false;
+  User? _user;
+
+  @override
+  void initState() {
+    super.initState();
+    _arrancar();
+  }
+
+  /// 1) Espera el PRIMER estado real de Firebase Auth (la restauración de la
+  ///    sesión guardada en el dispositivo). Antes se usaba Stream.timeout,
+  ///    que en arranques lentos emitía `null` y mandaba al login aunque la
+  ///    sesión fuese válida.
+  /// 2) Si no hay sesión, intenta la reconexión silenciosa con "Recuérdame".
+  /// 3) Después escucha cambios para reaccionar a revocaciones en caliente.
+  Future<void> _arrancar() async {
+    User? user;
+    try {
+      user = await FirebaseAuth.instance
+          .authStateChanges()
+          .first
+          .timeout(const Duration(seconds: 15));
+    } catch (_) {
+      user = FirebaseAuth.instance.currentUser;
+    }
+
+    user ??= await _svc.reloginSilencioso();
+
+    if (!mounted) return;
+    setState(() {
+      _user = user;
+      _cargando = false;
+    });
+
+    _sub = FirebaseAuth.instance.authStateChanges().listen(_onAuthCambio);
+  }
+
+  Future<void> _onAuthCambio(User? u) async {
+    if (!mounted) return;
+
+    if (u != null) {
+      if (u.uid != _user?.uid) setState(() => _user = u);
+      return;
+    }
+
+    // u == null: la sesión se ha perdido estando dentro.
+    if (_user == null || _reconectando) return;
+    _reconectando = true;
+    // Si fue cierre manual, reloginSilencioso devuelve null al instante.
+    final recuperado = await _svc.reloginSilencioso();
+    _reconectando = false;
+    if (!mounted) return;
+    setState(() => _user = recuperado);
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: _authStream,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const _SplashScreen();
-        }
-        if (snapshot.hasError) {
-          return const LoginBody();
-        }
-        if (snapshot.data == null) {
-          return const LoginBody();
-        }
-        return const MenuScreen();
-      },
-    );
+    if (_cargando) return const _SplashScreen();
+    if (_user == null) return const LoginBody();
+    return const MenuScreen();
   }
 }
 

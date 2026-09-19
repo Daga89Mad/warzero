@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:warzero/services/settings_controller.dart';
-import '../services/settings_controller.dart';
+
+import '../services/cuenta_service.dart';
+import '../services/permisos.dart';
 import 'diagnostico_screen.dart';
 import 'tutorial_screen.dart';
-import '../services/permisos.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -144,6 +145,42 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
 
+              const SizedBox(height: 24),
+
+              // ── Cuenta y privacidad ──────────────────────────
+              // Obligatorio para App Store: política de privacidad accesible
+              // desde la app (5.1.1(i)) y borrado de cuenta en la app (5.1.1(v)).
+              _Seccion(
+                titulo: 'CUENTA Y PRIVACIDAD',
+                color: tema.primario,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Consulta cómo tratamos tus datos o elimina tu cuenta y '
+                      'todos sus datos de forma permanente.',
+                      style: TextStyle(color: tema.textoTenue, fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: () => _abrirPrivacidad(context),
+                      icon: const Icon(Icons.privacy_tip_outlined),
+                      label: const Text('Política de privacidad'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFFC04040),
+                        side: const BorderSide(color: Color(0xFFC04040)),
+                      ),
+                      onPressed: () => _eliminarCuenta(context),
+                      icon: const Icon(Icons.delete_forever),
+                      label: const Text('Eliminar mi cuenta'),
+                    ),
+                  ],
+                ),
+              ),
+
               // ── Diagnóstico (solo cuentas de editor/QA) ──────
               // Se OCULTA por completo si el usuario no tiene permisos de editor
               // (mismo criterio que la edición de contenido: ver permisos.dart).
@@ -176,6 +213,132 @@ class SettingsScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  // ── Acciones de cuenta ────────────────────────────────────────────────────
+
+  static Future<void> _abrirPrivacidad(BuildContext context) async {
+    final ok = await CuentaService().abrirPoliticaPrivacidad();
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No se pudo abrir la política de privacidad.'),
+        ),
+      );
+    }
+  }
+
+  static Future<void> _eliminarCuenta(BuildContext context) async {
+    final eliminada = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _DialogoEliminarCuenta(),
+    );
+    if (eliminada != true || !context.mounted) return;
+
+    // La sesión ya está cerrada: el _AuthGate de main.dart muestra el login.
+    final messenger = ScaffoldMessenger.of(context);
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Tu cuenta y tus datos se han eliminado.')),
+    );
+  }
+}
+
+/// Diálogo de confirmación del borrado. Pide la contraseña (reautenticación)
+/// y devuelve true si la cuenta se eliminó.
+class _DialogoEliminarCuenta extends StatefulWidget {
+  const _DialogoEliminarCuenta();
+
+  @override
+  State<_DialogoEliminarCuenta> createState() => _DialogoEliminarCuentaState();
+}
+
+class _DialogoEliminarCuentaState extends State<_DialogoEliminarCuenta> {
+  final _passCtrl = TextEditingController();
+  bool _enCurso = false;
+  bool _verPass = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _passCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirmar() async {
+    setState(() {
+      _enCurso = true;
+      _error = null;
+    });
+    try {
+      await CuentaService().eliminarCuenta(password: _passCtrl.text);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _enCurso = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('ELIMINAR CUENTA',
+          style: TextStyle(fontFamily: 'Cinzel', letterSpacing: 2)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Se borrarán de forma PERMANENTE tu cuenta, tu colección de '
+              'cartas, tus mazos, tus estadísticas y tu progreso. Esta acción '
+              'no se puede deshacer.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _passCtrl,
+              enabled: !_enCurso,
+              obscureText: !_verPass,
+              autofillHints: const [AutofillHints.password],
+              decoration: InputDecoration(
+                labelText: 'Contraseña',
+                errorText: _error,
+                suffixIcon: IconButton(
+                  icon:
+                      Icon(_verPass ? Icons.visibility_off : Icons.visibility),
+                  onPressed: () => setState(() => _verPass = !_verPass),
+                ),
+              ),
+              onSubmitted: (_) => _enCurso ? null : _confirmar(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _enCurso ? null : () => Navigator.of(context).pop(false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFFC04040),
+          ),
+          onPressed: _enCurso ? null : _confirmar,
+          child: _enCurso
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white),
+                )
+              : const Text('Eliminar'),
+        ),
+      ],
     );
   }
 }

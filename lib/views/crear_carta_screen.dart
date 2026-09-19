@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/carta_model.dart';
 import '../models/lobby_model.dart'; // kEjercitos
+import '../services/admin_cuentas_service.dart';
 import '../services/permisos.dart';
 import '../services/warzero_api.dart';
 import 'seleccionar_carta_screen.dart';
@@ -34,6 +35,8 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
   bool get _puedeRepartir => _editMode && esEditor();
 
   bool _enviandoATodos = false;
+  bool _enviandoAJugador = false;
+  final _adminApi = AdminCuentasService();
 
   late final TextEditingController _nombreCtrl;
   late final TextEditingController _descripcionCtrl;
@@ -335,6 +338,55 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
       );
     } finally {
       if (mounted) setState(() => _enviandoATodos = false);
+    }
+  }
+
+  /// Envía esta carta a UN jugador indicando su correo (solo editores).
+  /// El servidor valida el token y el claim de editor, suma las copias a su
+  /// colección y deja registro en `AuditoriaCuentas`.
+  Future<void> _enviarAJugador() async {
+    final carta = widget.cartaEditar;
+    if (carta == null || _enviandoAJugador) return;
+
+    final datos = await showDialog<_DatosEnvioJugador>(
+      context: context,
+      builder: (_) => _EnviarAJugadorDialog(nombreCarta: carta.nombre),
+    );
+    if (datos == null || !mounted) return;
+
+    setState(() => _enviandoAJugador = true);
+    try {
+      final r = await _adminApi.enviarCarta(
+        email: datos.email,
+        cartaId: carta.id,
+        cantidad: datos.cantidad,
+        motivo: datos.motivo,
+      );
+      if (!mounted) return;
+      final quien = r.alias.isEmpty ? r.email : '${r.alias} (${r.email})';
+      final detalle = r.nueva
+          ? 'Carta nueva para el jugador · copias: ${r.cantidadNueva}'
+          : 'Ya la tenía · copias: ${r.cantidadAnterior} → ${r.cantidadNueva}';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 6),
+          content: Text('"${r.nombreCarta}" enviada a $quien.\n$detalle',
+              style: const TextStyle(fontFamily: 'Cinzel')),
+          backgroundColor: const Color(0xFF1A2A0A),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'No se pudo enviar: ${e.toString().replaceFirst('Exception: ', '')}',
+              style: const TextStyle(fontFamily: 'Cinzel')),
+          backgroundColor: const Color(0xFF2A0A0A),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _enviandoAJugador = false);
     }
   }
 
@@ -943,6 +995,53 @@ class _CrearCartaScreenState extends State<CrearCartaScreen> {
                         ),
                 ),
               ),
+
+              // ── BOTÓN ENVIAR A UN JUGADOR (solo editores) ──
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: _enviandoAJugador ? null : _enviarAJugador,
+                child: Container(
+                  width: double.infinity,
+                  height: 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [
+                      const Color(0xFFC8A860).withOpacity(0.20),
+                      const Color(0xFFC8A860).withOpacity(0.05),
+                    ]),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: const Color(0xFFC8A860).withOpacity(0.6),
+                      width: 1,
+                    ),
+                  ),
+                  child: _enviandoAJugador
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Color(0xFFE0C060)),
+                        )
+                      : const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.person_add_alt_1_outlined,
+                                size: 16, color: Color(0xFFE0C060)),
+                            SizedBox(width: 10),
+                            Text(
+                              'ENVIAR A UN JUGADOR',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontFamily: 'Cinzel',
+                                letterSpacing: 2,
+                                color: Color(0xFFE0C060),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
             ],
           ],
         ),
@@ -1146,5 +1245,184 @@ class _SectionLabel extends StatelessWidget {
             letterSpacing: 2,
             color: Color(0xFF7A6A40),
             fontWeight: FontWeight.bold));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// DIÁLOGO "ENVIAR A UN JUGADOR"
+// Devuelve el correo, las copias y el motivo, o null si se cancela.
+// ─────────────────────────────────────────────────────────────
+
+class _DatosEnvioJugador {
+  final String email;
+  final int cantidad;
+  final String motivo;
+
+  const _DatosEnvioJugador({
+    required this.email,
+    required this.cantidad,
+    required this.motivo,
+  });
+}
+
+class _EnviarAJugadorDialog extends StatefulWidget {
+  final String nombreCarta;
+
+  const _EnviarAJugadorDialog({required this.nombreCarta});
+
+  @override
+  State<_EnviarAJugadorDialog> createState() => _EnviarAJugadorDialogState();
+}
+
+class _EnviarAJugadorDialogState extends State<_EnviarAJugadorDialog> {
+  static const _minCopias = 1;
+  static const _maxCopias = 50; // mismo límite que el servidor
+
+  static const _oro = Color(0xFFE0C060);
+  static const _texto = Color(0xFFB0C0D0);
+  static const _tenue = Color(0xFF90A0B0);
+
+  final _emailCtrl = TextEditingController();
+  final _motivoCtrl = TextEditingController();
+  int _cantidad = 1;
+  String? _error;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _motivoCtrl.dispose();
+    super.dispose();
+  }
+
+  void _confirmar() {
+    final email = _emailCtrl.text.trim().toLowerCase();
+    if (!email.contains('@') || !email.contains('.')) {
+      setState(() => _error = 'Introduce el correo del jugador.');
+      return;
+    }
+    Navigator.of(context).pop(_DatosEnvioJugador(
+      email: email,
+      cantidad: _cantidad,
+      motivo: _motivoCtrl.text.trim(),
+    ));
+  }
+
+  InputDecoration _deco(String hint, IconData icon) => InputDecoration(
+        hintText: hint,
+        hintStyle: const TextStyle(
+            color: Color(0xFF506070), fontFamily: 'Cinzel', fontSize: 12),
+        prefixIcon: Icon(icon, size: 18, color: _tenue),
+        filled: true,
+        fillColor: const Color(0xFF0A1220),
+        counterStyle: const TextStyle(color: _tenue, fontSize: 9),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(6),
+            borderSide:
+                BorderSide(color: const Color(0xFFC8A860).withOpacity(0.2))),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(6),
+            borderSide: const BorderSide(color: Color(0xFFC8A860))),
+      );
+
+  Widget _botonCopias(IconData icon, VoidCallback? onTap) => IconButton(
+        onPressed: onTap,
+        icon: Icon(icon, size: 20),
+        color: _oro,
+        disabledColor: _tenue.withOpacity(0.4),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF0C1828),
+      title: const Text('Enviar a un jugador',
+          style: TextStyle(color: _oro, fontFamily: 'Cinzel')),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'La carta "${widget.nombreCarta}" se añadirá a la colección del '
+              'jugador. Si ya la tiene, se suman las copias.',
+              style: const TextStyle(color: _texto, height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _emailCtrl,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              style: const TextStyle(
+                  color: Color(0xFFE0D8C0), fontFamily: 'Cinzel', fontSize: 13),
+              decoration:
+                  _deco('Correo de login del jugador', Icons.alternate_email),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text('COPIAS',
+                    style: TextStyle(
+                        color: _tenue,
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        letterSpacing: 1.5)),
+                const Spacer(),
+                _botonCopias(
+                  Icons.remove_circle_outline,
+                  _cantidad > _minCopias
+                      ? () => setState(() => _cantidad--)
+                      : null,
+                ),
+                SizedBox(
+                  width: 32,
+                  child: Text('$_cantidad',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: _oro,
+                          fontFamily: 'Cinzel',
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold)),
+                ),
+                _botonCopias(
+                  Icons.add_circle_outline,
+                  _cantidad < _maxCopias
+                      ? () => setState(() => _cantidad++)
+                      : null,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _motivoCtrl,
+              maxLength: 200,
+              maxLines: 2,
+              style: const TextStyle(
+                  color: Color(0xFFE0D8C0), fontFamily: 'Cinzel', fontSize: 12),
+              decoration:
+                  _deco('Motivo (opcional, queda registrado)', Icons.notes),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 6),
+              Text(_error!,
+                  style:
+                      const TextStyle(color: Color(0xFFC04040), fontSize: 12)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancelar', style: TextStyle(color: _tenue)),
+        ),
+        TextButton(
+          onPressed: _confirmar,
+          child:
+              const Text('Enviar', style: TextStyle(color: Color(0xFF4ABB58))),
+        ),
+      ],
+    );
   }
 }

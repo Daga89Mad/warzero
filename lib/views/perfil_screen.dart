@@ -38,6 +38,9 @@ class _PerfilScreenState extends State<PerfilScreen> {
   String? _successMsg;
 
   String _email = '';
+  // Correo nuevo solicitado y aún sin confirmar (enlace sin pulsar).
+  String? _emailPendiente;
+  bool _enviandoReset = false;
   int _nivel = 1;
   int _experiencia = 0;
   int _dinero = 0;
@@ -120,9 +123,14 @@ class _PerfilScreenState extends State<PerfilScreen> {
         }
       } catch (_) {/* opcional: si falla, se muestran 0% */}
 
+      // Recarga el usuario de Firebase: si el cambio de correo ya se
+      // confirmó, aquí se ve el correo nuevo y se limpia el aviso.
+      final pendiente = await _svc.sincronizarEmail();
+
       if (!mounted) return;
 
       setState(() {
+        _emailPendiente = pendiente;
         _aliasCtrl.text = d['alias']?.toString() ?? '';
         _imagenCtrl.text = d['imagenPerfil']?.toString() ?? '';
         _email = _auth.currentUser?.email ?? '';
@@ -185,6 +193,97 @@ class _PerfilScreenState extends State<PerfilScreen> {
         });
       }
     }
+  }
+
+  // ───────────────────────────────────────────────────────────
+  // CUENTA: cambiar correo / restablecer contraseña
+  // ───────────────────────────────────────────────────────────
+
+  Future<void> _cambiarCorreo() async {
+    final nuevo = await showDialog<String>(
+      context: context,
+      builder: (_) => _CambiarEmailDialog(
+        svc: _svc,
+        emailActual: _email,
+      ),
+    );
+    if (nuevo == null || !mounted) return;
+    setState(() {
+      _emailPendiente = nuevo;
+      _error = null;
+      _successMsg = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      duration: const Duration(seconds: 6),
+      content: Text(
+        'Te hemos enviado un enlace a $nuevo. El correo cambiará cuando lo '
+        'pulses. Revisa también la carpeta de spam.',
+      ),
+    ));
+  }
+
+  Future<void> _restablecerPassword() async {
+    if (_email.isEmpty) return;
+    final war = context.war;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: war.superficie,
+        title: Text('RESTABLECER CONTRASEÑA',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 13,
+                letterSpacing: 1.5,
+                color: war.primario)),
+        content: Text(
+          'Te enviaremos a $_email un enlace para crear una contraseña nueva. '
+          'Al cambiarla se cerrará la sesión en tus otros dispositivos.',
+          style: TextStyle(fontSize: 13, color: war.texto, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('CANCELAR',
+                style: TextStyle(color: war.textoTenue, letterSpacing: 1)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('ENVIAR',
+                style: TextStyle(
+                    color: war.secundario,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() {
+      _enviandoReset = true;
+      _error = null;
+      _successMsg = null;
+    });
+    try {
+      await _svc.enviarRecuperacionPassword(_email);
+      if (!mounted) return;
+      setState(() {
+        _enviandoReset = false;
+        _successMsg = 'Te hemos enviado un correo a $_email para crear una '
+            'contraseña nueva.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _enviandoReset = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  Future<void> _descartarPendiente() async {
+    await _svc.descartarEmailPendiente();
+    if (mounted) setState(() => _emailPendiente = null);
   }
 
   @override
@@ -323,6 +422,34 @@ class _PerfilScreenState extends State<PerfilScreen> {
                       label: 'CORREO ELECTRÓNICO',
                       value: _email,
                       icon: Icons.email_outlined),
+                  if (_emailPendiente != null) ...[
+                    const SizedBox(height: 10),
+                    _AvisoEmailPendiente(
+                      email: _emailPendiente!,
+                      onDescartar: _descartarPendiente,
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _BotonCuenta(
+                          icon: Icons.alternate_email,
+                          texto: 'CAMBIAR CORREO',
+                          onTap: _cambiarCorreo,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _BotonCuenta(
+                          icon: Icons.lock_reset,
+                          texto: 'RESTABLECER CONTRASEÑA',
+                          cargando: _enviandoReset,
+                          onTap: _restablecerPassword,
+                        ),
+                      ),
+                    ],
+                  ),
                   const SizedBox(height: 10),
                   _ReadOnlyField(
                       label: 'FECHA DE REGISTRO',
@@ -984,6 +1111,275 @@ class _MessageBanner extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// BOTÓN DE ACCIÓN DE CUENTA
+// ─────────────────────────────────────────────────────────────
+class _BotonCuenta extends StatelessWidget {
+  final IconData icon;
+  final String texto;
+  final VoidCallback onTap;
+  final bool cargando;
+
+  const _BotonCuenta({
+    required this.icon,
+    required this.texto,
+    required this.onTap,
+    this.cargando = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return GestureDetector(
+      onTap: cargando ? null : onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        decoration: BoxDecoration(
+          color: war.superficie,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: war.primario.withOpacity(0.35), width: 1),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (cargando)
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.5, color: war.primario),
+              )
+            else
+              Icon(icon, size: 15, color: war.primario),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                texto,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 8,
+                    letterSpacing: 1,
+                    color: war.primario),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// AVISO DE CAMBIO DE CORREO PENDIENTE
+// ─────────────────────────────────────────────────────────────
+class _AvisoEmailPendiente extends StatelessWidget {
+  final String email;
+  final VoidCallback onDescartar;
+
+  const _AvisoEmailPendiente({required this.email, required this.onDescartar});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    const ambar = Color(0xFFE0B040);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: ambar.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: ambar.withOpacity(0.5), width: 1),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.mark_email_unread_outlined, size: 16, color: ambar),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Pendiente de confirmar: $email\n'
+              'Pulsa el enlace que te enviamos a ese correo. Después puede que '
+              'tengas que iniciar sesión con el correo nuevo.',
+              style: TextStyle(fontSize: 11, color: war.texto, height: 1.4),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Ocultar aviso',
+            icon: Icon(Icons.close, size: 16, color: war.textoTenue),
+            onPressed: onDescartar,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// DIÁLOGO CAMBIAR CORREO
+// Devuelve el correo nuevo si se envió el enlace, o null si se cancela.
+// ─────────────────────────────────────────────────────────────
+class _CambiarEmailDialog extends StatefulWidget {
+  final FirebaseCrudService svc;
+  final String emailActual;
+
+  const _CambiarEmailDialog({required this.svc, required this.emailActual});
+
+  @override
+  State<_CambiarEmailDialog> createState() => _CambiarEmailDialogState();
+}
+
+class _CambiarEmailDialogState extends State<_CambiarEmailDialog> {
+  final _emailCtrl = TextEditingController();
+  final _passCtrl = TextEditingController();
+  bool _ocultarPass = true;
+  bool _enviando = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _emailCtrl.dispose();
+    _passCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _enviar() async {
+    final nuevo = _emailCtrl.text.trim().toLowerCase();
+    if (!nuevo.contains('@') || !nuevo.contains('.')) {
+      setState(() => _error = 'Introduce un correo electrónico válido.');
+      return;
+    }
+    if (_passCtrl.text.isEmpty) {
+      setState(() => _error = 'Introduce tu contraseña actual.');
+      return;
+    }
+    setState(() {
+      _enviando = true;
+      _error = null;
+    });
+    try {
+      await widget.svc.solicitarCambioEmail(
+        nuevoEmail: nuevo,
+        passwordActual: _passCtrl.text,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop(nuevo);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _enviando = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  InputDecoration _deco(BuildContext context, String label, IconData icon,
+      {Widget? suffix}) {
+    final war = context.war;
+    return InputDecoration(
+      labelText: label,
+      labelStyle: TextStyle(fontSize: 12, color: war.textoTenue),
+      prefixIcon: Icon(icon, size: 18, color: war.textoTenue),
+      suffixIcon: suffix,
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: BorderSide(color: war.primario.withOpacity(0.25)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(6),
+        borderSide: BorderSide(color: war.primario),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return AlertDialog(
+      backgroundColor: war.superficie,
+      title: Text('CAMBIAR CORREO',
+          style: TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 13,
+              letterSpacing: 1.5,
+              color: war.primario)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Correo actual: ${widget.emailActual}\n\n'
+              'Te enviaremos un enlace de confirmación al correo nuevo. '
+              'El cambio se aplicará cuando lo pulses.',
+              style: TextStyle(fontSize: 12, color: war.texto, height: 1.4),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _emailCtrl,
+              enabled: !_enviando,
+              autofocus: true,
+              keyboardType: TextInputType.emailAddress,
+              style: TextStyle(fontSize: 13, color: war.texto),
+              decoration: _deco(context, 'Correo nuevo', Icons.alternate_email),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passCtrl,
+              enabled: !_enviando,
+              obscureText: _ocultarPass,
+              onSubmitted: (_) => _enviar(),
+              style: TextStyle(fontSize: 13, color: war.texto),
+              decoration: _deco(
+                context,
+                'Contraseña actual',
+                Icons.lock_outline,
+                suffix: IconButton(
+                  icon: Icon(
+                    _ocultarPass ? Icons.visibility : Icons.visibility_off,
+                    size: 18,
+                    color: war.textoTenue,
+                  ),
+                  onPressed: () => setState(() => _ocultarPass = !_ocultarPass),
+                ),
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!, style: TextStyle(fontSize: 12, color: war.error)),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _enviando ? null : () => Navigator.of(context).pop(),
+          child: Text('CANCELAR',
+              style: TextStyle(color: war.textoTenue, letterSpacing: 1)),
+        ),
+        _enviando
+            ? Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: war.secundario),
+                ),
+              )
+            : TextButton(
+                onPressed: _enviar,
+                child: Text('ENVIAR ENLACE',
+                    style: TextStyle(
+                        color: war.secundario,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1)),
+              ),
+      ],
     );
   }
 }

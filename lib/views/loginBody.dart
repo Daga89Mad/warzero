@@ -90,6 +90,28 @@ class _LoginBodyState extends State<LoginBody> {
     }
   }
 
+  /// Abre el diálogo de "¿Olvidaste tu contraseña?" con el correo que
+  /// haya escrito el usuario ya rellenado.
+  Future<void> _olvidePassword() async {
+    final enviadoA = await showDialog<String>(
+      context: context,
+      builder: (_) => _OlvidePasswordDialog(
+        emailInicial: _emailCtrl.text.trim(),
+        authService: _authService,
+      ),
+    );
+    if (enviadoA == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(seconds: 6),
+        content: Text(
+          'Si existe una cuenta con $enviadoA, recibirás un correo para crear '
+          'una contraseña nueva. Revisa también la carpeta de spam.',
+        ),
+      ),
+    );
+  }
+
   void _goToRegister() {
     Navigator.of(
       context,
@@ -153,7 +175,14 @@ class _LoginBodyState extends State<LoginBody> {
                   ),
                 ),
 
-                const SizedBox(height: 12),
+                // Enlace "¿Olvidaste tu contraseña?"
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _isLoading ? null : _olvidePassword,
+                    child: const Text('¿Olvidaste tu contraseña?'),
+                  ),
+                ),
 
                 // Checkbox “Recuérdame”
                 CheckboxListTile(
@@ -194,6 +223,111 @@ class _LoginBodyState extends State<LoginBody> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// DIÁLOGO "¿OLVIDASTE TU CONTRASEÑA?"
+// Devuelve el correo al que se ha enviado el enlace, o null si se cancela.
+// ─────────────────────────────────────────────────────────────
+class _OlvidePasswordDialog extends StatefulWidget {
+  final String emailInicial;
+  final FirebaseCrudService authService;
+
+  const _OlvidePasswordDialog({
+    required this.emailInicial,
+    required this.authService,
+  });
+
+  @override
+  State<_OlvidePasswordDialog> createState() => _OlvidePasswordDialogState();
+}
+
+class _OlvidePasswordDialogState extends State<_OlvidePasswordDialog> {
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.emailInicial);
+  bool _enviando = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _enviar() async {
+    final email = _ctrl.text.trim();
+    if (!email.contains('@') || !email.contains('.')) {
+      setState(() => _error = 'Introduce un correo electrónico válido.');
+      return;
+    }
+    setState(() {
+      _enviando = true;
+      _error = null;
+    });
+    try {
+      await widget.authService.enviarRecuperacionPassword(email);
+      if (!mounted) return;
+      Navigator.of(context).pop(email);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _enviando = false;
+        _error = e.toString().replaceFirst('Exception: ', '');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Recuperar contraseña'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Escribe el correo de tu cuenta y te enviaremos un enlace para '
+            'crear una contraseña nueva.',
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _ctrl,
+            autofocus: widget.emailInicial.isEmpty,
+            keyboardType: TextInputType.emailAddress,
+            enabled: !_enviando,
+            onSubmitted: (_) => _enviar(),
+            decoration: const InputDecoration(
+              labelText: 'Correo electrónico',
+              prefixIcon: Icon(Icons.email),
+            ),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(_error!, style: const TextStyle(color: Colors.red)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _enviando ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancelar'),
+        ),
+        _enviando
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              )
+            : ElevatedButton(
+                onPressed: _enviar,
+                child: const Text('Enviar enlace'),
+              ),
+      ],
     );
   }
 }
