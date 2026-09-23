@@ -20,6 +20,15 @@ class CartaEnCelda {
   /// este `instanceId`, que es propio de cada objeto colocado.
   final String instanceId;
 
+  /// True si esta carta es un CLON (acción Clon): un señuelo que no combate,
+  /// no farmea, no lanza habilidades ni evoluciona y desaparece al coincidir
+  /// con un enemigo. La marca viaja en el estado compartido, pero la UI solo la
+  /// muestra a su DUEÑO: para el resto es una carta normal.
+  final bool esClon;
+
+  /// Turnos de vida que le quedan al clon (0 si no es clon).
+  final int clonTurnos;
+
   CartaEnCelda({
     required this.carta,
     required this.ownerUid,
@@ -27,6 +36,8 @@ class CartaEnCelda {
     this.efectos = const [],
     this.ultimoUsoHabilidad,
     String? instanceId,
+    this.esClon = false,
+    this.clonTurnos = 0,
   }) : instanceId = instanceId ?? _nuevaInstanceId();
 
   static int _contador = 0;
@@ -104,6 +115,13 @@ class CartaEnCelda {
   /// True si la carta arrastra un efecto de parálisis activo (no puede moverse).
   bool get paralizado => _tiene(EfectoTipoEstado.paralisis);
 
+  /// True si la carta está CONFUNDIDA: se mueve sola (lo decide el servidor),
+  /// su dueño no puede moverla, ni lanzar su habilidad, ni evolucionarla.
+  bool get confundida => _tiene(EfectoTipoEstado.confusion);
+
+  /// True si su dueño NO puede darle órdenes este turno (parálisis o confusión).
+  bool get sinControl => paralizado || confundida;
+
   /// True si la carta arrastra un veneno activo (defensa reducida).
   bool get envenenada => _tiene(EfectoTipoEstado.veneno);
 
@@ -127,6 +145,8 @@ class CartaEnCelda {
           'Efectos': efectos.map((e) => e.toMap()).toList(),
         if (ultimoUsoHabilidad != null)
           'UltimoUsoHabilidad': ultimoUsoHabilidad,
+        if (esClon) 'esClon': true,
+        if (esClon) 'clonTurnos': clonTurnos,
       };
 
   factory CartaEnCelda.fromMap(Map<String, dynamic> d) => CartaEnCelda(
@@ -144,6 +164,8 @@ class CartaEnCelda {
                 ? ((d['UltimoUsoHabilidad'] ?? d['ultimoUsoHabilidad']) as num)
                     .toInt()
                 : null,
+        esClon: d['esClon'] == true,
+        clonTurnos: (d['clonTurnos'] as num?)?.toInt() ?? 0,
       );
 
   CartaEnCelda copyWith({
@@ -160,6 +182,8 @@ class CartaEnCelda {
         efectos: efectos ?? this.efectos,
         ultimoUsoHabilidad: ultimoUsoHabilidad ?? this.ultimoUsoHabilidad,
         instanceId: instanceId,
+        esClon: esClon,
+        clonTurnos: clonTurnos,
       );
 }
 
@@ -370,6 +394,21 @@ class BoardState {
 
   bool celdaParalizada(String coord) =>
       _celdaTiene(coord, EfectoTipoEstado.paralisis);
+
+  /// True si la celda tiene un MURO activo: nadie puede terminar su movimiento
+  /// en ella ni atravesarla, y ningún desplazamiento (teletransporte, fractura,
+  /// clon) puede aterrizar en ella.
+  bool celdaTieneMuro(String coord) =>
+      _celdaTiene(coord, EfectoTipoEstado.muro);
+
+  /// Todas las celdas con un muro activo.
+  Set<String> get celdasConMuro => efectosCelda.keys
+      .where((coord) => _celdaTiene(coord, EfectoTipoEstado.muro))
+      .toSet();
+
+  /// Turnos restantes del muro de la celda (0 = ninguno).
+  int turnosMuroCelda(String coord) =>
+      turnosEfectoCelda(coord, EfectoTipoEstado.muro);
 
   /// Venenos activos en la celda con su origen y magnitud. Se usa para que el
   /// preview de combate reste defensa solo a las cartas ENEMIGAS del veneno

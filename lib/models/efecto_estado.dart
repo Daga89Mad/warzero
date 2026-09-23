@@ -26,6 +26,13 @@ enum EfectoTipoEstado {
   // Trampa: efecto de CELDA colocado por un jugador. Mientras `oculta` sea true
   // solo la ve su dueño; al dispararse se revela para todos (oculta:false).
   trampa,
+  // Muro: efecto de CELDA (acción Muro). Nadie puede terminar su movimiento en
+  // ella ni atravesarla mientras dure. Es público.
+  muro,
+  // Confusión: efecto anclado a CARTAS (acción Confusión). La carta se mueve
+  // sola cada turno, su dueño no la controla y en combate lucha como un bando
+  // propio (también contra las cartas de su dueño). Es público.
+  confusion,
   // futuro: regeneracion...
 }
 
@@ -48,6 +55,10 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return 'Invisible';
       case EfectoTipoEstado.trampa:
         return 'Trampa';
+      case EfectoTipoEstado.muro:
+        return 'Muro';
+      case EfectoTipoEstado.confusion:
+        return 'Confusión';
     }
   }
 
@@ -69,6 +80,10 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return '👻';
       case EfectoTipoEstado.trampa:
         return '🕸';
+      case EfectoTipoEstado.muro:
+        return '🧱';
+      case EfectoTipoEstado.confusion:
+        return '🌀';
     }
   }
 
@@ -93,6 +108,10 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return const Color(0xFFB68CE0);
       case EfectoTipoEstado.trampa:
         return const Color(0xFFD08030);
+      case EfectoTipoEstado.muro:
+        return const Color(0xFFA8845C);
+      case EfectoTipoEstado.confusion:
+        return const Color(0xFFE060C0);
     }
   }
 
@@ -103,18 +122,22 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return 0;
       case EfectoTipoEstado.paralisis:
         return 1;
-      case EfectoTipoEstado.trampa:
+      case EfectoTipoEstado.confusion:
         return 2;
-      case EfectoTipoEstado.escudo:
+      case EfectoTipoEstado.trampa:
         return 3;
-      case EfectoTipoEstado.potFuerza:
+      case EfectoTipoEstado.muro:
         return 4;
-      case EfectoTipoEstado.potDefensa:
+      case EfectoTipoEstado.escudo:
         return 5;
-      case EfectoTipoEstado.potMovimiento:
+      case EfectoTipoEstado.potFuerza:
         return 6;
-      case EfectoTipoEstado.invisibilidad:
+      case EfectoTipoEstado.potDefensa:
         return 7;
+      case EfectoTipoEstado.potMovimiento:
+        return 8;
+      case EfectoTipoEstado.invisibilidad:
+        return 9;
     }
   }
 

@@ -56,6 +56,13 @@ class CuartelScreen extends StatefulWidget {
   /// restantes). Si es null, la opción de robar no se muestra.
   final Future<CompraResult> Function()? onRobarCarta;
 
+  /// Lista FIJA de cartas especiales (ids de `Cartas`) que se venden en este
+  /// cuartel. La usa el MODO HISTORIA (p. ej. demonios_3: los generales
+  /// demonios). Si no está vacía, se muestran EXACTAMENTE estas cartas, en este
+  /// orden, sin mirar el mazo personal del jugador, su ejército ni la
+  /// condición de la carta. Vacía = comportamiento normal.
+  final List<String> especialesFijasIds;
+
   const CuartelScreen({
     super.key,
     required this.ejercitoId,
@@ -66,6 +73,7 @@ class CuartelScreen extends StatefulWidget {
     required this.onComprar,
     this.robosCompradosIniciales = 0,
     this.onRobarCarta,
+    this.especialesFijasIds = const [],
   });
 
   @override
@@ -87,6 +95,9 @@ class _CuartelScreenState extends State<CuartelScreen> {
   /// todas las del ejército (las 3 por defecto). Se rellena de forma
   /// asíncrona en [_cargarEspecialesDelMazo].
   Set<String> _especialesDelMazo = {};
+
+  /// Carga (única) de la lista fija de especiales del modo historia.
+  Future<List<CartaModel>>? _especialesFijasFuture;
 
   // Colores semánticos que se mantienen fijos en cualquier tema.
   static const _energy = Color(0xFF2EA6FF); // Zero / energía
@@ -110,6 +121,8 @@ class _CuartelScreenState extends State<CuartelScreen> {
   /// principal de ese ejército; si no hay, usa el primero. Silencioso: si
   /// falla o no hay selección, se dejan todas las del ejército (default).
   Future<void> _cargarEspecialesDelMazo() async {
+    // Cuartel con lista fija (historia): el mazo personal no pinta nada.
+    if (widget.especialesFijasIds.isNotEmpty) return;
     final uid = widget.uid;
     final ej = widget.ejercitoId;
     if (uid == null || uid.isEmpty || ej == null) return;
@@ -320,8 +333,64 @@ class _CuartelScreenState extends State<CuartelScreen> {
     );
   }
 
+  /// Carga las especiales de la lista fija (historia) por id de documento, en
+  /// el orden declarado. Se usa `whereIn` por lotes de 10 (límite de Firestore).
+  Future<List<CartaModel>> _cargarEspecialesFijas() async {
+    final ids = widget.especialesFijasIds.toSet().toList();
+    final porId = <String, CartaModel>{};
+    for (var i = 0; i < ids.length; i += 10) {
+      final lote = ids.sublist(i, i + 10 > ids.length ? ids.length : i + 10);
+      final snap = await FirebaseFirestore.instance
+          .collection('Cartas')
+          .where(FieldPath.documentId, whereIn: lote)
+          .get();
+      for (final d in snap.docs) {
+        porId[d.id] = CartaModel.fromFirestore(d);
+      }
+    }
+    return [
+      for (final id in widget.especialesFijasIds)
+        if (porId[id] != null) porId[id]!,
+    ];
+  }
+
+  Widget _buildListaFija() {
+    final war = context.war;
+    return FutureBuilder<List<CartaModel>>(
+      // Cacheado: cada compra hace setState y no debe volver a leer Firestore.
+      future: _especialesFijasFuture ??= _cargarEspecialesFijas(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return Center(child: CircularProgressIndicator(color: war.primario));
+        }
+        if (snap.hasError) {
+          return Center(
+            child: Text('Error al cargar especiales:\n${snap.error}',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: war.error)),
+          );
+        }
+        final especiales = snap.data ?? const <CartaModel>[];
+        if (especiales.isEmpty) {
+          return Center(
+            child: Text('No hay generales disponibles en este cuartel.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: war.textoTenue)),
+          );
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.all(12),
+          itemCount: especiales.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 10),
+          itemBuilder: (_, i) => _buildTile(especiales[i]),
+        );
+      },
+    );
+  }
+
   Widget _buildLista() {
     final war = context.war;
+    if (widget.especialesFijasIds.isNotEmpty) return _buildListaFija();
     if (widget.ejercitoId == null) {
       return Center(
         child: Text('Sin ejército asignado.',

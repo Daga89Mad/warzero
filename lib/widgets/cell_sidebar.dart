@@ -910,18 +910,24 @@ class _CardTile extends StatelessWidget {
     // No basta con que la carta TENGA evolución: el jugador debe POSEERLA.
     final poseeEvolucion = evolucionesPoseidas == null ||
         evolucionesPoseidas!.contains(entry.carta.idEvolucion);
+    // Un clon no evoluciona y una carta confundida no obedece a su dueño.
     final puedeEvolucionar = isLocal &&
         onEvolucionar != null &&
         coord != null &&
+        !entry.esClon &&
+        !entry.confundida &&
         entry.carta.puedeEvolucionar &&
         poseeEvolucion;
 
     // ── Habilidad: visible solo si la carta es propia, tiene habilidad
     //     en el catálogo y se ha pasado un callback. El cooldown se
     //     calcula desde ultimoUsoHabilidad y enfriamientoHabilidad.
+    //     Un clon no tiene habilidad real y una carta confundida no obedece.
     final puedeLanzar = isLocal &&
         coord != null &&
         onLanzarHabilidad != null &&
+        !entry.esClon &&
+        !entry.confundida &&
         entry.carta.tieneHabilidad;
 
     final enfriamientoRestante =
@@ -1114,6 +1120,15 @@ class _CardTile extends StatelessWidget {
                           if (moved)
                             const _Chip(
                                 label: '↩ MOVIDA', color: Color(0xFF40B0FF)),
+                          // CLON: solo su dueño sabe que lo es.
+                          if (isLocal && entry.esClon)
+                            _Chip(
+                                label: '🎭 CLON · ${entry.clonTurnos}T',
+                                color: const Color(0xFFB68CE0)),
+                          // CONFUSIÓN: es pública (cualquiera la ve).
+                          if (entry.confundida)
+                            const _Chip(
+                                label: '🌀 CONFUSA', color: Color(0xFFE060C0)),
                           _Chip(
                               label: 'MOV ${carta.movimientoEfectivo}',
                               color: color),

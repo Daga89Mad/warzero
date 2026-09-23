@@ -78,12 +78,25 @@ class HabilidadService {
   /// propias unidades del lanzador (incidencia: "veneno/parálisis no puede
   /// afectar al propio jugador que lo lanzó"). Para el resto de habilidades no
   /// tiene efecto.
+  ///
+  /// Contexto opcional para las acciones de distorsión (y el teletransporte):
+  ///   - [celdasMuro]: celdas con un muro activo. Nada puede aterrizar en ellas.
+  ///   - [celdasOcupadas]: celdas con alguna carta VISIBLE para el jugador. El
+  ///     muro solo se levanta en celdas vacías; la fractura solo parte de una
+  ///     celda con cartas.
+  ///   - [celdasProtegidasRival]: celdas escudadas por otro jugador (no admiten
+  ///     acciones suyas).
+  /// Para la SEGUNDA y siguientes celdas del muro y para el destino de la
+  /// fractura usa [muroSiguientes] y [fracturaDestinos].
   static Set<String> calcularObjetivosValidos({
     required String origen,
     required Habilidad habilidad,
     required GameConfig config,
     required Map<String, String> obeliscosPorJugador,
     Set<String> coordsPropias = const {},
+    Set<String> celdasMuro = const {},
+    Set<String> celdasOcupadas = const {},
+    Set<String> celdasProtegidasRival = const {},
   }) {
     final candidatos = <String>{};
 
@@ -127,16 +140,95 @@ class HabilidadService {
       return candidatos;
     }
 
-    // Veneno y parálisis son efectos ofensivos: no pueden apuntar a celdas que
-    // contengan cartas del propio lanzador. Así el jugador no puede envenenar
-    // ni paralizar sus propias unidades (ni malgastar la carta en sí mismo).
+    // Veneno, parálisis y confusión son efectos ofensivos: no pueden apuntar a
+    // celdas que contengan cartas del propio lanzador. Así el jugador no puede
+    // envenenar, paralizar ni confundir sus propias unidades (ni malgastar la
+    // carta en sí mismo).
     if (coordsPropias.isNotEmpty &&
         (habilidad.efecto.tipo == EfectoTipo.veneno ||
-            habilidad.efecto.tipo == EfectoTipo.paralisis)) {
+            habilidad.efecto.tipo == EfectoTipo.paralisis ||
+            habilidad.efecto.tipo == EfectoTipo.confusion)) {
       candidatos.removeWhere(coordsPropias.contains);
     }
 
+    switch (habilidad.efecto.tipo) {
+      case EfectoTipo.teletransporte:
+      case EfectoTipo.clon:
+        // Destino de una carta: ni muros ni celdas escudadas por un rival.
+        candidatos.removeWhere(celdasMuro.contains);
+        candidatos.removeWhere(celdasProtegidasRival.contains);
+        break;
+      case EfectoTipo.muro:
+        // Primera celda del muro: vacía, sin muro previo y sin escudo rival.
+        candidatos.removeWhere(celdasMuro.contains);
+        candidatos.removeWhere(celdasOcupadas.contains);
+        candidatos.removeWhere(celdasProtegidasRival.contains);
+        break;
+      case EfectoTipo.fractura:
+        // Origen de la fractura: una celda con cartas y sin escudo rival.
+        candidatos.retainWhere(celdasOcupadas.contains);
+        candidatos.removeWhere(celdasProtegidasRival.contains);
+        break;
+      case EfectoTipo.confusion:
+        candidatos.removeWhere(celdasProtegidasRival.contains);
+        break;
+      default:
+        break;
+    }
+
     return candidatos;
+  }
+
+  /// MURO: celdas válidas para el siguiente tramo, dadas las ya [elegidas].
+  /// Deben ser colindantes (ortogonales) a alguna elegida, vacías, sin muro,
+  /// sin cuartel y sin escudo rival. Devuelve {} si ya están todas.
+  static Set<String> muroSiguientes({
+    required List<String> elegidas,
+    required GameConfig config,
+    required Map<String, String> obeliscosPorJugador,
+    Set<String> celdasMuro = const {},
+    Set<String> celdasOcupadas = const {},
+    Set<String> celdasProtegidasRival = const {},
+    int maxCeldas = kMuroNumCeldas,
+  }) {
+    if (elegidas.isEmpty || elegidas.length >= maxCeldas) return <String>{};
+    final cgs = obeliscosPorJugador.values.toSet();
+    final res = <String>{};
+    for (final c in elegidas) {
+      res.addAll(_frontera(c, config));
+    }
+    res.removeWhere(elegidas.contains);
+    res.removeWhere(cgs.contains);
+    res.removeWhere(celdasMuro.contains);
+    res.removeWhere(celdasOcupadas.contains);
+    res.removeWhere(celdasProtegidasRival.contains);
+    return res;
+  }
+
+  /// FRACTURA: destinos válidos desde la celda [origenFractura]: a como mucho
+  /// [kFracturaDistanciaMax] pasos ortogonales (distancia, sin terreno), sin
+  /// cuartel, sin muro y sin escudo rival. Si se pasan [tiposMovibles] (tipos
+  /// de las cartas visibles que se desplazarían), se exige que al menos una de
+  /// ellas pueda aterrizar en el destino.
+  static Set<String> fracturaDestinos({
+    required String origenFractura,
+    required GameConfig config,
+    required Map<String, String> obeliscosPorJugador,
+    Set<String> celdasMuro = const {},
+    Set<String> celdasProtegidasRival = const {},
+    Set<int> tiposMovibles = const {},
+    int distanciaMax = kFracturaDistanciaMax,
+  }) {
+    final res = _radio(origenFractura, distanciaMax, config);
+    res.remove(origenFractura);
+    final cgs = obeliscosPorJugador.values.toSet();
+    res.removeWhere(cgs.contains);
+    res.removeWhere(celdasMuro.contains);
+    res.removeWhere(celdasProtegidasRival.contains);
+    if (tiposMovibles.isNotEmpty) {
+      res.retainWhere((c) => tiposMovibles.any((t) => config.canLand(c, t)));
+    }
+    return res;
   }
 
   static Set<String> _frontera(String origen, GameConfig config) {
@@ -252,6 +344,13 @@ class HabilidadService {
           break;
         case EfectoTipo.invisibilidad:
           invisibilidades.add(a);
+          break;
+        case EfectoTipo.clon:
+        case EfectoTipo.muro:
+        case EfectoTipo.confusion:
+        case EfectoTipo.fractura:
+          // Acciones de distorsión: solo las resuelve el servidor
+          // (AccionesDistorsion.cs). El cliente no las simula.
           break;
       }
     }

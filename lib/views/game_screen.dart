@@ -189,6 +189,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _juegoTerminado = false;
   String? _ganadorUid;
 
+  /// True cuando ya se ha disparado el diálogo de fin de partida. Evita que
+  /// cada sondeo/respuesta HTTP con `estado == finalizada` apile otro diálogo
+  /// encima del anterior.
+  bool _finMostrado = false;
+
   /// Hay una eliminación del jugador local pendiente de comunicar. No se
   /// muestra el diálogo en el acto: primero se deja ver el INFORME del turno en
   /// el que le destruyeron el cuartel (y su revisión), y al cerrarlo se abre el
@@ -233,6 +238,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// (ActualizarStatsAsync solo bloquea la mano en los asedios).
   bool get _historiaConMano =>
       _esHistoria && widget.historia!['conMano'] == true;
+
+  /// Generales que el jugador puede comprar en el cuartel en esta batalla de
+  /// historia (`historia.especialesCuartel`, fijado por el servidor desde
+  /// `HistoriaDef`). Vacío fuera de historia o si la batalla no los define.
+  List<String> get _especialesCuartelHistoria {
+    final raw = widget.historia?['especialesCuartel'];
+    if (raw is! List) return const [];
+    return raw
+        .map((e) => e.toString())
+        .where((s) => s.isNotEmpty)
+        .toList(growable: false);
+  }
 
   /// Batalla de historia SIN mano (asedio clásico): todo nace en el tablero.
   /// Es la condición que bloquea mano, robo, reparto y persistencia de mano.
@@ -389,9 +406,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Coords resaltables en el tablero: depende del modo activo.
   ///   - Modo movimiento → _movableCoords
-  ///   - Modo acción     → objetivos válidos del controlador
-  Set<String> get _highlightCoords =>
-      _inActionMode ? _accionController.objetivosValidos : _movableCoords;
+  ///   - Modo acción     → objetivos válidos del controlador + los ya
+  ///     elegidos (en muro/fractura los elegidos dejan de ser "válidos" para
+  ///     el siguiente paso, pero deben seguir marcados y poder desmarcarse).
+  Set<String> get _highlightCoords => _inActionMode
+      ? {
+          ..._accionController.objetivosValidos,
+          ..._accionController.objetivos,
+        }
+      : _movableCoords;
   // ── Snapshot inicial del turno ─────────────────────────────
   BoardState _boardStateInicial = const BoardState();
   List<CartaModel> _handInicial = [];
@@ -737,6 +760,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final original = celda.cartas[indice];
     if (original.ownerUid != _localPlayer.datos.uid) {
       _toast('No puedes evolucionar cartas ajenas', error: true);
+      return;
+    }
+    if (original.esClon) {
+      _toast('🎭 Un clon no puede evolucionar.', error: true);
+      return;
+    }
+    if (original.confundida) {
+      _toast('🌀 Carta confundida: no obedece tus órdenes.', error: true);
       return;
     }
     // Exclusión POR CARTA: solo esta carta queda bloqueada si YA se movió este
@@ -1729,12 +1760,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
         // Mostrar pantallas de fin de juego si procede. La eliminación ya se
         // gestiona con `_eliminadoPendiente` (arriba), para no tapar el informe.
-        if (_juegoTerminado) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            _showFinPartidaDialog();
-          });
-        }
+        if (_juegoTerminado) _intentarMostrarFin();
         return;
       }
 
@@ -1894,8 +1920,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ))
           .whenComplete(() {
         _informeAbierto = false;
-        _abrirRevisionTurno(turnoRevisar: turnoInforme)
-            .whenComplete(_drenarEliminadoPendiente);
+        _abrirRevisionTurno(turnoRevisar: turnoInforme).whenComplete(() {
+          _drenarEliminadoPendiente();
+          // Si la partida terminó mientras el informe/revisión estaban abiertos,
+          // el diálogo de fin sale ahora (antes podía no salir nunca).
+          _intentarMostrarFin();
+        });
       });
     });
   }
@@ -1981,13 +2011,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (!yaEliminadoAntes && ahoraEliminado && !_resultadosEliminadoVistos) {
         _eliminadoPendiente = true;
       }
-      // Mostrar fin de partida
-      if (juegoTerminado && !_informeAbierto) {
+      // Mostrar fin de partida (una sola vez; ver _intentarMostrarFin).
+      if (juegoTerminado) {
         // El flujo de fin de partida ya enseña puntuaciones y recompensas.
         _eliminadoPendiente = false;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _showFinPartidaDialog();
-        });
+        _intentarMostrarFin();
       }
 
       // ── Informe de batalla (independiente del avance de tablero) ──
@@ -2358,6 +2386,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         final newSteps = node.steps + 1;
         if ((visited[nCoord] ?? 999) <= newSteps) continue;
         if (!_config.canTraverse(nCoord, tipo)) continue;
+        // MURO: no se puede atravesar ni terminar en él (hay que rodearlo). El
+        // servidor revierte cualquier movimiento que lo pise o lo cruce.
+        if (_boardState.celdaTieneMuro(nCoord)) continue;
         visited[nCoord] = newSteps;
         if (nCoord != from &&
             _config.canLand(nCoord, tipo) &&
@@ -2573,6 +2604,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         onComprar: _comprarEspecial,
         robosCompradosIniciales: _robosComprados,
         onRobarCarta: sinRobo ? null : _robarCartaCuartel,
+        // HISTORIA: generales FIJOS de la batalla (p. ej. demonios_3). Si la
+        // lista está vacía se usa el cuartel normal del ejército.
+        especialesFijasIds: _especialesCuartelHistoria,
       ),
     ));
   }
@@ -3095,7 +3129,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             !_cartasQueEvolucionaron.contains(celda.cartas[i].instanceId) &&
             !_cartasQueUsaronHabilidad.contains(celda.cartas[i].instanceId) &&
             !celda.cartas[i].carta.esEstatica &&
-            !celda.cartas[i].paralizado)
+            !celda.cartas[i].paralizado &&
+            !celda.cartas[i].confundida)
         .toList();
 
     if (validIndices.isEmpty) {
@@ -3129,6 +3164,19 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           celda.cartas[i].paralizado);
       if (algunaParalizada) {
         _toast('⏱ Cartas paralizadas: no pueden moverse este turno',
+            error: true);
+        return;
+      }
+    }
+
+    if (validIndices.isEmpty) {
+      final algunaConfundida = indices.any((i) =>
+          i < celda.cartas.length &&
+          celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
+          celda.cartas[i].confundida);
+      if (algunaConfundida) {
+        _toast(
+            '🌀 Cartas confundidas: se mueven solas, no obedecen tus órdenes',
             error: true);
         return;
       }
@@ -3481,10 +3529,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         obeliscoLocal: _obeliscoLocal!,
         obeliscosPorJugador: _obeliscosPorJugador,
         coordsPropias: _coordsConCartaPropia(),
+        celdasMuro: _boardState.celdasConMuro,
+        celdasOcupadas: _celdasOcupadasVisibles(),
+        celdasProtegidasRival: _celdasProtegidasPorRival(),
+        tiposMoviblesPorCelda: _tiposMoviblesPorCelda(),
       );
     });
-    _toast(
-        'Selecciona ${_accionController.habilidad!.numObjetivos == 1 ? 'una celda' : '${_accionController.habilidad!.numObjetivos} celdas'} objetivo.');
+    if (_accionController.activo) {
+      _toast(_accionController.mensajeInicio);
+    }
   }
 
   /// Lanza la habilidad de una carta del tablero (carta normal con
@@ -3514,6 +3567,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           error: true);
       return;
     }
+    if (carta.esClon) {
+      _toast('🎭 Un clon no tiene habilidades reales.', error: true);
+      return;
+    }
+    if (carta.confundida) {
+      _toast('🌀 Carta confundida: no obedece tus órdenes.', error: true);
+      return;
+    }
     setState(() {
       _selectedHandIndex = null;
       _cancelMoveMode();
@@ -3528,10 +3589,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         indiceCelda: indiceCelda,
         obeliscosPorJugador: _obeliscosPorJugador,
         coordsPropias: _coordsConCartaPropia(),
+        celdasMuro: _boardState.celdasConMuro,
+        celdasOcupadas: _celdasOcupadasVisibles(),
+        celdasProtegidasRival: _celdasProtegidasPorRival(),
+        tiposMoviblesPorCelda: _tiposMoviblesPorCelda(),
       );
     });
-    _toast(
-        'Selecciona ${_accionController.habilidad!.numObjetivos == 1 ? 'una celda' : '${_accionController.habilidad!.numObjetivos} celdas'} objetivo.');
+    if (_accionController.activo) {
+      _toast(_accionController.mensajeInicio);
+    }
   }
 
   /// Maneja un tap en el tablero cuando estamos en modo acción.
@@ -3553,6 +3619,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
       if (controller.lista) {
         _completarAccion();
+        return;
+      }
+
+      // Selección encadenada (muro / fractura): guiar el siguiente paso. Si
+      // no queda ninguna celda válida para continuar, se avisa para que el
+      // jugador deshaga la última elección o cancele.
+      final siguiente = controller.mensajeSiguientePaso;
+      if (siguiente != null) {
+        if (controller.objetivos.isNotEmpty &&
+            controller.objetivosValidos.isEmpty) {
+          _toast(
+              'No hay celdas válidas para continuar: toca una celda elegida '
+              'para deshacerla o cancela la acción.',
+              error: true);
+        } else {
+          _toast(siguiente);
+        }
       }
     }
   }
@@ -3568,9 +3651,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     final esInvisibilidad =
         _accionController.habilidad?.efecto.tipo == EfectoTipo.invisibilidad;
+    final esClon = _accionController.habilidad?.efecto.tipo == EfectoTipo.clon;
 
     final candidatos = <_CartaPropiaRef>[];
-    if (esInvisibilidad) {
+    if (esClon) {
+      // Clon: cualquier carta PROPIA real (ni clon, ni estática, ni
+      // confundida) cuyo tipo pueda estar en la celda donde aparecerá.
+      _boardState.celdas.forEach((coord, celda) {
+        for (int i = 0; i < celda.cartas.length; i++) {
+          final c = celda.cartas[i];
+          if (c.ownerUid != _localPlayer.datos.uid) continue;
+          if (c.esClon || c.carta.esEstatica || c.confundida) continue;
+          if (destino != null && !_config.canLand(destino, c.carta.tipo)) {
+            continue;
+          }
+          candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
+        }
+      });
+    } else if (esInvisibilidad) {
       // Invisibilidad: solo las cartas PROPIAS de la celda objetivo. No hay
       // restricción de terreno (la carta no se mueve).
       if (destino != null) {
@@ -3587,8 +3685,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _boardState.celdas.forEach((coord, celda) {
         for (int i = 0; i < celda.cartas.length; i++) {
           final c = celda.cartas[i];
-          // Las cartas estáticas no pueden teletransportarse (mov 0).
-          if (c.carta.esEstatica) continue;
+          // Las cartas estáticas no pueden teletransportarse (mov 0), y una
+          // carta confundida no obedece a su dueño.
+          if (c.carta.esEstatica || c.confundida) continue;
           if (c.ownerUid != _localPlayer.datos.uid) continue;
           // Terreno: descartar las que no pueden aterrizar en el destino.
           if (destino != null && !_config.canLand(destino, c.carta.tipo))
@@ -3602,9 +3701,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _toast(
           esInvisibilidad
               ? 'No tienes ninguna carta propia en esa celda.'
-              : (destino != null
-                  ? 'Ninguna de tus cartas puede aterrizar en $destino.'
-                  : 'No tienes cartas en el tablero para teletransportar.'),
+              : esClon
+                  ? (destino != null
+                      ? 'Ninguna de tus cartas puede clonarse en $destino.'
+                      : 'No tienes cartas en el tablero para clonar.')
+                  : (destino != null
+                      ? 'Ninguna de tus cartas puede aterrizar en $destino.'
+                      : 'No tienes cartas en el tablero para teletransportar.'),
           error: true);
       _cancelarAccion();
       return;
@@ -3864,6 +3967,47 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     return res;
   }
 
+  /// Celdas con alguna carta VISIBLE para el jugador local (se usa la vista
+  /// filtrada: una carta invisible enemiga no debe "ocupar" la celda en la UI,
+  /// o la delataría). El muro solo se ofrece en celdas vacías y la fractura
+  /// solo parte de celdas con cartas.
+  Set<String> _celdasOcupadasVisibles() {
+    final uid = _localPlayer.datos.uid;
+    final res = <String>{};
+    for (final coord in _boardState.celdas.keys) {
+      if (_boardState.celdaVisiblePara(coord, uid).cartas.isNotEmpty) {
+        res.add(coord);
+      }
+    }
+    return res;
+  }
+
+  /// Celdas escudadas por OTRO jugador (no admiten acciones del local).
+  Set<String> _celdasProtegidasPorRival() {
+    final uid = _localPlayer.datos.uid;
+    return _boardState.efectosCelda.keys
+        .where((coord) => _boardState.celdaProtegidaPorRival(coord, uid))
+        .toSet();
+  }
+
+  /// Fractura: por celda, tipos (1/2/3) de sus cartas VISIBLES que se pueden
+  /// desplazar (no estáticas). Sirve para ofrecer solo destinos donde al menos
+  /// una de ellas pueda aterrizar.
+  Map<String, Set<int>> _tiposMoviblesPorCelda() {
+    final uid = _localPlayer.datos.uid;
+    final res = <String, Set<int>>{};
+    for (final coord in _boardState.celdas.keys) {
+      final tipos = _boardState
+          .celdaVisiblePara(coord, uid)
+          .cartas
+          .where((c) => !c.carta.esEstatica)
+          .map((c) => c.carta.tipo)
+          .toSet();
+      if (tipos.isNotEmpty) res[coord] = tipos;
+    }
+    return res;
+  }
+
   void _undoCambios() {
     // Gastos revertibles persistidos en el servidor este turno (despliegues +
     // compras + evoluciones) y especiales compradas este turno. El estado del
@@ -4063,6 +4207,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           'PorDefecto': carta.porDefecto,
           'ownerUid': c.ownerUid,
           'ownerZone': c.ownerZone,
+          // Identidad de INSTANCIA: sin ella el servidor sellaba un id nuevo
+          // cada turno y no podía casar la carta con su estado anterior
+          // (parálisis, confusión, muros y clones se validan por instanceId).
+          'instanceId': c.instanceId,
           // Conservar los efectos persistentes (veneno, parálisis…) y el
           // enfriamiento de habilidad: si no se reenvían, el servidor los
           // pierde al recomponer el tablero cada turno.
@@ -4070,6 +4218,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             'Efectos': c.efectos.map((e) => e.toMap()).toList(),
           if (c.ultimoUsoHabilidad != null)
             'UltimoUsoHabilidad': c.ultimoUsoHabilidad,
+          // Clones: el servidor es autoritativo (los valida contra el turno
+          // anterior), pero se reenvía la marca por coherencia.
+          if (c.esClon) 'esClon': true,
+          if (c.esClon) 'clonTurnos': c.clonTurnos,
         };
         // Etiqueta de revisión: celda de origen si esta carta se movió este
         // turno. El servidor la guarda tal cual en movimientosTurno (M.FromJson
@@ -4580,6 +4732,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         }
       }
 
+      // MODO HISTORIA: si esta respuesta ya trae la partida FINALIZADA (p. ej.
+      // al cerrar el turno 6 de un asedio), se marca el fin AQUÍ, antes de
+      // abrir el informe: el mensaje de enhorabuena debe salir en el acto y
+      // bloquear la pantalla, no esperar al siguiente sondeo (que además se
+      // detiene al finalizar y podía no llegar nunca).
+      if (_esHistoria && finalizadaHttp) {
+        final ganadorHttp = estado['ganadorUid'] as String?;
+        setState(() {
+          _juegoTerminado = true;
+          if (ganadorHttp != null && ganadorHttp.isNotEmpty) {
+            _ganadorUid = ganadorHttp;
+          }
+        });
+        _eliminadoPendiente = false;
+        _intentarMostrarFin();
+      }
+
       _maybeMostrarInforme(turnoActual, estado);
       // `_maybeMostrarInforme` fija `_informeAbierto` de forma síncrona: si no
       // se abre informe, el aviso de eliminación se drena aquí mismo; si se
@@ -4772,6 +4941,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// de cerrarla (p. ej. el aviso de eliminación con sus recompensas).
   Future<void> _abrirRevisionTurno({required int turnoRevisar}) async {
     if (!mounted) return;
+    // En historia, una vez terminada la batalla manda el diálogo de fin: no se
+    // abre la revisión encima (quedaría tapándolo o por debajo de la partida).
+    if (_esHistoria && _juegoTerminado) return;
     Map<String, dynamic>? entry;
     for (final h in _historialCombates.reversed) {
       final t = (h['turno'] as num?)?.toInt() ?? 0;
@@ -4943,6 +5115,40 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   // ── Diálogo de fin de partida ─────────────────────────────
+  /// Punto ÚNICO de entrada al diálogo de fin. Garantiza que sale UNA sola vez
+  /// y en el momento adecuado:
+  ///   · HISTORIA: en el acto y BLOQUEANDO la pantalla. Se detienen sondeo y
+  ///     reloj, y se cierra cualquier pantalla abierta encima de la partida
+  ///     (informe, revisión, cuartel…) para que el mensaje quede sobre el
+  ///     tablero y, al aceptarlo, se pueda cerrar la partida entera.
+  ///   · PvP: espera a que se cierren el informe y su revisión (se reintenta
+  ///     desde su `whenComplete`), como hasta ahora.
+  void _intentarMostrarFin() {
+    if (!mounted || !_juegoTerminado || _finMostrado) return;
+
+    if (_esHistoria) {
+      _finMostrado = true;
+      _pollTimer?.cancel();
+      _pollTimer = null;
+      _stopTimer();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final ruta = ModalRoute.of(context);
+        if (ruta != null && !ruta.isCurrent) {
+          Navigator.of(context).popUntil((r) => r == ruta);
+        }
+        _showFinPartidaDialog();
+      });
+      return;
+    }
+
+    if (_informeAbierto || _revisionAbierta) return;
+    _finMostrado = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showFinPartidaDialog();
+    });
+  }
+
   void _showFinPartidaDialog() {
     if (!mounted) return;
 

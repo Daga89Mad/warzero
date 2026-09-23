@@ -85,8 +85,21 @@ class HistoriaService {
   /// Diálogo de fin de una batalla de historia.
   ///
   /// [gano] = el jugador ganó (sobrevivió los turnos o conquistó al bot).
-  /// Según sea victoria/derrota y si quedan partes, ofrece continuar, reintentar
-  /// o salir. Debe llamarse con `barrierDismissible: false` implícito (lo es).
+  ///
+  /// El diálogo BLOQUEA la pantalla (no se cierra tocando fuera ni con el botón
+  /// atrás) y, al aceptarlo, CIERRA la partida actual por completo antes de
+  /// seguir: se retiran el diálogo, cualquier pantalla que hubiera encima de la
+  /// partida (informe, revisión, cuartel…) y la propia partida. Después:
+  ///   · victoria con parte siguiente → se crea y abre la siguiente parte
+  ///     (1 → 2, 2 → 3);
+  ///   · victoria en la última parte → se vuelve a la pantalla de la historia;
+  ///   · derrota → REINTENTAR (vuelve a la parte 1) o SALIR.
+  ///
+  /// Antes se usaba `pushReplacement` desde el contexto de la partida: si el
+  /// diálogo salía con el informe o la revisión del turno abiertos, se
+  /// sustituía ESA pantalla y la partida anterior se quedaba viva por debajo.
+  ///
+  /// [context] debe ser el de la pantalla de juego (GameScreen).
   void mostrarFinHistoria(
     BuildContext context, {
     required Map<String, dynamic> historia,
@@ -98,6 +111,13 @@ class HistoriaService {
     final esUltima = historia['esUltimaParte'] == true;
     final parte = (historia['parte'] as num?)?.toInt() ?? 1;
     final partes = (historia['partes'] as num?)?.toInt() ?? 1;
+    final turnosSup = (historia['turnosSupervivencia'] as num?)?.toInt() ?? 0;
+
+    // Navigator y ruta de la PARTIDA, capturados ahora: tras cerrar la partida
+    // su contexto deja de existir, pero el del Navigator sigue montado y sirve
+    // para lanzar la siguiente parte.
+    final nav = Navigator.of(context);
+    final rutaPartida = ModalRoute.of(context);
 
     final Color fondo =
         gano ? const Color(0xFF0A1A05) : const Color(0xFF0A0A1A);
@@ -106,79 +126,93 @@ class HistoriaService {
     String titulo;
     String cuerpo;
     if (gano && esUltima) {
-      titulo = '🏆 ¡HISTORIA COMPLETADA!';
-      cuerpo = 'Has superado las $partes partes.\n¡La historia es tuya!';
+      titulo = '🏆 ¡ENHORABUENA!';
+      cuerpo = 'Has completado las $partes partes.\n¡La historia es tuya!';
     } else if (gano) {
-      titulo = '🛡 ¡PARTE $parte SUPERADA!';
-      cuerpo =
-          'Has aguantado el asedio.\nTe espera la parte ${parte + 1} de $partes.';
+      titulo = '🎉 ¡ENHORABUENA!';
+      final resistido = turnosSup > 0
+          ? 'Has resistido los $turnosSup turnos del asedio.'
+          : 'Has vencido esta batalla.';
+      cuerpo = '$resistido\nParte $parte de $partes superada.\n'
+          'Al aceptar comenzará la parte ${parte + 1}.';
     } else {
       titulo = '⚔ DERROTA';
       cuerpo =
           'Han conquistado tu cuartel.\nDebes empezar la historia de nuevo.';
     }
 
-    // Acciones según el resultado.
-    final acciones = <Widget>[];
-    void volverAlMenu() => Navigator.of(context).popUntil((r) => r.isFirst);
+    // Cierra el diálogo, todo lo que haya encima de la partida y la partida.
+    void cerrarPartida() {
+      if (rutaPartida != null && rutaPartida.isActive) {
+        nav.popUntil((r) => r == rutaPartida);
+        if (nav.canPop()) nav.pop();
+      } else if (nav.canPop()) {
+        nav.pop(); // solo el diálogo
+      }
+    }
 
+    // Cierra la partida y abre [id] en limpio desde la pantalla anterior.
+    void cerrarYLanzar(String id) {
+      cerrarPartida();
+      final ctxNav = nav.context;
+      if (!ctxNav.mounted) return;
+      lanzarHistoria(ctxNav, uid: uid, historiaId: id);
+    }
+
+    final acciones = <Widget>[];
     if (gano && !esUltima && siguienteId.isNotEmpty) {
-      acciones.add(_boton(context, 'SIGUIENTE PARTE', acento, () {
-        Navigator.of(context).pop();
-        lanzarHistoria(context,
-            uid: uid, historiaId: siguienteId, reemplazar: true);
-      }));
-      acciones.add(_boton(context, 'SALIR', _tenue, () {
-        Navigator.of(context).pop();
-        volverAlMenu();
+      acciones.add(_boton(context, 'ACEPTAR', acento, () {
+        cerrarYLanzar(siguienteId);
       }));
     } else if (gano) {
-      acciones.add(_boton(context, 'VOLVER', acento, () {
-        Navigator.of(context).pop();
-        volverAlMenu();
-      }));
+      acciones.add(_boton(context, 'ACEPTAR', acento, cerrarPartida));
     } else {
       // Derrota: reiniciar desde la parte 1 de la historia. Como perder obliga a
       // empezar de cero, se reintenta la PRIMERA parte si la conocemos; si no,
       // esta misma batalla.
       final reinicioId = (historia['primeraParteId'] ?? historiaId).toString();
       acciones.add(_boton(context, 'REINTENTAR', const Color(0xFFC86050), () {
-        Navigator.of(context).pop();
-        lanzarHistoria(context,
-            uid: uid, historiaId: reinicioId, reemplazar: true);
+        cerrarYLanzar(reinicioId);
       }));
-      acciones.add(_boton(context, 'SALIR', _tenue, () {
-        Navigator.of(context).pop();
-        volverAlMenu();
-      }));
+      acciones.add(_boton(context, 'SALIR', _tenue, cerrarPartida));
     }
 
     showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
-        backgroundColor: fondo,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: Text(
-          titulo,
-          style: TextStyle(
-            fontFamily: 'Cinzel',
-            fontSize: 14,
-            color: acento,
-            letterSpacing: 1.5,
+      barrierColor: Colors.black.withOpacity(0.85),
+      builder: (_) => PopScope(
+        // Bloqueante: ni tocando fuera ni con el botón atrás del sistema.
+        canPop: false,
+        child: AlertDialog(
+          backgroundColor: fondo,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text(
+            titulo,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 16,
+              color: acento,
+              letterSpacing: 1.5,
+            ),
           ),
-        ),
-        content: Text(
-          cuerpo,
-          style: TextStyle(
-            fontFamily: 'Cinzel',
-            fontSize: 10,
-            color: acento.withOpacity(0.85),
-            height: 1.7,
+          content: Text(
+            cuerpo,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 11,
+              color: acento.withOpacity(0.85),
+              height: 1.7,
+            ),
           ),
+          actionsAlignment: acciones.length > 1
+              ? MainAxisAlignment.spaceBetween
+              : MainAxisAlignment.center,
+          actions: acciones,
         ),
-        actionsAlignment: MainAxisAlignment.spaceBetween,
-        actions: acciones,
       ),
     );
   }

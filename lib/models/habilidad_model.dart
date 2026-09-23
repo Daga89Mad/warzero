@@ -97,7 +97,38 @@ enum EfectoTipo {
   /// la carta en combate, o al morir la carta por una acción. Igual que el
   /// teletransporte, requiere seleccionar la carta objetivo (`requiereCartaPropia`).
   invisibilidad,
+
+  /// Clon: crea en la celda objetivo una COPIA de una carta propia (se elige,
+  /// como en el teletransporte, con `requiereCartaPropia`). Para el rival es
+  /// indistinguible de una carta real (suma fuerza y defensa al mirar la
+  /// celda), pero no combate: si coincide con un enemigo desaparece. Dura
+  /// [kClonDuracionTurnos] turnos y solo su dueño sabe que es un clon (🎭).
+  clon,
+
+  /// Muro: 1 celda en rango + 2 colindantes encadenadas ([kMuroNumCeldas]).
+  /// Durante [kMuroDuracionTurnos] turnos nadie puede terminar su movimiento
+  /// en ellas ni atravesarlas: hay que dar un rodeo. Solo celdas vacías.
+  muro,
+
+  /// Confusión: las cartas ENEMIGAS de la celda objetivo se descontrolan
+  /// durante [kConfusionDuracionTurnos] turnos: se mueven solas a una celda
+  /// aleatoria según su movimiento y tipo, su dueño no las controla y luchan
+  /// contra todos (también contra las cartas de su dueño).
+  confusion,
+
+  /// Fractura: desplaza las cartas de una celda a otra situada a como máximo
+  /// [kFracturaDistanciaMax] celdas. La que no puede estar en el destino
+  /// (terreno) o es estática se queda donde está. Objetivos = [origen, destino].
+  fractura,
 }
+
+/// Parámetros configurables de las acciones de distorsión. Su espejo en el
+/// servidor son las constantes de `CatalogoHabilidades` en `WarZeroLogic.cs`.
+const int kClonDuracionTurnos = 3;
+const int kMuroDuracionTurnos = 3;
+const int kMuroNumCeldas = 3;
+const int kConfusionDuracionTurnos = 3;
+const int kFracturaDistanciaMax = 4;
 
 /// Duración por defecto (configurable) de la invisibilidad, en turnos.
 /// Su espejo en el servidor es `CatalogoHabilidades` de `WarZeroLogic.cs`.
@@ -163,6 +194,26 @@ class EfectoHabilidad {
     this.duracionTurnos = kInvisibilidadDuracionTurnos,
   })  : tipo = EfectoTipo.invisibilidad,
         defensaReducida = 0;
+
+  const EfectoHabilidad.clon({
+    this.duracionTurnos = kClonDuracionTurnos,
+  })  : tipo = EfectoTipo.clon,
+        defensaReducida = 0;
+
+  const EfectoHabilidad.muro({
+    this.duracionTurnos = kMuroDuracionTurnos,
+  })  : tipo = EfectoTipo.muro,
+        defensaReducida = 0;
+
+  const EfectoHabilidad.confusion({
+    this.duracionTurnos = kConfusionDuracionTurnos,
+  })  : tipo = EfectoTipo.confusion,
+        defensaReducida = 0;
+
+  const EfectoHabilidad.fractura()
+      : tipo = EfectoTipo.fractura,
+        defensaReducida = 0,
+        duracionTurnos = 0;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -196,6 +247,11 @@ class Habilidad {
   /// una carta propia (origen del teletransporte) además del destino.
   final bool requiereCartaPropia;
 
+  /// True si los objetivos se eligen EN CADENA y cada paso depende del
+  /// anterior (muro: celdas colindantes; fractura: origen y luego destino).
+  bool get seleccionEncadenada =>
+      efecto.tipo == EfectoTipo.muro || efecto.tipo == EfectoTipo.fractura;
+
   const Habilidad({
     required this.id,
     required this.nombre,
@@ -227,7 +283,11 @@ class Habilidad {
 ///   18, 19, 20 → potenciar defensa (propia, adyacente, lejano)
 ///   21, 22, 23 → potenciar movimiento (propia, adyacente, lejano)
 ///   24, 25, 26 → invisibilidad (cerca, media, lejos) — solo cartas propias
-///   27+      → reservado (futuras)
+///   27, 28, 29 → clon (cercano, medio, lejano)
+///   30, 31, 32 → muro (cercano, medio, lejano)
+///   33, 34, 35 → confusión (cercana, media, lejana)
+///   36, 37, 38 → fractura (cercana, media, lejana)
+///   39+      → reservado (futuras)
 class CatalogoHabilidades {
   CatalogoHabilidades._();
 
@@ -532,6 +592,168 @@ class CatalogoHabilidades {
       rango: RangoHabilidad.cualquiera(),
       efecto: EfectoHabilidad.invisibilidad(),
       requiereCartaPropia: true,
+    ),
+
+    // ── CLON (señuelo) ─────────────────────────────────────
+    // Se elige la celda destino y después la carta propia a copiar (mismo
+    // flujo que el teletransporte). Ni cuarteles ni muros como destino.
+    27: Habilidad(
+      id: 27,
+      nombre: 'Clon cercano',
+      descripcion:
+          'Crea en una celda adyacente un clon de una de tus cartas durante '
+          '$kClonDuracionTurnos turnos. El rival lo ve como una carta real, pero '
+          'no combate: si coincide con un enemigo, desaparece.',
+      icon: '🎭',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.clon(),
+      excluyeCG: true,
+      requiereCartaPropia: true,
+    ),
+    28: Habilidad(
+      id: 28,
+      nombre: 'Clon medio',
+      descripcion:
+          'Crea en una celda dentro de un radio de 7 un clon de una de tus '
+          'cartas durante $kClonDuracionTurnos turnos. El rival lo ve como una '
+          'carta real, pero no combate: si coincide con un enemigo, desaparece.',
+      icon: '🎭',
+      rango: RangoHabilidad.radioN(7),
+      efecto: EfectoHabilidad.clon(),
+      excluyeCG: true,
+      requiereCartaPropia: true,
+    ),
+    29: Habilidad(
+      id: 29,
+      nombre: 'Clon lejano',
+      descripcion:
+          'Crea en cualquier celda un clon de una de tus cartas durante '
+          '$kClonDuracionTurnos turnos. El rival lo ve como una carta real, pero '
+          'no combate: si coincide con un enemigo, desaparece.',
+      icon: '🎭',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.clon(),
+      excluyeCG: true,
+      requiereCartaPropia: true,
+    ),
+
+    // ── MURO ───────────────────────────────────────────────
+    // 1 celda en rango + 2 colindantes encadenadas (selección encadenada).
+    30: Habilidad(
+      id: 30,
+      nombre: 'Muro cercano',
+      descripcion:
+          'Levanta un muro de $kMuroNumCeldas celdas: una adyacente y dos '
+          'colindantes. Durante $kMuroDuracionTurnos turnos nadie puede entrar '
+          'ni atravesarlo; hay que dar un rodeo. Solo en celdas vacías.',
+      icon: '🧱',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.muro(),
+      excluyeCG: true,
+      numObjetivos: kMuroNumCeldas,
+    ),
+    31: Habilidad(
+      id: 31,
+      nombre: 'Muro medio',
+      descripcion:
+          'Levanta un muro de $kMuroNumCeldas celdas: una dentro de un radio de 7 '
+          'y dos colindantes. Durante $kMuroDuracionTurnos turnos nadie puede '
+          'entrar ni atravesarlo; hay que dar un rodeo. Solo en celdas vacías.',
+      icon: '🧱',
+      rango: RangoHabilidad.radioN(7),
+      efecto: EfectoHabilidad.muro(),
+      excluyeCG: true,
+      numObjetivos: kMuroNumCeldas,
+    ),
+    32: Habilidad(
+      id: 32,
+      nombre: 'Muro lejano',
+      descripcion:
+          'Levanta un muro de $kMuroNumCeldas celdas: una en cualquier lugar y '
+          'dos colindantes. Durante $kMuroDuracionTurnos turnos nadie puede '
+          'entrar ni atravesarlo; hay que dar un rodeo. Solo en celdas vacías.',
+      icon: '🧱',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.muro(),
+      excluyeCG: true,
+      numObjetivos: kMuroNumCeldas,
+    ),
+
+    // ── CONFUSIÓN ──────────────────────────────────────────
+    33: Habilidad(
+      id: 33,
+      nombre: 'Confusión cercana',
+      descripcion:
+          'Confunde a las cartas enemigas de una celda adyacente durante '
+          '$kConfusionDuracionTurnos turnos: se mueven solas al azar, su dueño '
+          'no las controla y luchan contra todos, también contra él.',
+      icon: '🌀',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.confusion(),
+      excluyeCG: true,
+    ),
+    34: Habilidad(
+      id: 34,
+      nombre: 'Confusión media',
+      descripcion:
+          'Confunde a las cartas enemigas de una celda dentro de un radio de 7 '
+          'durante $kConfusionDuracionTurnos turnos: se mueven solas al azar, su '
+          'dueño no las controla y luchan contra todos, también contra él.',
+      icon: '🌀',
+      rango: RangoHabilidad.radioN(7),
+      efecto: EfectoHabilidad.confusion(),
+      excluyeCG: true,
+    ),
+    35: Habilidad(
+      id: 35,
+      nombre: 'Confusión lejana',
+      descripcion: 'Confunde a las cartas enemigas de cualquier celda durante '
+          '$kConfusionDuracionTurnos turnos: se mueven solas al azar, su dueño '
+          'no las controla y luchan contra todos, también contra él.',
+      icon: '🌀',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.confusion(),
+      excluyeCG: true,
+    ),
+
+    // ── FRACTURA ───────────────────────────────────────────
+    // Objetivos = [celda origen (en rango, con cartas), celda destino (≤ 4)].
+    36: Habilidad(
+      id: 36,
+      nombre: 'Fractura cercana',
+      descripcion: 'Desplaza las cartas de una celda adyacente a otra celda a '
+          '$kFracturaDistanciaMax casillas como máximo. La carta que no pueda '
+          'estar en el destino (terreno) o sea estática se queda donde está.',
+      icon: '💥',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.fractura(),
+      excluyeCG: true,
+      numObjetivos: 2,
+    ),
+    37: Habilidad(
+      id: 37,
+      nombre: 'Fractura media',
+      descripcion:
+          'Desplaza las cartas de una celda dentro de un radio de 7 a otra celda '
+          'a $kFracturaDistanciaMax casillas como máximo. La carta que no pueda '
+          'estar en el destino (terreno) o sea estática se queda donde está.',
+      icon: '💥',
+      rango: RangoHabilidad.radioN(7),
+      efecto: EfectoHabilidad.fractura(),
+      excluyeCG: true,
+      numObjetivos: 2,
+    ),
+    38: Habilidad(
+      id: 38,
+      nombre: 'Fractura lejana',
+      descripcion: 'Desplaza las cartas de cualquier celda a otra celda a '
+          '$kFracturaDistanciaMax casillas como máximo. La carta que no pueda '
+          'estar en el destino (terreno) o sea estática se queda donde está.',
+      icon: '💥',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.fractura(),
+      excluyeCG: true,
+      numObjetivos: 2,
     ),
   };
 

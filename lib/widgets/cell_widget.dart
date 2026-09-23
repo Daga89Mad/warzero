@@ -174,6 +174,14 @@ class CellWidget extends StatelessWidget {
     final hayInvisiblePropia = localPlayerUid != null &&
         celda.cartas.any((c) => c.ownerUid == localPlayerUid && c.invisible);
 
+    // ¿Hay algún CLON propio en la celda? Solo su dueño lo sabe: se marca con
+    // 🎭 para él; el resto de jugadores ven una carta normal.
+    final hayClonPropio = localPlayerUid != null &&
+        celda.cartas.any((c) => c.ownerUid == localPlayerUid && c.esClon);
+
+    // Muro: la celda es infranqueable mientras dure.
+    final isMuro = _hay(EfectoTipoEstado.muro);
+
     // Tintes de casilla: se mantienen los tres de siempre (los que cambian la
     // lectura táctica de la celda). El resto de efectos se comunica con badge.
     final isEnvenenada = _hay(EfectoTipoEstado.veneno);
@@ -273,6 +281,25 @@ class CellWidget extends StatelessWidget {
                 ),
               ),
 
+            // MURO: celda infranqueable. Tono piedra, borde de sillería y el
+            // ladrillo centrado (las celdas con muro siempre están vacías).
+            if (isMuro)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: const Color(0x66735A3C),
+                      border: Border.all(
+                          color: const Color(0xCCA8845C), width: 1.5),
+                    ),
+                    child: const Center(
+                      child:
+                          Text('🧱', style: TextStyle(fontSize: 26, height: 1)),
+                    ),
+                  ),
+                ),
+              ),
+
             if (isSpawn && celda.isEmpty && !isConquistado)
               SpawnMarker(coord: coord, color: obeliscoColores[coord]),
             if (isConquistado)
@@ -308,6 +335,17 @@ class CellWidget extends StatelessWidget {
                 bottom: 3,
                 child: IgnorePointer(
                   child: Text('👻', style: TextStyle(fontSize: 11, height: 1)),
+                ),
+              ),
+
+            // Badge 🎭 de CLON propio (solo lo ve su dueño). Si ya hay 👻, se
+            // desplaza a su derecha.
+            if (hayClonPropio)
+              Positioned(
+                left: hayInvisiblePropia ? 17 : 3,
+                bottom: 3,
+                child: const IgnorePointer(
+                  child: Text('🎭', style: TextStyle(fontSize: 11, height: 1)),
                 ),
               ),
 
