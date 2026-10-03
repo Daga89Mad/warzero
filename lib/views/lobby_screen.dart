@@ -495,7 +495,8 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
       _errorMapas = null;
     });
     try {
-      final lista = await MapaService().obtenerMapas(jugadores: _maxJugadores);
+      final lista = await MapaService()
+          .obtenerMapas(jugadores: _maxJugadores, soloSeleccionables: true);
       if (!mounted) return;
       setState(() {
         _mapas = lista;
@@ -519,7 +520,8 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
       _errorMapas = null;
     });
     try {
-      final lista = await MapaService().obtenerMapas(jugadores: n);
+      final lista = await MapaService()
+          .obtenerMapas(jugadores: n, soloSeleccionables: true);
       if (!mounted) return;
       setState(() {
         _mapas = lista;

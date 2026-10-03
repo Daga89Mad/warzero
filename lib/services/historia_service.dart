@@ -6,15 +6,41 @@
 //   • mostrarFinHistoria(): diálogo de fin de una batalla de historia, con
 //     victoria (→ parte siguiente / historia completada) o derrota
 //     (→ reintentar / salir). Sustituye al flujo PvP de puntuaciones/recompensas.
+//     Si la batalla es un RETO montado sobre el motor de historia
+//     (`historia.esReto`, p. ej. «El duelo de Alexander»), REINTENTAR vuelve a
+//     lanzar el reto.
+//   • abandonarHistoria(): salir de la batalla (el servidor la borra).
+//   • declararLluvia(): lluvia de rocas MANUAL del duelo invertido
+//     (POST /warzero/duelo/lluvia).
 //
 // La partida es una `Partidas/{id}` real (misma pantalla de juego que el PvP);
 // lo único distinto es la config de historia, que viaja a GameScreen por el
 // parámetro `historia` y decide el HUD de objetivo y este diálogo de fin.
 
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../views/game_screen.dart';
+import 'reto_service.dart';
 import 'warzero_api.dart';
+
+/// Resultado de declarar la lluvia de rocas del duelo.
+class LluviaResultado {
+  final bool ok;
+  final String error;
+
+  /// Casillas aceptadas por el servidor (vacía = anulada).
+  final Set<String> coords;
+
+  const LluviaResultado({
+    required this.ok,
+    this.error = '',
+    this.coords = const {},
+  });
+}
 
 class HistoriaService {
   HistoriaService({WarZeroApi? api}) : _api = api ?? WarZeroApi();
@@ -82,6 +108,74 @@ class HistoriaService {
     }
   }
 
+  /// Abandona la batalla de historia [lobbyId] (salir por el menú, cerrar la
+  /// app…): el servidor la BORRA (POST /warzero/historia/abandonar). Es
+  /// "dispara y olvida": nunca lanza, para no bloquear la salida.
+  Future<void> abandonarHistoria({
+    required String uid,
+    required String lobbyId,
+  }) async {
+    if (uid.isEmpty || lobbyId.isEmpty) return;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('${_api.baseUrl}/warzero/historia/abandonar'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'uid': uid, 'lobbyId': lobbyId}),
+          )
+          .timeout(const Duration(seconds: 15));
+      debugPrint('[WZ][api] POST historia/abandonar status=${res.statusCode}');
+    } catch (e) {
+      debugPrint('[WZ][api] abandonarHistoria falló (ignorado): $e');
+    }
+  }
+
+  /// Declara (o anula, con [coords] vacía) la LLUVIA DE ROCAS del jugador en
+  /// un duelo invertido, para el turno [turno]: casillas donde cae una roca.
+  /// Se puede cambiar mientras no se haya cerrado el turno.
+  Future<LluviaResultado> declararLluvia({
+    required String uid,
+    required String lobbyId,
+    required int turno,
+    required List<String> coords,
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('${_api.baseUrl}/warzero/duelo/lluvia'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'uid': uid,
+              'lobbyId': lobbyId,
+              'turno': turno,
+              'coords': coords,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      final body = jsonDecode(res.body);
+      if (body is! Map) {
+        return LluviaResultado(ok: false, error: 'HTTP ${res.statusCode}');
+      }
+      if (body['ok'] != true) {
+        return LluviaResultado(
+            ok: false,
+            error: (body['error'] ?? 'HTTP ${res.statusCode}').toString());
+      }
+      return LluviaResultado(
+        ok: true,
+        coords: <String>{
+          for (final c in (body['coords'] as List? ?? const [])) c.toString(),
+        },
+      );
+    } on TimeoutException {
+      return const LluviaResultado(
+          ok: false, error: 'El servidor no responde. Inténtalo de nuevo.');
+    } catch (e) {
+      debugPrint('[WZ][duelo] lluvia falló: $e');
+      return LluviaResultado(ok: false, error: e.toString());
+    }
+  }
+
   /// Diálogo de fin de una batalla de historia.
   ///
   /// [gano] = el jugador ganó (sobrevivió los turnos o conquistó al bot).
@@ -94,6 +188,8 @@ class HistoriaService {
   ///     (1 → 2, 2 → 3);
   ///   · victoria en la última parte → se vuelve a la pantalla de la historia;
   ///   · derrota → REINTENTAR (vuelve a la parte 1) o SALIR.
+  ///   · RETO (`historia.esReto`): victoria → ACEPTAR; derrota → REINTENTAR
+  ///     (vuelve a lanzar el reto) o SALIR.
   ///
   /// Antes se usaba `pushReplacement` desde el contexto de la partida: si el
   /// diálogo salía con el informe o la revisión del turno abiertos, se
@@ -112,6 +208,10 @@ class HistoriaService {
     final parte = (historia['parte'] as num?)?.toInt() ?? 1;
     final partes = (historia['partes'] as num?)?.toInt() ?? 1;
     final turnosSup = (historia['turnosSupervivencia'] as num?)?.toInt() ?? 0;
+    final esReto = historia['esReto'] == true;
+    final retoId = (historia['retoId'] ?? '').toString();
+    final textoVictoria = (historia['textoVictoria'] ?? '').toString();
+    final textoDerrota = (historia['textoDerrota'] ?? '').toString();
 
     // Navigator y ruta de la PARTIDA, capturados ahora: tras cerrar la partida
     // su contexto deja de existir, pero el del Navigator sigue montado y sirve
@@ -125,9 +225,20 @@ class HistoriaService {
 
     String titulo;
     String cuerpo;
-    if (gano && esUltima) {
+    if (esReto) {
+      titulo = gano ? '🏆 ¡RETO SUPERADO!' : '⚔ DERROTA';
+      cuerpo = gano
+          ? (textoVictoria.isNotEmpty
+              ? textoVictoria
+              : '¡Has superado el reto!')
+          : (textoDerrota.isNotEmpty
+              ? textoDerrota
+              : 'No has superado el reto. ¡Inténtalo de nuevo!');
+    } else if (gano && esUltima) {
       titulo = '🏆 ¡ENHORABUENA!';
-      cuerpo = 'Has completado las $partes partes.\n¡La historia es tuya!';
+      cuerpo = textoVictoria.isNotEmpty
+          ? textoVictoria
+          : 'Has completado las $partes partes.\n¡La historia es tuya!';
     } else if (gano) {
       titulo = '🎉 ¡ENHORABUENA!';
       final resistido = turnosSup > 0
@@ -137,8 +248,10 @@ class HistoriaService {
           'Al aceptar comenzará la parte ${parte + 1}.';
     } else {
       titulo = '⚔ DERROTA';
-      cuerpo =
-          'Han conquistado tu cuartel.\nDebes empezar la historia de nuevo.';
+      cuerpo = (textoDerrota.isNotEmpty
+              ? textoDerrota
+              : 'Han conquistado tu cuartel.') +
+          '\nDebes empezar la historia de nuevo.';
     }
 
     // Cierra el diálogo, todo lo que haya encima de la partida y la partida.
@@ -159,8 +272,24 @@ class HistoriaService {
       lanzarHistoria(ctxNav, uid: uid, historiaId: id);
     }
 
+    // Cierra la partida y vuelve a lanzar el RETO desde la pantalla anterior.
+    void cerrarYRelanzarReto() {
+      cerrarPartida();
+      final ctxNav = nav.context;
+      if (!ctxNav.mounted || retoId.isEmpty) return;
+      RetoService().lanzarReto(ctxNav, uid: uid, retoId: retoId);
+    }
+
     final acciones = <Widget>[];
-    if (gano && !esUltima && siguienteId.isNotEmpty) {
+    if (esReto) {
+      if (gano) {
+        acciones.add(_boton(context, 'ACEPTAR', acento, cerrarPartida));
+      } else {
+        acciones.add(_boton(context, 'REINTENTAR', const Color(0xFFC86050),
+            cerrarYRelanzarReto));
+        acciones.add(_boton(context, 'SALIR', _tenue, cerrarPartida));
+      }
+    } else if (gano && !esUltima && siguienteId.isNotEmpty) {
       acciones.add(_boton(context, 'ACEPTAR', acento, () {
         cerrarYLanzar(siguienteId);
       }));

@@ -64,8 +64,6 @@ class HabilidadService {
     return (ri, ci);
   }
 
-  // ── Cálculo de objetivos válidos ─────────────────────────────────────────
-
   /// Devuelve el conjunto de celdas elegibles como objetivo de [habilidad]
   /// desde la celda [origen]. NO consulta el terreno (las habilidades son
   /// efectos a distancia/mágicos; el rango es Manhattan ortogonal).
@@ -73,11 +71,13 @@ class HabilidadService {
   /// [obeliscosPorJugador] es necesario para aplicar `excluyeCG`.
   ///
   /// [coordsPropias] son las celdas que contienen alguna carta del jugador que
-  /// lanza la habilidad. Para efectos ofensivos (veneno / parálisis) esas
-  /// celdas se excluyen: el veneno y la parálisis NUNCA pueden apuntar a las
-  /// propias unidades del lanzador (incidencia: "veneno/parálisis no puede
-  /// afectar al propio jugador que lo lanzó"). Para el resto de habilidades no
-  /// tiene efecto.
+  /// lanza la habilidad. Tiene DOS usos opuestos:
+  ///   - Para efectos ofensivos (veneno / parálisis / confusión) esas celdas se
+  ///     EXCLUYEN: nunca pueden apuntar a las propias unidades del lanzador
+  ///     (incidencia: "veneno/parálisis no puede afectar al propio jugador que
+  ///     lo lanzó").
+  ///   - Para invisibilidad y supervivencia son las ÚNICAS válidas: el objetivo
+  ///     es precisamente una carta propia.
   ///
   /// Contexto opcional para las acciones de distorsión (y el teletransporte):
   ///   - [celdasMuro]: celdas con un muro activo. Nada puede aterrizar en ellas.
@@ -128,12 +128,20 @@ class HabilidadService {
       candidatos.removeWhere((c) => cgs.contains(c));
     }
 
-    // Invisibilidad: solo se lanza sobre CARTAS PROPIAS. El objetivo es la celda
-    // que contiene la carta, así que se incluye el propio origen (para "cerca" y
-    // "media" que abarcan la celda desde la que se lanza) y se restringe a las
-    // celdas que tengan una carta propia. Se resuelve aquí y se retorna: el
-    // resto de filtros (veneno/parálisis) no aplican.
-    if (habilidad.efecto.tipo == EfectoTipo.invisibilidad) {
+    // Invisibilidad y SUPERVIVENCIA: solo se lanzan sobre CARTAS PROPIAS. El
+    // objetivo es la celda que contiene la carta, así que se incluye el propio
+    // origen (para "cerca" y "media", que abarcan la celda desde la que se
+    // lanza) y se restringe a las celdas que tengan una carta propia. Se
+    // resuelve aquí y se retorna: el resto de filtros (veneno/parálisis, muro,
+    // fractura…) no aplican a ninguna de las dos.
+    //
+    // OJO: aquí NO se descartan clones ni cartas estáticas aunque la
+    // supervivencia no pueda protegerlos. El filtro fino va en el modal de
+    // selección de carta (`_showCartaPropiaModal` de game_screen.dart), donde se
+    // conoce la carta concreta; aquí solo se conoce la CELDA, y una celda puede
+    // tener a la vez una carta válida y un clon.
+    if (habilidad.efecto.tipo == EfectoTipo.invisibilidad ||
+        habilidad.efecto.tipo == EfectoTipo.supervivencia) {
       candidatos.add(origen); // la celda de origen también es válida
       if (coordsPropias.isEmpty) return <String>{};
       candidatos.retainWhere(coordsPropias.contains);
@@ -287,8 +295,6 @@ class HabilidadService {
     return result;
   }
 
-  // ── Aplicar acciones ─────────────────────────────────────────────────────
-
   /// Aplica todas las acciones pendientes al tablero, en este orden:
   ///   1. Teletransportes (las cartas movidas pueden esquivar disparos).
   ///   2. Disparos (eliminan cartas en la celda objetivo).
@@ -317,6 +323,7 @@ class HabilidadService {
     final escudos = <AccionPendiente>[];
     final potenciaciones = <AccionPendiente>[];
     final invisibilidades = <AccionPendiente>[];
+    final supervivencias = <AccionPendiente>[];
 
     for (final a in acciones) {
       final h = CatalogoHabilidades.get(a.habilidadId);
@@ -344,6 +351,9 @@ class HabilidadService {
           break;
         case EfectoTipo.invisibilidad:
           invisibilidades.add(a);
+          break;
+        case EfectoTipo.supervivencia:
+          supervivencias.add(a);
           break;
         case EfectoTipo.clon:
         case EfectoTipo.muro:
@@ -375,6 +385,13 @@ class HabilidadService {
     }
     for (final a in invisibilidades) {
       _aplicarInvisibilidad(a, t, log);
+    }
+    // La SUPERVIVENCIA solo MARCA la carta. La huida en sí (recolocar al
+    // perdedor en una colindante y cobrarle el % de fuerza) la resuelve el
+    // servidor en `Combate.Resolver`: el cliente no simula combates desde que
+    // `TurnService.resolverCombatesYAvanzar` quedó deprecado.
+    for (final a in supervivencias) {
+      _aplicarSupervivencia(a, t, log);
     }
 
     // Propagar efectos preexistentes a cartas que estén actualmente en la celda.
@@ -762,6 +779,89 @@ class HabilidadService {
     });
   }
 
+  /// Supervivencia: ancla el efecto a UNA carta PROPIA (identificada por
+  /// `cartaOrigenCoord` + `cartaOrigenId`/`cartaOrigenIndice`, igual que la
+  /// invisibilidad y el teletransporte). NO es un efecto de celda: no se propaga
+  /// a otras cartas que entren.
+  ///
+  /// Aquí SOLO se marca la carta. La huida —recolocar al perdedor de un combate
+  /// en una celda colindante que admita su terreno y restarle el
+  /// `kSupervivenciaPerdidaFuerzaPct` % de fuerza para el resto de la partida—
+  /// la resuelve el servidor en `Combate.Resolver`, que es el único que conoce
+  /// el resultado de los combates. La caducidad la lleva [tickEfectos].
+  ///
+  /// Los dos descartes (clon y carta estática) son los mismos que aplica el
+  /// servidor en `Habilidades.AplicarSupervivencia`: un clon es un señuelo que
+  /// desaparece solo, y una carta estática no se mueve nunca, así que tampoco
+  /// podría huir.
+  static void _aplicarSupervivencia(
+    AccionPendiente a,
+    Map<String, List<Map<String, dynamic>>> t,
+    List<Map<String, dynamic>> log,
+  ) {
+    final h = CatalogoHabilidades.get(a.habilidadId);
+    if (h == null) return;
+
+    final fromCoord = a.cartaOrigenCoord;
+    if (fromCoord == null) {
+      log.add(_logFallo(a, h, 'Falta la carta objetivo de supervivencia'));
+      return;
+    }
+    final cartas = t[fromCoord];
+    if (cartas == null || cartas.isEmpty) {
+      log.add(_logFallo(a, h, 'La carta objetivo ya no existe'));
+      return;
+    }
+
+    // Localizar la carta: preferimos por id (robusto ante cambios de índice).
+    int idx = a.cartaOrigenIndice ?? -1;
+    final cartaId = a.cartaOrigenId;
+    if (cartaId != null && cartaId.isNotEmpty) {
+      final byId =
+          cartas.indexWhere((c) => (c['id'] ?? c['Id'])?.toString() == cartaId);
+      if (byId >= 0) idx = byId;
+    }
+    if (idx < 0 || idx >= cartas.length) {
+      log.add(_logFallo(a, h, 'La carta objetivo ya no existe'));
+      return;
+    }
+
+    final carta = cartas[idx];
+    if ((carta['ownerUid'] ?? '') != a.uid) {
+      log.add(_logFallo(a, h, 'La carta objetivo no es propia'));
+      return;
+    }
+    if (carta['esClon'] == true) {
+      log.add(_logFallo(a, h, 'Un clon no puede recibir supervivencia'));
+      return;
+    }
+    if (((carta['Condicion'] ?? carta['condicion']) as num?)?.toInt() == 3) {
+      log.add(_logFallo(a, h, 'Una carta estática no puede huir'));
+      return;
+    }
+
+    final efecto = EfectoActivo(
+      tipo: EfectoTipoEstado.supervivencia,
+      turnosRestantes: h.efecto.duracionTurnos,
+      // Magnitud = % de fuerza que cuesta cada huida (lo pinta el badge).
+      magnitud: h.efecto.defensaReducida,
+      origenUid: a.uid,
+    );
+    _agregarOFusionarEfectoCarta(carta, efecto);
+
+    log.add({
+      'tipo': 'supervivencia',
+      'habilidadId': h.id,
+      'habilidadNombre': h.nombre,
+      'uid': a.uid,
+      'zona': a.zona,
+      'origen': a.origen,
+      'objetivo': fromCoord,
+      'turnosRestantes': efecto.turnosRestantes,
+      'magnitud': efecto.magnitud,
+      'cartaNombre': carta['Nombre'] ?? carta['nombre'] ?? '',
+    });
+  }
   // ── Tick: decrementar duración de todos los efectos ──────────────────────
 
   /// Decrementa en 1 los `turnosRestantes` de todos los efectos en celdas y

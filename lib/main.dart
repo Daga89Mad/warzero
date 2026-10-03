@@ -17,6 +17,8 @@ import 'services/notificaciones_service.dart';
 import 'package:warzero/services/settings_controller.dart';
 import 'views/loginBody.dart';
 import 'views/menu.dart';
+import 'services/trofeos_service.dart';
+import 'widgets/trofeo_conseguido_overlay.dart';
 
 /// Clave global del navegador: permite navegar desde fuera del árbol de widgets
 /// (p. ej. al pulsar una notificación push).
@@ -119,17 +121,24 @@ class _AuthGate extends StatefulWidget {
   State<_AuthGate> createState() => _AuthGateState();
 }
 
-class _AuthGateState extends State<_AuthGate> {
+class _AuthGateState extends State<_AuthGate> with WidgetsBindingObserver {
   final FirebaseCrudService _svc = FirebaseCrudService();
+  final TrofeosService _trofeos = TrofeosService();
   StreamSubscription<User?>? _sub;
 
   bool _cargando = true;
   bool _reconectando = false;
   User? _user;
 
+  /// Evita que dos drenajes se solapen (p. ej. un `resumed` que llega mientras
+  /// el pop-up del arranque está abierto). La cola vive en el servidor y la
+  /// petición la CONSUME, así que dos llamadas simultáneas podrían perder avisos.
+  bool _drenandoTrofeos = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _arrancar();
   }
 
@@ -159,6 +168,16 @@ class _AuthGateState extends State<_AuthGate> {
     });
 
     _sub = FirebaseAuth.instance.authStateChanges().listen(_onAuthCambio);
+
+    // TROFEOS: repesca de los avisos que quedaron pendientes desde la última
+    // sesión (turnos que resolvió OTRO jugador, resoluciones forzosas por fecha
+    // límite, o la red de seguridad del perfil).
+    //
+    // Va en un post-frame callback porque en este punto el menú todavía no está
+    // montado: el pop-up necesita un Navigator vivo debajo.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _drenarTrofeosPendientes();
+    });
   }
 
   Future<void> _onAuthCambio(User? u) async {
@@ -180,7 +199,57 @@ class _AuthGateState extends State<_AuthGate> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // Al volver del fondo: puede que mientras la app estaba dormida otro jugador
+    // haya resuelto un turno en el que ganamos un trofeo.
+    if (state == AppLifecycleState.resumed) _drenarTrofeosPendientes();
+  }
+
+  /// Pide al servidor los avisos de trofeo pendientes y los muestra.
+  ///
+  /// Solo se ejecuta cuando el jugador está EN EL MENÚ (`canPop() == false`): si
+  /// está dentro de una partida o de cualquier pantalla más profunda, el pop-up
+  /// caería encima de lo que esté haciendo, y además los trofeos de SU propia
+  /// jugada ya le llegan por la respuesta de cerrar turno. Lo que quede en la
+  /// cola esperará al siguiente arranque o al siguiente regreso del fondo.
+  ///
+  /// Best-effort: si falla, ni molesta ni rompe el arranque.
+  Future<void> _drenarTrofeosPendientes() async {
+    if (!mounted || _drenandoTrofeos) return;
+    final uid = _user?.uid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return;
+
+    final nav = navigatorKey.currentState;
+    if (nav == null || nav.canPop()) {
+      debugPrint('[WZ][trofeos] repesca aplazada: no estamos en el menú');
+      return;
+    }
+
+    _drenandoTrofeos = true;
+    try {
+      final pendientes = await _trofeos.pendientes(uid);
+      if (pendientes.isEmpty) return;
+
+      // El contexto del propio Navigator raíz: sirve aunque _AuthGate se haya
+      // reconstruido entre la petición y la respuesta.
+      final ctx = navigatorKey.currentContext;
+      if (!mounted || ctx == null) {
+        debugPrint('[WZ][trofeos] ${pendientes.length} aviso(s) descartado(s): '
+            'sin contexto para mostrarlos');
+        return;
+      }
+      await mostrarTrofeosConseguidos(ctx, pendientes);
+    } catch (e) {
+      debugPrint('[WZ][trofeos] repesca falló: $e');
+    } finally {
+      _drenandoTrofeos = false;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     super.dispose();
   }

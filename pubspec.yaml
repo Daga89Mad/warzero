@@ -1,7 +1,7 @@
 name: warzero
 description: "Juego de cartas por turnos con temática de guerra futurista"
 publish_to: 'none'
-version: 0.1.0
+version: 1.1.1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -43,6 +43,8 @@ dev_dependencies:
   # Genera automáticamente los iconos para Android e iOS.
   flutter_launcher_icons: ^0.14.4
 
+  package_info_plus: ^8.3.0
+
 # Configuración del icono de la aplicación.
 # La ruta es relativa a la carpeta principal del proyecto.
 flutter_launcher_icons:
@@ -53,7 +55,7 @@ flutter_launcher_icons:
   image_path: "assets/images/IconoWarZero.png"
 
   # Android.
-  min_sdk_android: 21
+  min_sdk_android: 21 
 
   # Icono adaptativo de Android:
   # fondo negro y símbolo amarillo transparente por delante.

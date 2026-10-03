@@ -2,7 +2,9 @@
 
 import 'carta_model.dart';
 import 'efecto_estado.dart';
+import 'habilidad_model.dart';
 
+/// Una carta colocada en el tablero, con su propietario.
 /// Una carta colocada en el tablero, con su propietario.
 class CartaEnCelda {
   final CartaModel carta;
@@ -29,6 +31,18 @@ class CartaEnCelda {
   /// Turnos de vida que le quedan al clon (0 si no es clon).
   final int clonTurnos;
 
+  /// Cuántas veces esta instancia se ha salvado de morir gracias a la
+  /// SUPERVIVENCIA (ids 39/40/41). Cada huida le resta un
+  /// `kSupervivenciaPerdidaFuerzaPct` % de fuerza de forma ACUMULATIVA y para
+  /// el resto de la partida.
+  ///
+  /// Es un contador, NO un efecto con duración: sobrevive a `tickEfectos`, a
+  /// que expire la supervivencia y a que la carta se mueva o la desplacen. El
+  /// dueño de la verdad es el servidor (`Combate.Resolver` lo incrementa y
+  /// `WarZeroService` lo re-sella cada turno desde el tablero anterior), así
+  /// que un cliente no puede borrarlo reenviando la carta sin el campo.
+  final int supervivenciaPenalizacion;
+
   CartaEnCelda({
     required this.carta,
     required this.ownerUid,
@@ -38,6 +52,7 @@ class CartaEnCelda {
     String? instanceId,
     this.esClon = false,
     this.clonTurnos = 0,
+    this.supervivenciaPenalizacion = 0,
   }) : instanceId = instanceId ?? _nuevaInstanceId();
 
   static int _contador = 0;
@@ -92,8 +107,20 @@ class CartaEnCelda {
     return r > 0 ? r : 0;
   }
 
-  /// Fuerza efectiva (con potenciación de fuerza).
-  int get fuerzaEfectiva => carta.fuerza + fuerzaExtraPorEfectos;
+  /// Fuerza BASE de la carta ya mermada por las huidas de supervivencia. Es el
+  /// número que hay que mostrar como "fuerza de la carta" en el tablero: la
+  /// penalización es permanente, así que la fuerza impresa ya no es la real.
+  /// Sin huidas coincide exactamente con `carta.fuerza`.
+  int get fuerzaBase =>
+      fuerzaTrasSupervivencia(carta.fuerza, supervivenciaPenalizacion);
+
+  /// Fuerza perdida por las huidas de supervivencia (0 si nunca huyó).
+  int get fuerzaPerdidaPorSupervivencia => carta.fuerza - fuerzaBase;
+
+  /// Fuerza efectiva: base mermada por supervivencia + potenciación de fuerza.
+  /// La penalización se aplica ANTES del buff (el buff no se recorta), igual
+  /// que en el servidor (`CartaHelper.FuerzaEfectiva`).
+  int get fuerzaEfectiva => fuerzaBase + fuerzaExtraPorEfectos;
 
   /// Movimiento efectivo (con potenciación de movimiento).
   int get movimientoEfectivo => carta.movimiento + movimientoExtraPorEfectos;
@@ -130,10 +157,40 @@ class CartaEnCelda {
   /// para el propietario se pinta con transparencia.
   bool get invisible => _tiene(EfectoTipoEstado.invisibilidad);
 
+  /// True si la carta arrastra una SUPERVIVENCIA activa: al perder un combate
+  /// huirá a una celda colindante (si hay alguna válida) en vez de morir.
+  bool get puedeSobrevivir => _tiene(EfectoTipoEstado.supervivencia);
+
+  /// Turnos que le quedan a la supervivencia (0 si no está activa).
+  int get turnosSupervivencia {
+    int maxT = 0;
+    for (final e in efectos) {
+      if (!e.conocido || e.tipo != EfectoTipoEstado.supervivencia) continue;
+      if (e.turnosRestantes > maxT) maxT = e.turnosRestantes;
+    }
+    return maxT;
+  }
+
+  /// True si la habilidad de la carta está lista para lanzarse en [turnoActual].
+  ///
+  /// El enfriamiento aplicado es el EFECTIVO (`enfriamientoEfectivo`), es decir
+  /// el mayor entre el de la carta y `kEnfriamientoHabilidadMinimo`: aunque el
+  /// editor la haya dejado a 0, hay que esperar el mínimo global de turnos.
   bool habilidadDisponible(int turnoActual) {
     if (!carta.tieneHabilidad) return false;
     if (ultimoUsoHabilidad == null) return true;
-    return (turnoActual - ultimoUsoHabilidad!) > carta.enfriamientoHabilidad;
+    return (turnoActual - ultimoUsoHabilidad!) >
+        enfriamientoEfectivo(carta.enfriamientoHabilidad);
+  }
+
+  /// Turnos de RECARGA que le faltan a la habilidad (0 = lista para lanzar).
+  /// Es lo que pinta el botón de la ficha ("RECARGANDO · Nt").
+  int enfriamientoRestante(int turnoActual) {
+    if (ultimoUsoHabilidad == null) return 0;
+    final transcurridos = turnoActual - ultimoUsoHabilidad!;
+    final restante =
+        enfriamientoEfectivo(carta.enfriamientoHabilidad) - transcurridos + 1;
+    return restante > 0 ? restante : 0;
   }
 
   Map<String, dynamic> toMap() => {
@@ -147,6 +204,10 @@ class CartaEnCelda {
           'UltimoUsoHabilidad': ultimoUsoHabilidad,
         if (esClon) 'esClon': true,
         if (esClon) 'clonTurnos': clonTurnos,
+        // Solo se escribe si la carta ha huido alguna vez, para no ensuciar el
+        // tablero de todas las partidas con un campo a 0.
+        if (supervivenciaPenalizacion > 0)
+          'SupervivenciaPenalizacion': supervivenciaPenalizacion,
       };
 
   factory CartaEnCelda.fromMap(Map<String, dynamic> d) => CartaEnCelda(
@@ -166,6 +227,10 @@ class CartaEnCelda {
                 : null,
         esClon: d['esClon'] == true,
         clonTurnos: (d['clonTurnos'] as num?)?.toInt() ?? 0,
+        supervivenciaPenalizacion: ((d['SupervivenciaPenalizacion'] ??
+                    d['supervivenciaPenalizacion']) as num?)
+                ?.toInt() ??
+            0,
       );
 
   CartaEnCelda copyWith({
@@ -174,6 +239,7 @@ class CartaEnCelda {
     String? ownerZone,
     List<EfectoActivo>? efectos,
     int? ultimoUsoHabilidad,
+    int? supervivenciaPenalizacion,
   }) =>
       CartaEnCelda(
         carta: carta ?? this.carta,
@@ -184,6 +250,8 @@ class CartaEnCelda {
         instanceId: instanceId,
         esClon: esClon,
         clonTurnos: clonTurnos,
+        supervivenciaPenalizacion:
+            supervivenciaPenalizacion ?? this.supervivenciaPenalizacion,
       );
 }
 
@@ -196,7 +264,9 @@ class CeldaState {
 
   bool get isEmpty => cartas.isEmpty;
 
-  int get fuerzaTotal => cartas.fold(0, (s, c) => s + c.carta.fuerza);
+  /// Fuerza "base" de la celda: ya descontadas las penalizaciones permanentes
+  /// por supervivencia, pero SIN las potenciaciones temporales.
+  int get fuerzaTotal => cartas.fold(0, (s, c) => s + c.fuerzaBase);
   int get fuerzaTotalEfectiva => cartas.fold(0, (s, c) => s + c.fuerzaEfectiva);
   int get defensaTotal => cartas.fold(0, (s, c) => s + c.carta.defensa);
   int get defensaTotalEfectiva =>
@@ -204,7 +274,7 @@ class CeldaState {
 
   int fuerzaDe(String ownerUid) => cartas
       .where((c) => c.ownerUid == ownerUid)
-      .fold(0, (s, c) => s + c.carta.fuerza);
+      .fold(0, (s, c) => s + c.fuerzaBase);
   int defensaDe(String ownerUid) => cartas
       .where((c) => c.ownerUid == ownerUid)
       .fold(0, (s, c) => s + c.carta.defensa);
@@ -401,6 +471,16 @@ class BoardState {
   bool celdaTieneMuro(String coord) =>
       _celdaTiene(coord, EfectoTipoEstado.muro);
 
+  /// True si alguna carta de la celda arrastra una SUPERVIVENCIA activa. Se usa
+  /// para pintar el badge 🏃 en la casilla y para avisar en el preview de
+  /// combate de que el perdedor puede escapar en vez de morir.
+  bool celdaTieneSupervivencia(String coord) =>
+      getCelda(coord).cartas.any((c) => c.puedeSobrevivir);
+
+  /// Turnos restantes (máximo) de la supervivencia activa sobre la celda.
+  int turnosSupervivenciaCelda(String coord) =>
+      turnosEfectoCelda(coord, EfectoTipoEstado.supervivencia);
+
   /// Todas las celdas con un muro activo.
   Set<String> get celdasConMuro => efectosCelda.keys
       .where((coord) => _celdaTiene(coord, EfectoTipoEstado.muro))
@@ -570,7 +650,7 @@ class BoardState {
   int puntosJugador(String ownerZone) => celdas.values
       .expand((c) => c.cartas)
       .where((c) => c.ownerZone == ownerZone)
-      .fold(0, (s, c) => s + c.carta.fuerza);
+      .fold(0, (s, c) => s + c.fuerzaBase);
 
   BoardState copyWith({
     Map<String, CeldaState>? celdas,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Una temática (paleta) de WarZero. Todas mantienen el estilo bélico; varían
@@ -180,14 +181,24 @@ class SettingsController extends ChangeNotifier {
   static const _kEscala = 'wz_text_scale';
   static const _kTablero3D = 'wz_tablero_3d';
 
+  /// Versión de la app (`version+build` del pubspec) con la que se guardó por
+  /// última vez la preferencia del tablero 3D. Si al arrancar la versión
+  /// instalada es otra (el jugador ha ACTUALIZADO la app), el tablero 3D se
+  /// desactiva. Ver `cargar`.
+  static const _kTablero3DVersion = 'wz_tablero_3d_version';
+
   static const double escalaMin = 0.85;
   static const double escalaMax = 1.50;
 
   int _temaIndex = 0;
   double _escala = 1.0;
 
-  /// Vista del tablero: true = perspectiva 3D (por defecto), false = cenital.
-  bool _tablero3D = true;
+  /// Vista del tablero: true = perspectiva 3D, false = cenital.
+  ///
+  /// Por defecto DESACTIVADA. El jugador puede activarla en Ajustes y se
+  /// guarda, pero en cada ACTUALIZACIÓN de la app vuelve a desactivarse
+  /// (también a los jugadores que ya la tenían activada).
+  bool _tablero3D = false;
 
   int get temaIndex => _temaIndex;
   double get escala => _escala;
@@ -202,13 +213,39 @@ class SettingsController extends ChangeNotifier {
       final idx = kWarZeroThemes.indexWhere((t) => t.id == id);
       _temaIndex = idx >= 0 ? idx : 0;
       _escala = (p.getDouble(_kEscala) ?? 1.0).clamp(escalaMin, escalaMax);
-      _tablero3D = p.getBool(_kTablero3D) ?? true;
+
+      // ── Tablero 3D: se desactiva en cada actualización ─────────────────
+      // Se compara la versión instalada con la guardada junto a la
+      // preferencia. Si no coinciden (primera vez con esta versión, o un
+      // jugador que venía de una versión anterior sin este campo), se
+      // desactiva y se apunta la versión actual; a partir de ahí se respeta
+      // lo que el jugador elija hasta la siguiente actualización.
+      final version = await _versionApp();
+      final guardada = p.getString(_kTablero3DVersion);
+      if (version != null && guardada != version) {
+        _tablero3D = false;
+        await p.setBool(_kTablero3D, false);
+        await p.setString(_kTablero3DVersion, version);
+      } else {
+        _tablero3D = p.getBool(_kTablero3D) ?? false;
+      }
     } catch (_) {
       _temaIndex = 0;
       _escala = 1.0;
-      _tablero3D = true;
+      _tablero3D = false;
     }
     notifyListeners();
+  }
+
+  /// `version+build` de la app instalada (p. ej. "0.1.0+12"), o null si no
+  /// se puede leer (en ese caso no se fuerza el reinicio del tablero 3D).
+  static Future<String?> _versionApp() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      return '${info.version}+${info.buildNumber}';
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> setTemaIndex(int i) async {
@@ -232,6 +269,8 @@ class SettingsController extends ChangeNotifier {
     } catch (_) {}
   }
 
+  /// Activa/desactiva el tablero 3D. Se guarda y se respeta hasta la
+  /// siguiente actualización de la app (ver `cargar`).
   Future<void> setTablero3D(bool v) async {
     if (v == _tablero3D) return;
     _tablero3D = v;
@@ -239,6 +278,8 @@ class SettingsController extends ChangeNotifier {
     try {
       final p = await SharedPreferences.getInstance();
       await p.setBool(_kTablero3D, v);
+      final version = await _versionApp();
+      if (version != null) await p.setString(_kTablero3DVersion, version);
     } catch (_) {}
   }
 }

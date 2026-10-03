@@ -35,6 +35,15 @@ class MapaInfo {
   /// Si está vacía, el tablero usa `kImagenTableroPorDefecto`.
   final String imagen;
 
+  /// Si el mapa se puede ELEGIR al crear una partida (selector de la ventana
+  /// "Crear sala"). Los mapas exclusivos del modo historia, de retos o en
+  /// preparación se marcan como no seleccionables en la edición de mapas.
+  ///
+  /// Campo `seleccionable` del documento. Si no existe (mapas anteriores a
+  /// este campo) se considera `true`, para no esconder de golpe los mapas que
+  /// ya se usaban.
+  final bool seleccionable;
+
   const MapaInfo({
     required this.id,
     required this.nombre,
@@ -45,6 +54,7 @@ class MapaInfo {
     this.filas,
     this.columnas,
     this.imagen = '',
+    this.seleccionable = true,
   });
 
   factory MapaInfo.fromFirestore(DocumentSnapshot doc) {
@@ -72,6 +82,8 @@ class MapaInfo {
       filas: (d['filas'] as num?)?.toInt(),
       columnas: (d['columnas'] as num?)?.toInt(),
       imagen: (d['imagen'] as String?)?.trim() ?? '',
+      // Ausente = seleccionable (compatibilidad con los mapas de siempre).
+      seleccionable: d['seleccionable'] != false,
     );
   }
 }
@@ -84,11 +96,20 @@ class MapaService {
   // Usar where() en Firestore sobre campos que no son el ID requiere un índice
   // compuesto que puede no existir. Cargamos toda la colección y filtramos
   // en Dart: la colección Mapas será siempre pequeña (decenas de documentos).
-  Future<List<MapaInfo>> obtenerMapas({int? jugadores}) async {
+  //
+  // [soloSeleccionables]: true en la ventana de CREAR SALA, para ofrecer solo
+  // los mapas marcados como seleccionables en la edición de mapas. El resto de
+  // usos (editor, historia, retos) ven todos.
+  Future<List<MapaInfo>> obtenerMapas({
+    int? jugadores,
+    bool soloSeleccionables = false,
+  }) async {
     final snap = await _db.collection('Mapas').get();
-    final todos = snap.docs.map(MapaInfo.fromFirestore).toList();
-    if (jugadores == null) return todos;
-    return todos.where((m) => m.jugadores == jugadores).toList();
+    return snap.docs
+        .map(MapaInfo.fromFirestore)
+        .where((m) => jugadores == null || m.jugadores == jugadores)
+        .where((m) => !soloSeleccionables || m.seleccionable)
+        .toList();
   }
 
   // ── Un mapa concreto por ID ───────────────────────────────

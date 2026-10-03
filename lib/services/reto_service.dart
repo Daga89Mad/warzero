@@ -1,14 +1,16 @@
 // lib/services/reto_service.dart
 //
-// Cliente del modo RETOS. Un reto es una partida normal que el servidor monta ya
-// hecha (mapa, ejército y bots fijos) y que arranca EN CURSO, así que aquí solo
-// hay que:
-//   • pedirla (POST /warzero/reto/crear),
-//   • y entrar a la pantalla de juego de siempre con el lobbyId devuelto.
-//
-// El reparto de energías, cuarteles y manos lo hace el servidor en `entrar`,
-// igual que en cualquier partida; y los bots rivales son los mismos runners que
-// rellenan salas públicas, con su dificultad y su estilo.
+// Cliente del modo RETOS. Hay dos clases de reto (RetoCatalogo.cs):
+//   • Reto de PARTIDA NORMAL: el servidor monta la partida (mapa, ejército y
+//     bots fijos) y arranca EN CURSO. El reparto de energías, cuarteles y
+//     manos lo hace el servidor en `entrar`, igual que en cualquier partida; y
+//     los bots rivales son los mismos runners que rellenan salas públicas.
+//   • Reto sobre el MOTOR DE HISTORIA (p. ej. «El duelo de Alexander»): el
+//     servidor devuelve una batalla de historia (`estado.esHistoria`), y se
+//     entra a la pantalla de juego con su config `historia`, igual que desde
+//     el modo historia.
+// En los dos casos aquí solo hay que pedirla (POST /warzero/reto/crear) y
+// entrar a la pantalla de juego con el lobbyId devuelto.
 //
 // NOTA: se usa `http` directamente (con la baseUrl de WarZeroApi) para no tener
 // que tocar warzero_api.dart. Si algún día hay más llamadas de retos, conviene
@@ -56,6 +58,20 @@ const List<RetoInfo> kRetosDisponibles = [
     descripcion: 'Tres ejércitos, un solo objetivo: tú.',
     etiquetas: ['⚓ Demonios', '🗺 Clásica 4J', '🤖 3 bots'],
   ),
+  RetoInfo(
+    numero: 2,
+    id: 'resistencia_humana_8',
+    titulo: 'Resistencia humana',
+    descripcion: 'Siete ejércitos, un solo objetivo: tú.',
+    etiquetas: ['🛡 Humanos', '🗺 Mapa 8J', '🤖 7 bots'],
+  ),
+  RetoInfo(
+    numero: 3,
+    id: 'duelo_alexander',
+    titulo: 'El duelo de Alexander',
+    descripcion: 'Eres Alexander. Alvaroth y Albariel vienen a por ti.',
+    etiquetas: ['👁 Nefilim', '🗺 Monolito', '⚔ Duelo de generales'],
+  ),
 ];
 
 class RetoService {
@@ -70,8 +86,9 @@ class RetoService {
 
   /// Crea (o reanuda) el reto [retoId] y entra a la partida.
   ///
-  /// Si el jugador dejó un intento a medias, el servidor devuelve ESA partida en
-  /// vez de reiniciarla: se vuelve justo donde lo dejó.
+  /// Si el jugador dejó un intento a medias de un reto de partida normal, el
+  /// servidor devuelve ESA partida en vez de reiniciarla: se vuelve justo donde
+  /// lo dejó. Los retos sobre el motor de historia empiezan siempre de cero.
   Future<void> lanzarReto(
     BuildContext context, {
     required String uid,
@@ -107,12 +124,20 @@ class RetoService {
 
     final jugadores = (res!['maxJugadores'] as num?)?.toInt() ?? 4;
 
+    // Reto sobre el motor de historia: se entra como a una batalla de
+    // historia (2 jugadores y su config `historia`).
+    final estado = (res['estado'] as Map?)?.cast<String, dynamic>();
+    final historia = estado?['esHistoria'] == true || estado?['historia'] is Map
+        ? (estado?['historia'] as Map?)?.cast<String, dynamic>()
+        : null;
+
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => GameScreen(
           localPlayerUid: uid,
-          playerCount: jugadores,
+          playerCount: historia != null ? 2 : jugadores,
           lobbyId: lobbyId,
+          historia: historia,
         ),
       ),
     );

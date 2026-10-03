@@ -204,11 +204,17 @@ class _CellSidebarState extends State<CellSidebar> {
       defensaReducida = (widget.celda?.defensaTotal ?? 0) -
           (widget.celda?.defensaTotalEfectiva ?? 0);
     }
-    // Movimiento mínimo entre cartas seleccionadas
+    // Movimiento mínimo entre cartas seleccionadas.
+    //
+    // Se usa `CartaEnCelda.movimientoEfectivo` (movimiento de la carta + los
+    // extras de efectos activos), que es EXACTAMENTE lo que calcula el validador
+    // de `game_screen` al pintar las casillas de destino. Con `carta.movimiento`
+    // este badge decía "MOV 2" mientras el tablero dejaba mover 3 casillas
+    // porque la carta tenía un potenciador de movimiento encima.
     int? minMov;
     if (_selected.isNotEmpty) {
       minMov = _selected
-          .map((i) => cards[i].carta.movimiento)
+          .map((i) => cards[i].movimientoEfectivo)
           .reduce((a, b) => a < b ? a : b);
     }
 
@@ -484,16 +490,24 @@ class _Header extends StatelessWidget {
                     children: [
                       Icon(Icons.shield, size: 11, color: hqColor),
                       const SizedBox(width: 4),
-                      Text(
-                        defensaCuartelActual < CellSidebar.defensaBase
-                            ? 'DEFENSA  $defensaCuartelActual  · RECUPERANDO'
-                            : 'DEFENSA  $defensaCuartelActual',
-                        style: TextStyle(
-                            fontSize: 8,
-                            color: hqColor,
-                            fontFamily: 'Cinzel',
-                            letterSpacing: 1,
-                            fontWeight: FontWeight.bold),
+                      // Flexible: con "· RECUPERANDO" (tras una DESCARGA) el
+                      // texto no cabe en la columna izquierda de la cabecera y
+                      // desbordaba igual que el botón DESCARGA.
+                      Flexible(
+                        child: Text(
+                          defensaCuartelActual < CellSidebar.defensaBase
+                              ? 'DEFENSA  $defensaCuartelActual  · RECUPERANDO'
+                              : 'DEFENSA  $defensaCuartelActual',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 8,
+                              color: hqColor,
+                              fontFamily: 'Cinzel',
+                              letterSpacing: 1,
+                              height: 1.3,
+                              fontWeight: FontWeight.bold),
+                        ),
                       ),
                     ],
                   ),
@@ -848,6 +862,12 @@ class _Body extends StatelessWidget {
                 energiasDisponibles: energiasDisponibles,
                 resolveEvolucion: resolveEvolucion,
                 onEvolucionar: onEvolucionar,
+                // SIN ESTA LÍNEA `_CardTile.evolucionesPoseidas` llegaba null y
+                // `poseeEvolucion` salía siempre true: se ofrecía EVOLUCIONAR de
+                // cartas cuya evolución el jugador no tiene. El filtro real está
+                // en `_CardTile._abrirDetalle`, pero solo funciona si el conjunto
+                // le llega desde aquí.
+                evolucionesPoseidas: evolucionesPoseidas,
                 turnoActual: turnoActual,
                 onLanzarHabilidad: onLanzarHabilidad,
               );
@@ -930,8 +950,11 @@ class _CardTile extends StatelessWidget {
         !entry.confundida &&
         entry.carta.tieneHabilidad;
 
+    // AHORA: el enfriamiento es una propiedad de la carta, no del permiso de
+    // lanzar. Se calcula siempre para que el botón muestre RECARGANDO también
+    // cuando la carta esté bloqueada por otro motivo.
     final enfriamientoRestante =
-        puedeLanzar ? _calcularEnfriamientoRestante(entry, turnoActual) : 0;
+        _calcularEnfriamientoRestante(entry, turnoActual);
 
     showCardDetail(
       ctx,
@@ -954,12 +977,8 @@ class _CardTile extends StatelessWidget {
   }
 
   static int _calcularEnfriamientoRestante(
-      CartaEnCelda entry, int turnoActual) {
-    if (entry.ultimoUsoHabilidad == null) return 0;
-    final transcurridos = turnoActual - entry.ultimoUsoHabilidad!;
-    final restante = entry.carta.enfriamientoHabilidad - transcurridos + 1;
-    return restante > 0 ? restante : 0;
-  }
+          CartaEnCelda entry, int turnoActual) =>
+      entry.enfriamientoRestante(turnoActual);
 
   @override
   Widget build(BuildContext context) {
@@ -1187,16 +1206,25 @@ class _DescargaButton extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                armada
-                    ? 'DESCARGA ARMADA — TOCA PARA CANCELAR'
-                    : 'AL RESOLVER: MUERE TODO EN EL CUARTEL',
-                style: TextStyle(
-                    fontSize: 7.5,
-                    color: accent,
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 1),
+              // Expanded: el texto es más ancho que el panel (220 px) y, sin
+              // limitarlo, la fila se salía por la derecha ("RIGHT OVERFLOWED").
+              // Ahora parte en dos líneas si no cabe y deja sitio al coste.
+              Expanded(
+                child: Text(
+                  armada
+                      ? 'DESCARGA ARMADA — TOCA PARA CANCELAR'
+                      : 'AL RESOLVER: MUERE TODO EN EL CUARTEL',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 7.5,
+                      color: accent,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1,
+                      height: 1.4),
+                ),
               ),
+              const SizedBox(width: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                 decoration: BoxDecoration(
@@ -1284,15 +1312,22 @@ class _MoveButton extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                active ? '$selected/$total SELECCIONADAS' : 'TOCA UNA CARTA',
-                style: TextStyle(
-                    fontSize: 8,
-                    color: accent,
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 1),
+              // Expanded: mismo motivo que en DESCARGA (no desbordar el panel).
+              Expanded(
+                child: Text(
+                  active ? '$selected/$total SELECCIONADAS' : 'TOCA UNA CARTA',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 8,
+                      color: accent,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1,
+                      height: 1.4),
+                ),
               ),
-              if (active && minMov != null)
+              if (active && minMov != null) ...[
+                const SizedBox(width: 6),
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
@@ -1310,6 +1345,7 @@ class _MoveButton extends StatelessWidget {
                           fontFamily: 'Cinzel',
                           letterSpacing: 1)),
                 ),
+              ],
             ],
           ),
           const SizedBox(height: 6),
@@ -1382,16 +1418,23 @@ class _UndoButton extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                active
-                    ? '$selected MOVIDA(S) SELECCIONADA(S)'
-                    : 'TOCA UNA CARTA',
-                style: TextStyle(
-                    fontSize: 8,
-                    color: accent,
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 1),
+              // Expanded: mismo motivo que en DESCARGA (no desbordar el panel).
+              Expanded(
+                child: Text(
+                  active
+                      ? '$selected MOVIDA(S) SELECCIONADA(S)'
+                      : 'TOCA UNA CARTA',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 8,
+                      color: accent,
+                      fontFamily: 'Cinzel',
+                      letterSpacing: 1,
+                      height: 1.4),
+                ),
               ),
+              const SizedBox(width: 6),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                 decoration: BoxDecoration(

@@ -136,6 +136,7 @@ class _EdicionMapasScreenState extends State<EdicionMapasScreen> {
         'terreno': <String, dynamic>{},
         'islaCentral': <String>[],
         'continentes': <String, dynamic>{},
+        'seleccionable': false,
       });
       if (!mounted) return;
       await _abrirEditor(docId: datos.docId);
@@ -251,6 +252,9 @@ class _MapaResumen {
   final int? filas;
   final int? columnas;
 
+  /// Si el mapa aparece en la ventana CREAR SALA (campo `seleccionable`).
+  final bool seleccionable;
+
   const _MapaResumen({
     required this.docId,
     required this.nombre,
@@ -260,6 +264,7 @@ class _MapaResumen {
     required this.celdasIsla,
     this.filas,
     this.columnas,
+    this.seleccionable = true,
   });
 
   /// Tamaño mostrado: el propio del mapa, o el del preset si no lo define.
@@ -280,6 +285,8 @@ class _MapaResumen {
       celdasIsla: (d['islaCentral'] as List?)?.length ?? 0,
       filas: (d['filas'] as num?)?.toInt(),
       columnas: (d['columnas'] as num?)?.toInt(),
+      // Ausente = seleccionable (mapas anteriores a este campo).
+      seleccionable: d['seleccionable'] != false,
     );
   }
 }
@@ -337,7 +344,8 @@ class _MapaTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    '${mapa.docId}  ·  ${mapa.jugadores} jugadores  ·  ${mapa.tamanio}',
+                    '${mapa.docId}  ·  ${mapa.jugadores} jugadores  ·  ${mapa.tamanio}'
+                    '  ·  ${mapa.seleccionable ? 'en CREAR SALA' : 'OCULTO en crear sala'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
@@ -541,6 +549,9 @@ class _EditorMapaState extends State<_EditorMapa> {
 
   int _jugadores = 4;
 
+  /// El mapa aparece en la ventana CREAR SALA (campo `seleccionable`).
+  bool _seleccionable = true;
+
   /// Tamaño de la rejilla del mapa. Se inicializa desde el preset del número de
   /// jugadores, pero es editable: así un mapa puede tener más celdas que el
   /// preset (p.ej. 4 jugadores en una rejilla 12×20).
@@ -607,7 +618,8 @@ class _EditorMapaState extends State<_EditorMapa> {
         _nombreCtrl.text = (d['nombre'] ?? doc.id).toString();
         _imagenCtrl.text = (d['imagen'] ?? '').toString();
         _jugadores = (d['jugadores'] as num?)?.toInt() ?? 4;
-
+// Ausente = seleccionable (mapas anteriores a este campo).
+        _seleccionable = d['seleccionable'] != false;
         // Si el mapa no trae rejilla propia (mapas antiguos), se toma la del
         // preset del número de jugadores.
         final preset = GameConfig.forPlayerCount(_jugadores);
@@ -736,6 +748,7 @@ class _EditorMapaState extends State<_EditorMapa> {
       // …pero a continuación sobrescribimos por completo los conocidos.
       'nombre': nombre,
       'jugadores': _jugadores,
+      'seleccionable': _seleccionable,
       'filas': _filas,
       'columnas': _columnas,
       'imagen': _imagenCtrl.text.trim(),
@@ -918,12 +931,60 @@ class _EditorMapaState extends State<_EditorMapa> {
               ],
             ),
             const SizedBox(height: 4),
+            // ── Seleccionable al crear sala ─────────────────
+            _label('CREAR SALA'),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0A1220),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: _seleccionable
+                      ? _accent.withOpacity(0.5)
+                      : const Color(0xFF506070).withOpacity(0.3),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    _seleccionable ? Icons.visibility : Icons.visibility_off,
+                    size: 16,
+                    color: _seleccionable ? _accent : const Color(0xFF506070),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      _seleccionable
+                          ? 'Seleccionable al crear una partida'
+                          : 'Oculto en la ventana de crear partida',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'Cinzel',
+                        color: _seleccionable
+                            ? const Color(0xFFE0D8C0)
+                            : const Color(0xFF90A0B0),
+                      ),
+                    ),
+                  ),
+                  Switch(
+                    value: _seleccionable,
+                    activeColor: _accent,
+                    onChanged: (v) => setState(() => _seleccionable = v),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 4),
             const Text(
-              'Cambiar el número de jugadores reajusta la rejilla al preset.',
+              'Desmárcalo para mapas del modo historia, de retos o en '
+              'preparación: se siguen pudiendo usar, pero no aparecen al crear '
+              'una sala.',
               style: TextStyle(
                 fontSize: 9,
                 color: Color(0xFF405060),
                 fontFamily: 'Cinzel',
+                height: 1.5,
               ),
             ),
             const SizedBox(height: 16),

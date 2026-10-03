@@ -40,6 +40,14 @@ class HistoriaModel {
   /// UI (p.ej. mostrar una etiqueta) si hiciera falta.
   final bool porDefecto;
 
+  /// Id del trofeo que se otorga al completar esta historia (vacío = ninguno).
+  ///
+  /// Llega también en las historias BLOQUEADAS: es un id, no destripa nada, y
+  /// permite pintar el premio que está en juego resolviéndolo contra el catálogo
+  /// de trofeos. El otorgamiento lo hace el servidor al desbloquearla; el
+  /// cliente solo lo muestra.
+  final String trofeoId;
+
   const HistoriaModel({
     required this.id,
     required this.ejercito,
@@ -48,7 +56,11 @@ class HistoriaModel {
     required this.paginas,
     required this.desbloqueada,
     this.porDefecto = false,
+    this.trofeoId = '',
   });
+
+  /// True si esta historia tiene un trofeo asociado.
+  bool get tieneTrofeo => trofeoId.isNotEmpty;
 
   factory HistoriaModel.fromMap(Map<String, dynamic> d) {
     final paginasRaw = (d['paginas'] ?? d['Paginas']) as List? ?? const [];
@@ -68,6 +80,7 @@ class HistoriaModel {
       paginas: paginas,
       desbloqueada: d['desbloqueada'] == true,
       porDefecto: d['porDefecto'] == true || d['PorDefecto'] == true,
+      trofeoId: (d['trofeoId'] ?? d['TrofeoId'] ?? '').toString(),
     );
   }
 

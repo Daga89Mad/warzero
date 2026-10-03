@@ -112,6 +112,13 @@ class ModoJuegoScreen extends StatelessWidget {
                 accent: const Color(0xFF40C08A),
                 enabled: false,
               ),
+              _ModoTile(
+                icon: Icons.groups_outlined,
+                label: 'COOPERATIVO',
+                sublabel: 'Juega en equipo con tus amigos',
+                accent: const Color(0xFF30B8C8),
+                enabled: false,
+              ),
             ],
           ),
         ),

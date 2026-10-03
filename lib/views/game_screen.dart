@@ -16,6 +16,8 @@ import 'informe_batalla_screen.dart';
 import 'revision_turno_screen.dart';
 import '../models/lobby_model.dart';
 import '../widgets/board_widget.dart';
+import '../widgets/bombardeo_overlay.dart';
+import '../widgets/historia_tunel.dart';
 import '../widgets/card_detail_overlay.dart';
 import '../widgets/cell_sidebar.dart';
 import '../widgets/cell_widget.dart' show ownerColor;
@@ -32,6 +34,9 @@ import 'puntuaciones_screen.dart';
 import 'recompensas_batalla_screen.dart';
 import '../services/historia_service.dart';
 import 'historia_hud.dart';
+import '../widgets/trofeo_conseguido_overlay.dart';
+import '../models/trofeo_model.dart';
+import '../widgets/historia_explicacion_dialog.dart';
 
 /// Silueta fantasma de una carta en su celda de origen (revisión post-cierre).
 /// Es estructuralmente idéntico a `RevisionFantasma` de board_widget.dart (los
@@ -82,10 +87,66 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   String? _obeliscoLocal;
   String? _obeliscoOponente;
 
+  /// Trofeos que el servidor acaba de otorgar y que todavía no se le han
+  /// mostrado al jugador.
+  ///
+  /// No se pintan en el momento de recibirlos: al resolverse un turno se abre
+  /// una cadena de pantallas (informe → revisión → eliminado → fin de partida) y
+  /// el pop-up quedaría enterrado debajo. Se aparcan aquí y los suelta
+  /// `_drenarTrofeosPendientes()` cuando no hay nada encima. Mismo patrón que
+  /// `_drenarEliminadoPendiente`.
+  ///
+  /// En MODO HISTORIA, cuando la batalla termina, los suelta el propio flujo de
+  /// fin (`_mostrarFinHistoria`) justo ANTES del cartel de enhorabuena.
+  List<TrofeoModel> _trofeosPendientes = const [];
+
   /// Imagen de fondo del mapa de ESTA partida (ruta de asset o URL). Se carga en
   /// _aplicarTerreno desde el documento del mapa. Null → BoardWidget usa la
   /// imagen por defecto.
   String? _imagenMapa;
+
+  /// Plan de bombardeo del turno en curso (batallas de historia con
+  /// bombardeo, p. ej. humanos_1). Lo publica el servidor en el campo
+  /// `bombardeo` de la partida: % por celda y casillas desactivadoras.
+  /// Null en el resto de partidas.
+  BombardeoVista? _bombardeo;
+
+  /// TÚNEL INUNDABLE de la batalla de historia (campo `tunel`, p. ej.
+  /// humanos_2): casillas del túnel, bocas, sin explorar / limpias /
+  /// inundadas. Null si la batalla no tiene túnel. Cambia el movimiento
+  /// (ver [_computeMovableTunel]) y se pinta con HistoriaCapaLayer.
+  TunelVista? _tunel;
+
+  /// MARCAS de la batalla de historia (campo `marcasHistoria`): papeles del
+  /// bot (🎯 cazadores / ⚔ asalto), cartas clave (👑), guarnición del
+  /// jugador (no se mueve) y celdas prohibidas. Null en el resto.
+  MarcasHistoriaVista? _marcasHistoria;
+
+  /// Último turno resuelto del que ya se avisó lo ocurrido en el túnel
+  /// (inundaciones, pasos seguros, cartas ahogadas), para no repetir el aviso.
+  int _tunelTurnoAvisado = 0;
+
+  /// DUELO de generales (campo `duelo`, humanos_3): vidas, parálisis, escudo
+  /// y Rompe escudos. Null en el resto de partidas.
+  DueloVista? _duelo;
+
+  /// Último turno resuelto del duelo del que ya se avisó (golpes, rocas…).
+  int _dueloTurnoAvisado = 0;
+
+  // ── Duelo INVERTIDO (reto «El duelo de Alexander»): el jugador es el jefe ──
+  /// Id sintético de la "habilidad" Lluvia de rocas: se inyecta en la carta
+  /// del jefe SOLO para el panel lateral, para que su ficha muestre el botón
+  /// de lanzar habilidad (sin coste) cuando está lista.
+  static const int _kHabilidadLluviaDuelo = 9102;
+
+  /// True mientras el jugador está eligiendo las casillas de la lluvia.
+  bool _lluviaEligiendo = false;
+
+  /// Lluvia declarada en el servidor: turno y casillas donde caen las rocas.
+  /// Solo vale para `_lluviaTurno`.
+  int _lluviaTurno = 0;
+  Set<String> _lluviaCeldas = const {};
+  bool _lluviaEnviando = false;
 
   /// Lee las coords de los rayos de farmeo del doc/estado. Soporta el formato
   /// nuevo (`rayos`: lista de {coord,...} o `rayoCoords`: lista de coords) y el
@@ -155,9 +216,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// jugar su turno mientras lee, así que tampoco debe consumirlo.
   bool _revisionAbierta = false;
 
+  /// MODO HISTORIA: la ventana explicativa de la batalla está abierta (antes
+  /// del turno 1). El reloj no corre mientras se lee.
+  bool _explicacionAbierta = false;
+
+  /// La ventana explicativa ya se mostró en esta pantalla (una sola vez).
+  bool _explicacionMostrada = false;
+
   /// El reloj del turno no corre mientras haya una pantalla modal encima
-  /// (informe de batalla o revisión del turno anterior).
-  bool get _relojEnPausa => _informeAbierto || _revisionAbierta;
+  /// (informe de batalla, revisión del turno anterior o, en historia, la
+  /// ventana explicativa del principio).
+  bool get _relojEnPausa =>
+      _informeAbierto || _revisionAbierta || _explicacionAbierta;
 
   bool _resolviendo = false;
   bool _isSendingTurn = false;
@@ -189,10 +259,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _juegoTerminado = false;
   String? _ganadorUid;
 
-  /// True cuando ya se ha disparado el diálogo de fin de partida. Evita que
+  /// True cuando el diálogo de fin de partida YA está en pantalla. Evita que
   /// cada sondeo/respuesta HTTP con `estado == finalizada` apile otro diálogo
   /// encima del anterior.
+  ///
+  /// En MODO HISTORIA solo se marca cuando el cartel se ha abierto de verdad
+  /// (ver `_mostrarFinHistoria`): antes se marcaba al PROGRAMARLO, y si ese
+  /// intento se perdía (frame que no llegaba, trofeo o informe abriéndose a la
+  /// vez) la guarda impedía cualquier reintento y la partida se quedaba parada
+  /// hasta salir y volver a entrar.
   bool _finMostrado = false;
+
+  /// MODO HISTORIA: hay un intento de abrir el cartel de fin EN CURSO (esperando
+  /// al frame, cerrando pantallas de encima o enseñando trofeos). Evita lanzar
+  /// dos a la vez sin bloquear los reintentos si este falla.
+  bool _finHistoriaEnCurso = false;
+
+  /// Reintentos consumidos del cartel de fin de historia (tope en
+  /// `_maxReintentosFin`), para no entrar en un bucle si algo falla siempre.
+  int _reintentosFin = 0;
+  static const int _maxReintentosFin = 5;
+
+  /// MODO HISTORIA: la batalla ya se ha dado por abandonada (se pidió al
+  /// servidor que la borrase). Evita repetir la petición desde varios sitios
+  /// (salir, botón atrás, dispose, cierre de la app).
+  bool _historiaAbandonada = false;
 
   /// Hay una eliminación del jugador local pendiente de comunicar. No se
   /// muestra el diálogo en el acto: primero se deja ver el INFORME del turno en
@@ -409,12 +500,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   ///   - Modo acción     → objetivos válidos del controlador + los ya
   ///     elegidos (en muro/fractura los elegidos dejan de ser "válidos" para
   ///     el siguiente paso, pero deben seguir marcados y poder desmarcarse).
-  Set<String> get _highlightCoords => _inActionMode
-      ? {
-          ..._accionController.objetivosValidos,
-          ..._accionController.objetivos,
-        }
-      : _movableCoords;
+  Set<String> get _highlightCoords => _lluviaEligiendo
+      ? _celdasLluviaValidas
+      : _inActionMode
+          ? {
+              ..._accionController.objetivosValidos,
+              ..._accionController.objetivos,
+            }
+          : _movableCoords;
   // ── Snapshot inicial del turno ─────────────────────────────
   BoardState _boardStateInicial = const BoardState();
   List<CartaModel> _handInicial = [];
@@ -1581,6 +1674,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _playerColors = colors;
           _obeliscosPorJugador = obeliscosMap;
           _descargasCuartel = _descargasCuartelFromData(data);
+          _bombardeo = BombardeoVista.fromEstado(data);
+          _leerCapaHistoria(data);
           if (obeliscoLocalDoc != null) _obeliscoLocal = obeliscoLocalDoc;
           if (obeliscoOponenteDoc != null) {
             _obeliscoOponente = obeliscoOponenteDoc;
@@ -1728,6 +1823,35 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // guarda se deja en turnoActual - 2 y se llama a _maybeMostrarInforme.
         _informeMostradoTurno = lobby.turnoActual - 2;
         _cargaCompletada = true;
+
+        // MODO HISTORIA: ventana explicativa antes del primer turno. Se marca
+        // como abierta YA (de forma síncrona, antes de que arranque el reloj
+        // unas líneas más abajo) para que la cuenta atrás no corra mientras se
+        // lee; al cerrarla, el reloj arranca con el turno completo.
+        if (_esHistoria &&
+            lobby.turnoActual == 1 &&
+            !_yoCerreElTurno &&
+            !_juegoTerminado &&
+            !_explicacionMostrada) {
+          _explicacionMostrada = true;
+          _explicacionAbierta = true;
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _mostrarExplicacionHistoria());
+        } else if (!_esHistoria &&
+            data['esReto'] == true &&
+            data['reto'] is Map &&
+            (data['reto'] as Map)['explicacion'] is List &&
+            lobby.turnoActual == 1 &&
+            !_yoCerreElTurno &&
+            !_juegoTerminado &&
+            !_explicacionMostrada) {
+          // RETO (partida normal): misma ventana explicativa al empezar.
+          _explicacionMostrada = true;
+          _explicacionAbierta = true;
+          final reto = Map<String, dynamic>.from(data['reto'] as Map);
+          WidgetsBinding.instance
+              .addPostFrameCallback((_) => _mostrarExplicacionReto(reto));
+        }
 
         // Cargar alias e imagen de perfil reales para el avatar del HUD
         // inferior (best-effort, no bloquea).
@@ -1903,6 +2027,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _informeAbierto = false;
         return;
       }
+      // HISTORIA: si mientras se preparaba el informe (hay un `await` más
+      // arriba) la batalla ha terminado, manda el cartel de fin. No se abre el
+      // informe: quedaría encima del cartel o competiría con él.
+      if (_esHistoria && _juegoTerminado) {
+        _informeAbierto = false;
+        _intentarMostrarFin();
+        return;
+      }
       Navigator.of(context)
           .push(MaterialPageRoute(
         builder: (_) => InformeBatallaScreen(
@@ -1925,6 +2057,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           // Si la partida terminó mientras el informe/revisión estaban abiertos,
           // el diálogo de fin sale ahora (antes podía no salir nunca).
           _intentarMostrarFin();
+          // TROFEOS: al final de la cadena, cuando ya no hay nada encima. Si el
+          // jugador ha sido eliminado o la partida ha terminado, el pop-up sale
+          // por detrás de esos diálogos, que son más importantes.
+          _drenarTrofeosPendientes();
         });
       });
     });
@@ -1980,6 +2116,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _jugadoresEnPartida = lobby.jugadores.length;
         _modoTurno = lobby.modoTurno;
         _descargasCuartel = _descargasCuartelFromData(data);
+        _bombardeo = BombardeoVista.fromEstado(data);
+        _leerCapaHistoria(data);
         if (streamColors.isNotEmpty) _playerColors = streamColors;
         if (streamObeliscos.isNotEmpty) _obeliscosPorJugador = streamObeliscos;
         _currentLobby = lobby;
@@ -2236,16 +2374,107 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // abandona la pantalla sin cerrar el turno (además del hook de ciclo de
     // vida, por si el pop ocurre sin pasar por `paused`). En dispose NO se puede
     // llamar a setState, así que se pide la variante sin reconstruir la UI.
-    _revertirCambiosPorSalidaSiProcede(permitirSetState: false);
+    // En historia no hace falta: la batalla se borra entera (ver abajo).
+    if (!_esHistoria) {
+      _revertirCambiosPorSalidaSiProcede(permitirSetState: false);
+    }
+    // MODO HISTORIA: salir de la pantalla de juego (por el menú, el botón
+    // atrás o cualquier otra vía) sin haber terminado la batalla la cierra: se
+    // borra en el servidor y hay que empezar la historia de nuevo.
+    _abandonarHistoria();
     WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _stopTimer();
     super.dispose();
   }
 
+  /// MODO HISTORIA: da la batalla por ABANDONADA y pide al servidor que la
+  /// borre. Una batalla de historia no aparece en "partidas en juego", así que
+  /// no hay forma de volver a ella: si el jugador sale o cierra la app, tiene
+  /// que empezar la historia de nuevo desde el modo historia.
+  ///
+  /// No hace nada fuera de historia, si la batalla ya terminó (el cartel de fin
+  /// gestiona la salida: siguiente parte, reintentar o volver) o si ya se pidió.
+  /// Fire-and-forget: puede llamarse desde `dispose`.
+  void _abandonarHistoria() {
+    if (!_esHistoria || _historiaAbandonada || _juegoTerminado) return;
+    final id = widget.lobbyId;
+    if (id == null || id.isEmpty) return;
+    _historiaAbandonada = true;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    debugPrint('[WZ][historia] batalla abandonada: $id');
+    HistoriaService().abandonarHistoria(
+      uid: widget.localPlayerUid,
+      lobbyId: id,
+    );
+  }
+
+  /// MODO HISTORIA: ventana explicativa de la batalla (turno 1). «SALIR»
+  /// abandona la batalla (igual que salir por el menú); «¡A LA BATALLA!»
+  /// arranca el reloj del turno desde cero.
+  Future<void> _mostrarExplicacionHistoria() async {
+    if (!mounted || widget.historia == null) {
+      _explicacionAbierta = false;
+      return;
+    }
+    final jugar = await mostrarExplicacionHistoria(
+      context,
+      historia: widget.historia!,
+      segundosTurno: _duracionTurnoRapidoSeg,
+    );
+    if (!mounted) return;
+    _explicacionAbierta = false;
+    if (!jugar) {
+      _abandonarHistoria();
+      _stopTimer();
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+      return;
+    }
+    // El reloj empieza AHORA, con el turno completo.
+    if (_modoTurno == ModoTurno.rapida &&
+        !_yoCerreElTurno &&
+        !_estoyEliminado &&
+        !_juegoTerminado) {
+      _startTimer();
+    }
+  }
+
+  /// RETO de partida normal: ventana explicativa del turno 1. «SALIR» solo
+  /// cierra la pantalla (el reto sigue en curso y se reanuda desde Retos).
+  Future<void> _mostrarExplicacionReto(Map<String, dynamic> reto) async {
+    if (!mounted) {
+      _explicacionAbierta = false;
+      return;
+    }
+    final jugar = await mostrarExplicacionReto(
+      context,
+      reto: reto,
+      segundosTurno:
+          _modoTurno == ModoTurno.rapida ? _duracionTurnoRapidoSeg : 0,
+    );
+    if (!mounted) return;
+    _explicacionAbierta = false;
+    if (!jugar) {
+      _stopTimer();
+      if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+      return;
+    }
+    if (_modoTurno == ModoTurno.rapida &&
+        !_yoCerreElTurno &&
+        !_estoyEliminado &&
+        !_juegoTerminado) {
+      _startTimer();
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.detached) {
+      // La app se está cerrando: en historia la batalla se pierde.
+      _abandonarHistoria();
+    }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       // La app pasa a segundo plano o se cierra: revertir energía revertible.
@@ -2269,6 +2498,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       if (_reembolsoPendienteTrasPausa) {
         _reembolsoPendienteTrasPausa = false;
         _reembolsarPendienteAlReanudar();
+      }
+      // HISTORIA: si la batalla terminó con la app en segundo plano y el cartel
+      // de fin no llegó a abrirse, se reintenta al volver.
+      if (_esHistoria && _juegoTerminado && !_finMostrado) {
+        _intentarMostrarFin();
       }
     }
   }
@@ -2389,6 +2623,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // MURO: no se puede atravesar ni terminar en él (hay que rodearlo). El
         // servidor revierte cualquier movimiento que lo pise o lo cruce.
         if (_boardState.celdaTieneMuro(nCoord)) continue;
+        // Casillas BLOQUEADAS de la historia (pilares del duelo): nadie las
+        // pisa ni las atraviesa.
+        if (_marcasHistoria?.bloqueadas.contains(nCoord) ?? false) continue;
         visited[nCoord] = newSteps;
         if (nCoord != from &&
             _config.canLand(nCoord, tipo) &&
@@ -2402,6 +2639,360 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       }
     }
     return result;
+  }
+
+  /// Vecinas ortogonales de [coord] que existen en la rejilla.
+  List<String> _vecinosOrtogonales(String coord) {
+    final pos = _coordToPos(coord);
+    if (pos == null) return const [];
+    final (ri, ci) = pos;
+    final res = <String>[];
+    const deltas = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+    for (final (dr, dc) in deltas) {
+      final nr = ri + dr;
+      final nc = ci + dc;
+      if (nr < 0 || nr >= _config.rows || nc < 0 || nc >= _config.cols)
+        continue;
+      res.add(_config.coordLabel(nr, nc));
+    }
+    return res;
+  }
+
+  /// Alcance con las reglas del TÚNEL de la historia (ver TunelVista.destinos):
+  /// dentro, mov fijo (2) solo por el túnel; fuera, el túnel es pared salvo
+  /// sus bocas. Mismas restricciones de terreno, muros y escudos que el BFS
+  /// normal para las celdas exteriores.
+  Set<String> _computeMovableTunel(String from, int mov, int tipo) {
+    final t = _tunel;
+    if (t == null) return _computeMovableBFS(from, mov, tipo);
+    final miUid = _localPlayer.datos.uid;
+    return t.destinos(
+      origen: from,
+      movPropio: mov,
+      vecinos: _vecinosOrtogonales,
+      transitable: (c) =>
+          _config.canTraverse(c, tipo) &&
+          !_boardState.celdaTieneMuro(c) &&
+          !(_marcasHistoria?.bloqueadas.contains(c) ?? false),
+      aterriza: (c) =>
+          _config.canLand(c, tipo) &&
+          !_boardState.celdaProtegidaPorRival(c, miUid),
+    );
+  }
+
+  /// True si [carta] es de la GUARNICIÓN del jugador en esta batalla de
+  /// historia (`marcasHistoria.guarnicion`): no se mueve nunca.
+  bool _esGuarnicionHistoria(CartaEnCelda carta) {
+    final g = _marcasHistoria?.guarnicion;
+    if (g == null || g.isEmpty) return false;
+    final iid = carta.instanceId;
+    return g.contains(iid);
+  }
+
+  /// Lee el túnel y las marcas de historia del estado de la partida. Se llama
+  /// junto a la lectura del bombardeo (ya dentro de su setState). Si el turno
+  /// que se acaba de resolver tuvo novedades en el túnel, avisa una vez.
+  void _leerCapaHistoria(Map<String, dynamic> estado) {
+    _tunel = TunelVista.fromEstado(estado);
+    _marcasHistoria = MarcasHistoriaVista.fromEstado(estado);
+    _duelo = DueloVista.fromEstado(estado);
+    // Turno nuevo: se deja de elegir la lluvia del turno anterior.
+    if (_lluviaEligiendo && (_duelo?.turno ?? 0) != _lluviaTurno) {
+      _lluviaEligiendo = false;
+    }
+    _avisarDuelo();
+    final t = _tunel;
+    if (t == null ||
+        t.ultimoTurno <= 0 ||
+        t.ultimoTurno <= _tunelTurnoAvisado) {
+      return;
+    }
+    _tunelTurnoAvisado = t.ultimoTurno;
+    final partes = <String>[];
+    for (final c in t.ultimoLimpias) {
+      partes.add('✓ Paso seguro en $c');
+    }
+    if (t.ultimoAhogadas.isNotEmpty) {
+      final porCelda = <String, List<String>>{};
+      for (final a in t.ultimoAhogadas) {
+        porCelda.putIfAbsent(a.coord, () => []).add(a.nombre);
+      }
+      porCelda
+          .forEach((c, n) => partes.add('💧 $c se inunda: ${n.join(', ')}'));
+    } else if (t.ultimoInundadas.isNotEmpty) {
+      partes.add('💧 Se inunda ${t.ultimoInundadas.join(', ')}');
+    }
+    for (final r in t.ultimoRevertidas) {
+      partes.add('⛔ ${r.nombre} no puede ir a ${r.desde}: vuelve a ${r.hacia}');
+    }
+    if (partes.isEmpty) return;
+    final hayMuertes = t.ultimoAhogadas.isNotEmpty;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _toast('Túnel · ${partes.join(' · ')}', error: hayMuertes);
+    });
+  }
+
+  /// Aviso (una vez por turno resuelto) de lo ocurrido en el DUELO: rocas,
+  /// rompe escudos, parálisis, golpes, separación…
+  void _avisarDuelo() {
+    final d = _duelo;
+    if (d == null ||
+        d.ultimoTurno <= 0 ||
+        d.ultimoTurno <= _dueloTurnoAvisado) {
+      return;
+    }
+    _dueloTurnoAvisado = d.ultimoTurno;
+    // La línea genérica "Lluvia de rocas: N impactos" no aporta si nadie fue
+    // alcanzado; se muestran el resto de eventos.
+    final textos = d.eventos
+        .where((e) => !(e.tipo == 'lluvia' && d.eventos.length > 1))
+        .map((e) => e.texto)
+        .toList();
+    if (textos.isEmpty) return;
+    final malo = d.eventos.any((e) => e.malo);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _toast(textos.join('\n'), error: malo);
+    });
+  }
+
+  /// Uid sintético del bot de historia (WarZeroHistoria.HistoriaBotUid).
+  static const String _historiaBotUid = 'historia_bot';
+
+  /// Bandos que el tablero pinta como "pila amistosa" (sin vista previa de
+  /// combate). En un DUELO de historia no hay combate normal: cuando un general
+  /// comparte casilla con el jefe (Alvaroth sujetándolo) el servidor no resuelve
+  /// ningún combate, así que se trata al bot como aliado SOLO para el render y
+  /// no se pinta el ⚔ con el poder de cada uno.
+  Set<String> get _aliadosTablero {
+    if (_duelo == null) return _aliadosLocal;
+    return {
+      ..._aliadosLocal,
+      widget.localPlayerUid,
+      _historiaBotUid,
+    };
+  }
+
+  /// Capa de historia para el tablero (null si la batalla no la usa).
+  CapaHistoriaVista? get _capaHistoria {
+    if (_tunel == null && _marcasHistoria == null && _duelo == null)
+      return null;
+    final vip = _marcasHistoria?.vip ?? const <String>{};
+    final celdasVip = <String>{};
+    if (vip.isNotEmpty) {
+      for (final e in _boardState.celdas.entries) {
+        if (e.value.cartas.any((c) => vip.contains(c.instanceId))) {
+          celdasVip.add(e.key);
+        }
+      }
+    }
+    // Celda de cada carta del duelo (para pintar sus vidas).
+    final posiciones = <String, String>{};
+    final d = _duelo;
+    if (d != null) {
+      for (final e in _boardState.celdas.entries) {
+        for (final c in e.value.cartas) {
+          if (d.roles.containsKey(c.instanceId))
+            posiciones[c.instanceId] = e.key;
+        }
+      }
+    }
+    final lluviaVigente = _lluviaTurno == _boardState.turnoActual;
+    return CapaHistoriaVista(
+      tunel: _tunel,
+      marcas: _marcasHistoria,
+      celdasVip: d != null ? const {} : celdasVip,
+      turno: _boardState.turnoActual,
+      duelo: d,
+      posiciones: posiciones,
+      lluviaCeldas: lluviaVigente ? _lluviaCeldas : const {},
+      lluviaEligiendo: _lluviaEligiendo,
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // DUELO INVERTIDO (el jugador es el jefe)
+  // ─────────────────────────────────────────────────────────
+
+  /// True si en esta partida el jugador local lleva al JEFE del duelo.
+  bool get _soyJefeDuelo {
+    final d = _duelo;
+    if (d == null || !d.jugadorEsJefe) return false;
+    return d.jefeUid.isEmpty || d.jefeUid == widget.localPlayerUid;
+  }
+
+  /// True si [carta] es el jefe del duelo y es del jugador local.
+  bool _esJefeDueloLocal(CartaEnCelda carta) =>
+      _soyJefeDuelo &&
+      carta.ownerUid == widget.localPlayerUid &&
+      _duelo!.roles[carta.instanceId] == 'jefe';
+
+  /// True si el jugador ha lanzado (declarado) la lluvia este turno.
+  bool get _lluviaLanzada =>
+      _lluviaTurno == _boardState.turnoActual && _lluviaCeldas.isNotEmpty;
+
+  /// True si [carta] es el jefe del jugador y este turno no puede moverse
+  /// (paralizado o canalizando la lluvia). El servidor lo revierte igual.
+  bool _esJefeInmovilDuelo(CartaEnCelda carta) =>
+      _esJefeDueloLocal(carta) &&
+      (_duelo!.jefeInmovil(_boardState.turnoActual) || _lluviaLanzada);
+
+  /// Celda del jefe del jugador (null si no está en el tablero).
+  String? get _celdaJefeDuelo {
+    for (final e in _boardState.celdas.entries) {
+      if (e.value.cartas.any(_esJefeDueloLocal)) return e.key;
+    }
+    return null;
+  }
+
+  /// Casillas donde puede caer una roca: todo el tablero menos las bloqueadas
+  /// y la del propio Alexander.
+  Set<String> get _celdasLluviaValidas {
+    final bloqueadas = _marcasHistoria?.bloqueadas ?? const <String>{};
+    final jefe = _celdaJefeDuelo;
+    final res = <String>{};
+    for (final r in _config.rowLabels) {
+      for (final c in _config.colLabels) {
+        final coord = '$r$c';
+        if (!bloqueadas.contains(coord) && coord != jefe) res.add(coord);
+      }
+    }
+    return res;
+  }
+
+  /// Celda del panel lateral con la "habilidad" Lluvia de rocas inyectada en
+  /// la carta del jefe (sin coste) cuando se puede lanzar este turno (o ya se
+  /// ha lanzado, para poder cambiarla). Solo es para pintar el botón de la
+  /// ficha: la carta real del tablero no cambia.
+  CeldaState? _celdaConLluvia(CeldaState? celda) {
+    final d = _duelo;
+    if (celda == null || d == null || !_soyJefeDuelo) return celda;
+    if (!d.lluviaLista(_boardState.turnoActual) && !_lluviaLanzada)
+      return celda;
+    var cambia = false;
+    final cartas = celda.cartas.map((c) {
+      if (!_esJefeDueloLocal(c)) return c;
+      cambia = true;
+      return c.copyWith(
+        carta: c.carta.copyWith(
+          idHabilidad: _kHabilidadLluviaDuelo,
+          costeHabilidad: 0,
+          enfriamientoHabilidad: 0,
+        ),
+      );
+    }).toList();
+    return cambia ? celda.withCartas(cartas) : celda;
+  }
+
+  /// Pulsado LANZAR HABILIDAD en la ficha del jefe: elegir casillas.
+  void _iniciarLluviaDuelo() {
+    final d = _duelo;
+    final turno = _boardState.turnoActual;
+    if (d == null || (!d.lluviaLista(turno) && !_lluviaLanzada)) {
+      _toast(
+          'La lluvia de rocas se está recargando'
+          '${d != null ? ' (lista en el turno ${d.lluviaListaEnTurno})' : ''}.',
+          error: true);
+      return;
+    }
+    final jefeMovido = _boardState.celdas.values.expand((c) => c.cartas).any(
+        (c) =>
+            _esJefeDueloLocal(c) &&
+            _cartasQueSeMovieron.contains(c.instanceId));
+    if (jefeMovido) {
+      _toast(
+          'Lanzar la lluvia te obliga a quedarte quieto: deshaz antes el '
+          'movimiento de Alexander.',
+          error: true);
+      return;
+    }
+    setState(() {
+      _selectedHandIndex = null;
+      _cancelMoveMode();
+      _sidebarOpen = false;
+      _lluviaEligiendo = true;
+      if (_lluviaTurno != turno) {
+        _lluviaTurno = turno;
+        _lluviaCeldas = const {};
+      }
+    });
+    final filas = d.lluviaMaxFilas > 0
+        ? 'en ${d.lluviaMaxFilas} filas como mucho'
+        : 'en cualquier fila';
+    _toast(
+        '🪨 Toca las casillas donde caerán las rocas: ${d.lluviaPorFila} por '
+        'fila, $filas. Toca una elegida para quitarla y toca a Alexander para '
+        'terminar. Este turno no te moverás.');
+  }
+
+  /// Toque en el tablero mientras se eligen las casillas de la lluvia.
+  Future<void> _tocarCasillaLluvia(String coord) async {
+    final d = _duelo;
+    final lobbyId = widget.lobbyId;
+    if (d == null || lobbyId == null || lobbyId.isEmpty || _yoCerreElTurno) {
+      setState(() => _lluviaEligiendo = false);
+      return;
+    }
+    // Tocar a Alexander = terminar de elegir (la lluvia ya está declarada).
+    if (coord == _celdaJefeDuelo) {
+      setState(() => _lluviaEligiendo = false);
+      _toast(_lluviaCeldas.isEmpty
+          ? 'No has lanzado la lluvia.'
+          : '🪨 Lluvia lanzada sobre ${(_lluviaCeldas.toList()..sort()).join(', ')}. '
+              'Se resolverá al cerrar el turno.');
+      return;
+    }
+    if (!_celdasLluviaValidas.contains(coord)) {
+      _toast('Ahí no puede caer una roca.', error: true);
+      return;
+    }
+    if (_lluviaEnviando) return;
+
+    // Nueva selección: quitar si ya estaba; si la fila está llena, se cambia
+    // la de esa fila; si no caben más filas, aviso.
+    final nueva = {..._lluviaCeldas};
+    if (!nueva.remove(coord)) {
+      final fila = coord.substring(0, 1);
+      final enFila = nueva.where((c) => c.substring(0, 1) == fila).toList()
+        ..sort();
+      if (enFila.length >= d.lluviaPorFila) {
+        nueva.remove(enFila.first);
+      } else {
+        final filas = nueva.map((c) => c.substring(0, 1)).toSet();
+        if (d.lluviaMaxFilas > 0 && filas.length >= d.lluviaMaxFilas) {
+          _toast('Como mucho ${d.lluviaMaxFilas} filas: quita antes una roca.',
+              error: true);
+          return;
+        }
+      }
+      nueva.add(coord);
+    }
+
+    final turno = _boardState.turnoActual;
+    final previas = _lluviaCeldas;
+    setState(() {
+      _lluviaEnviando = true;
+      _lluviaTurno = turno;
+      _lluviaCeldas = nueva;
+      if (nueva.isEmpty) _lluviaEligiendo = false;
+    });
+    final res = await HistoriaService().declararLluvia(
+      uid: widget.localPlayerUid,
+      lobbyId: lobbyId,
+      turno: turno,
+      coords: nueva.toList()..sort(),
+    );
+    if (!mounted) return;
+    setState(() {
+      _lluviaEnviando = false;
+      _lluviaCeldas = res.ok ? res.coords : previas;
+    });
+    if (!res.ok) {
+      _toast('No se pudo lanzar la lluvia: ${res.error}', error: true);
+    } else if (res.coords.isEmpty) {
+      _toast('Lluvia anulada: puedes volver a moverte.');
+    }
   }
 
   // ─────────────────────────────────────────────────────────
@@ -2446,6 +3037,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   void _onCellTap(String coord, int ri, int ci) {
+    // ── Duelo: eligiendo las casillas de la lluvia ────────
+    if (_lluviaEligiendo) {
+      _tocarCasillaLluvia(coord);
+      return;
+    }
     // ── Modo acción: selección de objetivos ────────────────
     if (_inActionMode) {
       _handleCellTapEnAccion(coord);
@@ -3130,8 +3726,36 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             !_cartasQueUsaronHabilidad.contains(celda.cartas[i].instanceId) &&
             !celda.cartas[i].carta.esEstatica &&
             !celda.cartas[i].paralizado &&
-            !celda.cartas[i].confundida)
+            !celda.cartas[i].confundida &&
+            !_esGuarnicionHistoria(celda.cartas[i]) &&
+            !_esJefeInmovilDuelo(celda.cartas[i]))
         .toList();
+
+    if (validIndices.isEmpty) {
+      final jefeQuieto = indices.any((i) =>
+          i < celda.cartas.length && _esJefeInmovilDuelo(celda.cartas[i]));
+      if (jefeQuieto) {
+        final d = _duelo!;
+        _toast(
+            d.paralizado(_boardState.turnoActual)
+                ? '🔗 Estás paralizado: este turno no puedes moverte'
+                : '🪨 Canalizas la lluvia de rocas: este turno no te mueves',
+            error: true);
+        return;
+      }
+    }
+
+    if (validIndices.isEmpty) {
+      final algunaGuarnicion = indices.any((i) =>
+          i < celda.cartas.length &&
+          celda.cartas[i].ownerUid == _localPlayer.datos.uid &&
+          _esGuarnicionHistoria(celda.cartas[i]));
+      if (algunaGuarnicion) {
+        _toast('🏰 Guarnición: estas cartas no salen nunca del cuartel',
+            error: true);
+        return;
+      }
+    }
 
     if (validIndices.isEmpty) {
       final algunaUsoHabilidad = indices.any((i) =>
@@ -3261,10 +3885,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // marina (antes se colaba porque el grupo tomaba el tipo de la marina).
     Set<String>? destinos;
     for (final t in tipos) {
-      final alcance = _computeMovableBFS(_sidebarCoord!, minMov, t);
+      // Batallas con TÚNEL (humanos_2): movimiento con sus reglas (paredes,
+      // bocas, mov 2 dentro, casillas sin explorar/inundadas).
+      final alcance = _tunel != null
+          ? _computeMovableTunel(_sidebarCoord!, minMov, t)
+          : _computeMovableBFS(_sidebarCoord!, minMov, t);
       destinos = destinos == null ? alcance : destinos.intersection(alcance);
     }
     destinos ??= <String>{};
+    // Celdas en las que el jugador no puede entrar (p. ej. el cuartel nominal
+    // del bot en humanos_2). El servidor revertiría el movimiento.
+    final prohibidas = _marcasHistoria?.prohibidas ?? const <String>{};
+    if (prohibidas.isNotEmpty) destinos = destinos.difference(prohibidas);
 
     if (destinos.isEmpty && tipos.length > 1) {
       _toast(
@@ -3552,6 +4184,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _toast('No puedes lanzar habilidades ahora.', error: true);
       return;
     }
+    // Duelo invertido: el botón de habilidad del jefe es la lluvia de rocas.
+    if (_esJefeDueloLocal(carta)) {
+      _iniciarLluviaDuelo();
+      return;
+    }
     if (!carta.habilidadDisponible(_boardState.turnoActual)) {
       _toast('La habilidad está en enfriamiento.', error: true);
       return;
@@ -3644,13 +4281,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _showCartaPropiaModal() async {
     // Destino/objetivo ya elegido en la fase anterior.
     //   - Teletransporte: es la celda DESTINO donde caerá la carta.
-    //   - Invisibilidad: es la celda que CONTIENE la carta propia a ocultar.
+    //   - Clon:           es la celda donde aparecerá el señuelo.
+    //   - Invisibilidad:  es la celda que CONTIENE la carta propia a ocultar.
+    //   - Supervivencia:  es la celda que CONTIENE la carta propia a proteger.
     final destino = _accionController.objetivos.isNotEmpty
         ? _accionController.objetivos.first
         : null;
 
     final esInvisibilidad =
         _accionController.habilidad?.efecto.tipo == EfectoTipo.invisibilidad;
+    final esSupervivencia =
+        _accionController.habilidad?.efecto.tipo == EfectoTipo.supervivencia;
     final esClon = _accionController.habilidad?.efecto.tipo == EfectoTipo.clon;
 
     final candidatos = <_CartaPropiaRef>[];
@@ -3668,14 +4309,23 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           candidatos.add(_CartaPropiaRef(coord: coord, indice: i, carta: c));
         }
       });
-    } else if (esInvisibilidad) {
-      // Invisibilidad: solo las cartas PROPIAS de la celda objetivo. No hay
-      // restricción de terreno (la carta no se mueve).
+    } else if (esInvisibilidad || esSupervivencia) {
+      // Invisibilidad y supervivencia: solo las cartas PROPIAS de la celda
+      // objetivo. No hay restricción de terreno porque la carta no se mueve
+      // ahora (la supervivencia solo se cobra si más adelante pierde un
+      // combate, y es entonces cuando el servidor comprueba el terreno).
+      //
+      // La supervivencia descarta además lo que nunca podría huir: un clon (es
+      // un señuelo que desaparece solo) y una carta estática (no se mueve
+      // nunca). Son los mismos dos descartes que hace el servidor en
+      // `Habilidades.AplicarSupervivencia`, así que aquí evitamos ofrecer una
+      // carta cuya acción el servidor iba a rechazar.
       if (destino != null) {
         final celda = _boardState.getCelda(destino);
         for (int i = 0; i < celda.cartas.length; i++) {
           final c = celda.cartas[i];
           if (c.ownerUid != _localPlayer.datos.uid) continue;
+          if (esSupervivencia && (c.esClon || c.carta.esEstatica)) continue;
           candidatos.add(_CartaPropiaRef(coord: destino, indice: i, carta: c));
         }
       }
@@ -3701,13 +4351,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _toast(
           esInvisibilidad
               ? 'No tienes ninguna carta propia en esa celda.'
-              : esClon
-                  ? (destino != null
-                      ? 'Ninguna de tus cartas puede clonarse en $destino.'
-                      : 'No tienes cartas en el tablero para clonar.')
-                  : (destino != null
-                      ? 'Ninguna de tus cartas puede aterrizar en $destino.'
-                      : 'No tienes cartas en el tablero para teletransportar.'),
+              : esSupervivencia
+                  ? 'No tienes en esa celda ninguna carta que pueda huir '
+                      '(los clones y las cartas estáticas no pueden).'
+                  : esClon
+                      ? (destino != null
+                          ? 'Ninguna de tus cartas puede clonarse en $destino.'
+                          : 'No tienes cartas en el tablero para clonar.')
+                      : (destino != null
+                          ? 'Ninguna de tus cartas puede aterrizar en $destino.'
+                          : 'No tienes cartas en el tablero para teletransportar.'),
           error: true);
       _cancelarAccion();
       return;
@@ -3763,7 +4416,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                                 fontSize: 10,
                                 color: Color(0xFFB0A090))),
                       ),
-                      Text('${r.carta.carta.fuerza}⚔',
+                      Text('${r.carta.fuerzaBase}⚔',
                           style: const TextStyle(
                               fontFamily: 'Cinzel',
                               fontSize: 10,
@@ -4218,6 +4871,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             'Efectos': c.efectos.map((e) => e.toMap()).toList(),
           if (c.ultimoUsoHabilidad != null)
             'UltimoUsoHabilidad': c.ultimoUsoHabilidad,
+          // Supervivencia: penalización acumulada de fuerza (-25% por huida).
+          // El servidor la re-sella con Math.Max(previo, enviado), pero si no
+          // se manda el tablero local muestra la fuerza sin penalizar hasta el
+          // siguiente refresco.
+          if (c.supervivenciaPenalizacion > 0)
+            'SupervivenciaPenalizacion': c.supervivenciaPenalizacion,
           // Clones: el servidor es autoritativo (los valida contra el turno
           // anterior), pero se reenvía la marca por coherencia.
           if (c.esClon) 'esClon': true,
@@ -4440,6 +5099,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   Future<void> _cerrarTurno() async {
     if (!mounted) return;
     if (_yoCerreElTurno || _isSendingTurn || _estoyEliminado) return;
+    // Batalla/partida ya terminada: no hay turno que cerrar.
+    if (_juegoTerminado) return;
 
     // El reloj se para AQUÍ y de verdad (cancelando el Timer): si solo se
     // bajaba el flag, un tick pendiente podía volver a entrar.
@@ -4520,6 +5181,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 _cerradoPor.where((u) => u != widget.localPlayerUid).toList();
           });
           _toast('Error: ${e.toString().split(']').last.trim()}', error: true);
+          // Puede que el cierre SÍ llegara y el servidor ya resolviera el turno
+          // (o terminara la batalla) y lo que se perdió fue la RESPUESTA, p. ej.
+          // por un timeout. Se refresca el estado ya para aplicarlo en el acto,
+          // en vez de dejar la pantalla parada esperando al siguiente sondeo.
+          unawaited(_checkRefresh());
           return;
         }
       }
@@ -4536,7 +5202,35 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       // que aplica el tablero nuevo y abre el informe de inmediato.
       final cierre = turnService.ultimoCierre;
       debugPrint('[WZ][cerrar] ultimoCierre.resuelto=${cierre?.resuelto} '
-          'turnoActual=${cierre?.turnoActual}');
+          'turnoActual=${cierre?.turnoActual} '
+          'finalizada=${cierre?.finalizada}');
+
+      // TROFEOS: se aparcan ANTES de aplicar el estado, porque `_aplicarEstado`
+      // puede disparar la cadena informe → revisión → fin, y el drenaje que va
+      // al final de esa cadena tiene que encontrarlos ya en la cola.
+      //
+      // El servidor los da por MOSTRADOS en cuanto los manda en esta respuesta,
+      // así que no hay una segunda oportunidad de pedirlos: o se aparcan aquí o
+      // se pierde la celebración.
+      if (cierre != null && cierre.trofeosNuevos.isNotEmpty) {
+        _trofeosPendientes = [..._trofeosPendientes, ...cierre.trofeosNuevos];
+        debugPrint('[WZ][trofeos] ${cierre.trofeosNuevos.length} recibido(s) '
+            'al cerrar turno; en cola: ${_trofeosPendientes.length}');
+      }
+
+      // MODO HISTORIA: la propia respuesta del cierre dice si la batalla ha
+      // terminado (`finalizada` + `ganadorUid`). Se marca AQUÍ, antes de aplicar
+      // el estado, para no depender de que el estado adjunto traiga
+      // `estado == 'finalizada'` ni de que llegue el siguiente sondeo. Así el
+      // informe del último turno no llega a abrirse y el cartel de fin sale ya.
+      if (_esHistoria && cierre != null && cierre.finalizada) {
+        final ganador = cierre.ganadorUid;
+        setState(() {
+          _juegoTerminado = true;
+          if (ganador != null && ganador.isNotEmpty) _ganadorUid = ganador;
+        });
+      }
+
       if (cierre != null && cierre.resuelto) {
         if (mounted) setState(() => _isSendingTurn = false);
         // Camino HTTP puro: el estado viene en la propia respuesta del cierre.
@@ -4545,6 +5239,24 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         } else {
           await _checkRefresh(turnoEsperado: cierre.turnoActual);
         }
+        // HISTORIA terminada: el cartel de fin (con los trofeos delante).
+        if (_esHistoria && _juegoTerminado) {
+          _intentarMostrarFin();
+          return;
+        }
+        // Si el informe se va a abrir, esta llamada no hace nada y el pop-up
+        // sale al final de su cadena (ver 8.c.5). Si NO se abre (informe ya
+        // abierto, partida terminada, modo historia…), sale aquí.
+        await _drenarTrofeosPendientes();
+        return;
+      }
+
+      // HISTORIA terminada aunque la respuesta no marque `resuelto` (p. ej. un
+      // reintento que encontró el turno ya avanzado): cartel de fin directo.
+      if (_esHistoria && _juegoTerminado) {
+        if (mounted) setState(() => _isSendingTurn = false);
+        if (cierre?.estado != null) _aplicarEstado(cierre!.estado!);
+        _intentarMostrarFin();
         return;
       }
 
@@ -4570,6 +5282,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     if (mounted) setState(() => _isSendingTurn = false);
     _toast('Turno cerrado. Esperando a los demás…');
+
+    // Red de seguridad: si quedó algún trofeo en la cola de un turno anterior
+    // cuyo drenaje se aplazó (porque había un informe abierto), sale ahora.
+    await _drenarTrofeosPendientes();
   }
 
   void _endTurn() => _cerrarTurno();
@@ -4614,6 +5330,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _confirmExit() async {
+    // MODO HISTORIA: salir cierra la batalla (no se puede retomar después).
+    final historia = _esHistoria && !_juegoTerminado;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -4622,15 +5340,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           borderRadius: BorderRadius.circular(8),
           side: const BorderSide(color: Color(0x40C8A860), width: 1),
         ),
-        title: const Text('SALIR DE LA PARTIDA',
-            style: TextStyle(
+        title: Text(historia ? 'ABANDONAR LA BATALLA' : 'SALIR DE LA PARTIDA',
+            style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 12,
                 color: Color(0xFFC8A860),
                 letterSpacing: 1.5)),
-        content: const Text(
-            'Tu progreso de este turno se perderá si no cerraste el turno. ¿Salir al menú?',
-            style: TextStyle(
+        content: Text(
+            historia
+                ? 'Si sales, la batalla se cerrará y tendrás que empezar la '
+                    'historia de nuevo desde el principio. ¿Abandonar?'
+                : 'Tu progreso de este turno se perderá si no cerraste el turno. ¿Salir al menú?',
+            style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 10,
                 color: Color(0xFF8A9AAA),
@@ -4646,8 +5367,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('SALIR',
-                style: TextStyle(
+            child: Text(historia ? 'ABANDONAR' : 'SALIR',
+                style: const TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 9,
                     color: Color(0xFFC04040),
@@ -4657,11 +5378,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       ),
     );
     if (confirm == true && mounted) {
-      // BUG QAS #2: al salir a mitad de turno se DESHACEN los gastos no
-      // consolidados (se devuelven los Zeros de despliegues/compras/evoluciones
-      // y se desmarcan las especiales compradas este turno). El tablero revierte
-      // solo al reentrar porque no se persiste a mitad de turno.
-      _revertirGastosServidor();
+      if (historia) {
+        // La batalla se borra entera en el servidor: no hay gastos que
+        // devolver, simplemente deja de existir.
+        _abandonarHistoria();
+      } else {
+        // BUG QAS #2: al salir a mitad de turno se DESHACEN los gastos no
+        // consolidados (se devuelven los Zeros de despliegues/compras/evoluciones
+        // y se desmarcan las especiales compradas este turno). El tablero revierte
+        // solo al reentrar porque no se persiste a mitad de turno.
+        _revertirGastosServidor();
+      }
       _pollTimer?.cancel();
       Navigator.of(context).pop();
     }
@@ -4703,6 +5430,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _cerradoPor = cerradoPor;
         if (jugadores.isNotEmpty) _jugadoresEnPartida = jugadores.length;
         _descargasCuartel = _descargasCuartelFromData(estado);
+        _bombardeo = BombardeoVista.fromEstado(estado);
+        _leerCapaHistoria(estado);
       });
 
       // ── Eliminación por esta ruta HTTP ────────────────────────────────────
@@ -5000,6 +5729,37 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
+  /// Muestra los trofeos aparcados, si es buen momento.
+  ///
+  /// Se puede llamar tantas veces como haga falta: si hay algo encima (informe o
+  /// revisión) no hace nada y el siguiente punto de drenaje lo recogerá. La cola
+  /// se vacía ANTES de abrir el pop-up, así que dos llamadas seguidas no
+  /// muestran el mismo trofeo dos veces.
+  Future<void> _drenarTrofeosPendientes() async {
+    if (!mounted || _trofeosPendientes.isEmpty) return;
+    // MODO HISTORIA terminada y cartel de fin AÚN sin abrir: los trofeos los
+    // enseña el propio flujo de fin (`_mostrarFinHistoria`), uno detrás de otro
+    // y JUSTO ANTES del cartel de enhorabuena. Si se abrieran aquí competirían
+    // con él: el cierre de pantallas del fin los retiraba a medias y el cartel
+    // podía no llegar a mostrarse. Si el cartel ya está en pantalla, sí se
+    // enseñan encima (se cierran con su botón y el cartel queda debajo).
+    if (_esHistoria && _juegoTerminado && !_finMostrado) {
+      debugPrint('[WZ][trofeos] drenaje delegado al fin de historia '
+          '(${_trofeosPendientes.length} en cola)');
+      return;
+    }
+    // No pisar el informe de batalla ni la revisión del turno.
+    if (_informeAbierto || _revisionAbierta) {
+      debugPrint('[WZ][trofeos] drenaje aplazado: informe=$_informeAbierto '
+          'revision=$_revisionAbierta');
+      return;
+    }
+    final pendientes = List<TrofeoModel>.from(_trofeosPendientes);
+    _trofeosPendientes = const [];
+    debugPrint('[WZ][trofeos] mostrando ${pendientes.length} trofeo(s)');
+    await mostrarTrofeosConseguidos(context, pendientes);
+  }
+
   // ── Diálogo de eliminación ────────────────────────────────
   void _showEliminadoDialog() {
     if (!mounted) return;
@@ -5117,28 +5877,17 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   // ── Diálogo de fin de partida ─────────────────────────────
   /// Punto ÚNICO de entrada al diálogo de fin. Garantiza que sale UNA sola vez
   /// y en el momento adecuado:
-  ///   · HISTORIA: en el acto y BLOQUEANDO la pantalla. Se detienen sondeo y
-  ///     reloj, y se cierra cualquier pantalla abierta encima de la partida
-  ///     (informe, revisión, cuartel…) para que el mensaje quede sobre el
-  ///     tablero y, al aceptarlo, se pueda cerrar la partida entera.
+  ///   · HISTORIA: en el acto y BLOQUEANDO la pantalla (ver
+  ///     `_mostrarFinHistoria`). Se puede llamar tantas veces como haga falta:
+  ///     si ya hay un intento en curso o el cartel ya está en pantalla, no hace
+  ///     nada; si un intento anterior falló, lo reintenta.
   ///   · PvP: espera a que se cierren el informe y su revisión (se reintenta
   ///     desde su `whenComplete`), como hasta ahora.
   void _intentarMostrarFin() {
     if (!mounted || !_juegoTerminado || _finMostrado) return;
 
     if (_esHistoria) {
-      _finMostrado = true;
-      _pollTimer?.cancel();
-      _pollTimer = null;
-      _stopTimer();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final ruta = ModalRoute.of(context);
-        if (ruta != null && !ruta.isCurrent) {
-          Navigator.of(context).popUntil((r) => r == ruta);
-        }
-        _showFinPartidaDialog();
-      });
+      _mostrarFinHistoria();
       return;
     }
 
@@ -5147,6 +5896,102 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _showFinPartidaDialog();
     });
+  }
+
+  /// MODO HISTORIA: abre el cartel de fin (enhorabuena / derrota) de forma
+  /// robusta. Es la causa del bug "al completar la parte 1 la partida se queda
+  /// parada y hay que salir y volver a entrar para ver el cartel":
+  ///
+  ///   · Antes se marcaba `_finMostrado` al PROGRAMAR el cartel (en un
+  ///     `addPostFrameCallback`), se paraba el sondeo y se confiaba en que ese
+  ///     callback llegara y funcionara. Si algo lo impedía, la guarda bloqueaba
+  ///     cualquier reintento y el sondeo ya estaba parado: pantalla congelada.
+  ///   · Además, desde que existen los trofeos, la misma respuesta que termina
+  ///     la batalla trae los trofeos ganados y su pop-up se abría A LA VEZ que
+  ///     el cartel; el cierre de pantallas del fin los retiraba a medias.
+  ///
+  /// Ahora:
+  ///   1. Se espera al final del frame con `endOfFrame`, que además FUERZA un
+  ///      frame si no había ninguno programado (un post-frame callback no lo
+  ///      hace y podía quedarse esperando indefinidamente).
+  ///   2. Se cierra lo que haya encima de la partida (informe, revisión,
+  ///      cuartel…).
+  ///   3. Se enseñan los trofeos pendientes, uno detrás de otro.
+  ///   4. Se abre el cartel y SOLO ENTONCES se marca `_finMostrado`.
+  ///   5. Si algo falla, se reintenta (con tope) en lugar de quedarse parado.
+  Future<void> _mostrarFinHistoria() async {
+    if (_finHistoriaEnCurso || _finMostrado) return;
+    _finHistoriaEnCurso = true;
+
+    // La batalla ha terminado: ni sondeo ni reloj de turno.
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _stopTimer();
+
+    var mostrado = false;
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+
+      _cerrarPantallasSobrePartida();
+
+      // Trofeos ganados en esta batalla: primero, y de uno en uno. El `await`
+      // no vuelve hasta que el jugador los ha cerrado todos.
+      if (_trofeosPendientes.isNotEmpty) {
+        final trofeos = List<TrofeoModel>.from(_trofeosPendientes);
+        _trofeosPendientes = const [];
+        debugPrint('[WZ][fin] ${trofeos.length} trofeo(s) antes del cartel');
+        await mostrarTrofeosConseguidos(context, trofeos);
+        if (!mounted) return;
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+        // Por si mientras tanto se abrió algo encima (p. ej. un informe).
+        _cerrarPantallasSobrePartida();
+      }
+
+      if (_finMostrado) return; // otra vía ya lo abrió
+      _finMostrado = true;
+      mostrado = true;
+      debugPrint('[WZ][fin] cartel de fin de historia '
+          '(gano=${_ganadorUid == widget.localPlayerUid})');
+      _showFinPartidaDialog();
+
+      // Trofeos que hayan llegado mientras se mostraban los anteriores: encima
+      // del cartel (se cierran con su botón y el cartel queda debajo).
+      if (_trofeosPendientes.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _drenarTrofeosPendientes();
+        });
+      }
+    } catch (e, st) {
+      debugPrint('[WZ][fin] no se pudo abrir el cartel de historia: $e\n$st');
+      if (!mostrado) _finMostrado = false;
+    } finally {
+      _finHistoriaEnCurso = false;
+    }
+
+    // Red de seguridad: si no llegó a abrirse, reintentar (con tope).
+    if (!mostrado &&
+        mounted &&
+        _juegoTerminado &&
+        !_finMostrado &&
+        _reintentosFin < _maxReintentosFin) {
+      _reintentosFin++;
+      debugPrint('[WZ][fin] reintento $_reintentosFin/$_maxReintentosFin');
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted) _intentarMostrarFin();
+      });
+    }
+  }
+
+  /// Cierra todas las pantallas abiertas ENCIMA de la partida (informe,
+  /// revisión, cuartel, diálogos…) para que el cartel de fin quede sobre el
+  /// tablero y, al aceptarlo, se pueda cerrar la partida entera.
+  void _cerrarPantallasSobrePartida() {
+    if (!mounted) return;
+    final ruta = ModalRoute.of(context);
+    if (ruta == null || !ruta.isActive || ruta.isCurrent) return;
+    Navigator.of(context).popUntil((r) => r == ruta);
   }
 
   void _showFinPartidaDialog() {
@@ -5354,9 +6199,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     // Celda visible para el jugador local: oculta las cartas invisibles del
     // rival también en el sidebar (las propias se conservan).
-    final sidebarCelda = _sidebarCoord != null
+    final sidebarCelda = _celdaConLluvia(_sidebarCoord != null
         ? _boardState.celdaVisiblePara(_sidebarCoord!, _localPlayer.datos.uid)
-        : null;
+        : null);
     final sidebarTerrain = (_sidebarRi != null && _sidebarCi != null)
         ? _config.terrain(_sidebarRi!, _sidebarCi!)
         : null;
@@ -5376,6 +6221,33 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final String? selectedCoord =
         _inMoveMode ? _moveFromCoord : (_sidebarOpen ? _sidebarCoord : null);
 
+    // MODO HISTORIA: el botón atrás del sistema no puede sacar al jugador de la
+    // batalla sin avisar (salir la cierra y hay que empezar de nuevo): pasa por
+    // el mismo diálogo que "Salir de la partida". Terminada la batalla, manda
+    // el cartel de fin. En PvP el comportamiento no cambia.
+    return PopScope(
+      canPop: !_esHistoria || _juegoTerminado,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _confirmExit();
+      },
+      child: _buildPartida(
+        sidebarCelda: sidebarCelda,
+        sidebarTerrain: sidebarTerrain,
+        isEnemySidebar: isEnemySidebar,
+        isObeliscoSidebar: isObeliscoSidebar,
+        selectedCoord: selectedCoord,
+      ),
+    );
+  }
+
+  /// Cuerpo de la pantalla de juego (tablero, HUD, mano y menú lateral).
+  Widget _buildPartida({
+    required CeldaState? sidebarCelda,
+    required TerrainType? sidebarTerrain,
+    required bool isEnemySidebar,
+    required bool isObeliscoSidebar,
+    required String? selectedCoord,
+  }) {
     return Scaffold(
       backgroundColor: const Color(0xFF0A1F35),
       body: SafeArea(
@@ -5506,8 +6378,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     },
                     playerColors: _playerColors,
                     localPlayerUid: widget.localPlayerUid,
-                    aliadosLocal: _aliadosLocal,
+                    aliadosLocal: _aliadosTablero,
                     fantasmasAccion: _fantasmasAccion,
+                    bombardeo: (_bombardeo != null &&
+                            _bombardeo!.turno == _boardState.turnoActual)
+                        ? _bombardeo
+                        : null,
+                    capaHistoria: _capaHistoria,
                     fantasmasRevision:
                         _yoCerreElTurno ? _revisionFantasmas : const [],
                     accionesRevision:

@@ -261,17 +261,47 @@ class _CardDetailPageState extends State<_CardDetailPage>
     }
   }
 
-  Size _cardSize(BuildContext context) {
-    final mq = MediaQuery.of(context).size;
+  /// Alto que ocupan los elementos que acompañan a la carta en la columna
+  /// (botones, chips, flecha de evolución), con sus separaciones.
+  ///
+  /// Antes la carta se dimensionaba con el 88 % del alto de pantalla SIN
+  /// descontar nada de esto, así que con la flecha de evolución (o cualquier
+  /// botón) la columna era más alta que la pantalla y salía el aviso
+  /// "BOTTOM OVERFLOWED". Ahora la carta usa solo el alto que sobra.
+  ///
+  /// El botón EVOLUCIONAR se reserva siempre que pueda llegar a mostrarse (no
+  /// solo cuando se ve la evolución), para que la carta no cambie de tamaño
+  /// al darle la vuelta.
+  double _altoExtras() {
+    const double chip = 40; // 10 de separación + ~30 del chip
+    double h = 0;
+    if (_muestraHabilidad) h += 46 + 14;
+    if (widget.defensaReducida > 0) h += chip;
+    if (widget.defensaExtra > 0) h += chip;
+    if (widget.fuerzaExtra > 0) h += chip;
+    if (widget.movimientoExtra > 0) h += chip;
+    if (widget.paralizada) h += chip;
+    if (_tieneEvolucion) {
+      h += 10 + 40; // flecha
+      if (widget.onEvolucionar != null) h += 18 + 46; // botón EVOLUCIONAR
+    }
+    if (widget.onCambiarDiseno != null) h += 14 + 40;
+    if (widget.onSacrificar != null) h += 14 + 46;
+    return h;
+  }
+
+  /// Tamaño de la carta dentro del espacio [anchoDisponible] x
+  /// [altoDisponible] (ya sin barras del sistema ni elementos extra).
+  Size _cardSize(double anchoDisponible, double altoDisponible) {
     const double aspect = 1.5;
     // Margen lateral mínimo: la carta ocupa casi todo el ancho de pantalla.
     const double totalSideSpace = 12.0;
-    final double usableWidth = mq.width - totalSideSpace;
+    final double usableWidth = anchoDisponible - totalSideSpace;
 
     final double maxW = usableWidth.clamp(0.0, 720.0);
-    // Usamos más alto de pantalla. En la mayoría de móviles la carta sigue
-    // limitada por el ancho, pero en pantallas altas gana tamaño.
-    final double maxH = (mq.height * 0.88).clamp(0.0, 980.0);
+    // En la mayoría de móviles la carta sigue limitada por el ancho, pero en
+    // pantallas altas gana tamaño. Suelo de 120 px para no colapsarla nunca.
+    final double maxH = altoDisponible.clamp(120.0, 980.0);
 
     double cardW = maxW;
     double cardH = cardW * aspect;
@@ -284,237 +314,249 @@ class _CardDetailPageState extends State<_CardDetailPage>
 
   @override
   Widget build(BuildContext context) {
-    final sz = _cardSize(context);
-
     return GestureDetector(
       onTap: () => Navigator.of(context).pop(),
       behavior: HitTestBehavior.opaque,
       child: Material(
         type: MaterialType.transparency,
-        child: Center(
-          child: GestureDetector(
-            onTap: () {},
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // ── BOTÓN LANZAR HABILIDAD (encima de la carta) ──
-                if (_muestraHabilidad) ...[
-                  _HabilidadButton(
-                    coste: widget.carta.costeHabilidad,
-                    energiasDisponibles: widget.energiasDisponibles ?? 0,
-                    enfriamientoRestante: widget.enfriamientoRestante,
-                    enabled: _puedeLanzarHabilidad,
-                    busy: _lanzandoHabilidad,
-                    onTap: _confirmarLanzarHabilidad,
-                  ),
-                  const SizedBox(height: 14),
-                ],
-
-                // ── CARTA ─────────────────────────────────────
-                // Envuelta en _PinchZoomCard: se puede ampliar con dos dedos
-                // (pellizco) y, al soltar, vuelve animada a su tamaño original.
-                _PinchZoomCard(
-                  child: _FlippingCard(
-                    controller: _flipCtrl,
-                    front: widget.carta,
-                    back: _evolucion,
-                    cardWidth: sz.width,
-                    cardHeight: sz.height,
-                    esLegendaria: widget.esLegendaria,
-                  ),
+        // SafeArea: la carta no se mete bajo la barra de estado ni bajo la
+        // barra de navegación del sistema.
+        child: SafeArea(
+          minimum: const EdgeInsets.symmetric(vertical: 8),
+          child: LayoutBuilder(
+            builder: (ctx, cons) {
+              final sz = _cardSize(
+                cons.maxWidth,
+                cons.maxHeight - _altoExtras(),
+              );
+              return Center(
+                // Red de seguridad: si algún elemento mide un poco más de lo
+                // estimado (fuentes del sistema grandes, emojis…), todo el
+                // bloque se reduce ligeramente en vez de desbordar.
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: _contenido(sz),
                 ),
-
-                // ── CHIP DE VENENO (defensa reducida) ──
-                if (widget.defensaReducida > 0) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF11331C),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: const Color(0xFF2BA046).withOpacity(0.7),
-                          width: 1),
-                    ),
-                    child: Text(
-                      '☠  Envenenada · Defensa '
-                      '${widget.carta.defensa} → '
-                      '${(widget.carta.defensa - widget.defensaReducida).clamp(0, 99999)}'
-                      '  (-${widget.defensaReducida})',
-                      style: const TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 10,
-                        color: Color(0xFF5AD07A),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ],
-
-                // ── CHIP DE DEFENSA (+escudo / potenciar defensa) ──
-                if (widget.defensaExtra > 0) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0E2440),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: const Color(0xFF3A78C8).withOpacity(0.7),
-                          width: 1),
-                    ),
-                    child: Text(
-                      '🛡  Defensa '
-                      '${widget.carta.defensa} → '
-                      '${widget.carta.defensa + widget.defensaExtra}'
-                      '  (+${widget.defensaExtra})',
-                      style: const TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 10,
-                        color: Color(0xFF9AD0FF),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ],
-
-                // ── CHIP DE FUERZA (potenciar fuerza) ──
-                if (widget.fuerzaExtra > 0) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF3A2408),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: const Color(0xFFFFB84D).withOpacity(0.7),
-                          width: 1),
-                    ),
-                    child: Text(
-                      '💪  Fuerza '
-                      '${widget.carta.fuerza} → '
-                      '${widget.carta.fuerza + widget.fuerzaExtra}'
-                      '  (+${widget.fuerzaExtra})',
-                      style: const TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 10,
-                        color: Color(0xFFFFCC80),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ],
-
-                // ── CHIP DE MOVIMIENTO (potenciar movimiento) ──
-                if (widget.movimientoExtra > 0) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0E2E36),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: const Color(0xFF40C0D0).withOpacity(0.7),
-                          width: 1),
-                    ),
-                    child: Text(
-                      '💨  Movimiento '
-                      '${widget.carta.movimiento} → '
-                      '${widget.carta.movimiento + widget.movimientoExtra}'
-                      '  (+${widget.movimientoExtra})',
-                      style: const TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 10,
-                        color: Color(0xFF80E0E8),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ],
-
-                // ── CHIP DE PARÁLISIS ──
-                if (widget.paralizada) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0E2836),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: const Color(0xFF2C90C8).withOpacity(0.7),
-                          width: 1),
-                    ),
-                    child: const Text(
-                      '⏱  Paralizada · no puede moverse',
-                      style: TextStyle(
-                        fontFamily: 'Cinzel',
-                        fontSize: 10,
-                        color: Color(0xFF7AC8E8),
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ),
-                ],
-
-                // ── FLECHA EVOLUCIÓN (debajo, alineada a la derecha) ──
-                if (_tieneEvolucion) ...[
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: sz.width,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        _EvolutionArrow(
-                          enabled: !_loadingEvol && _evolucion != null,
-                          loading: _loadingEvol,
-                          showingEvolution: _showingEvolution,
-                          onTap: _toggleFlip,
-                          evolucionCost: widget.carta.evolucion,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-
-                // ── BOTÓN EVOLUCIONAR ──────────────────────────
-                if (_showingEvolution && widget.onEvolucionar != null) ...[
-                  const SizedBox(height: 18),
-                  _EvolveButton(
-                    cost: widget.carta.evolucion,
-                    energiasDisponibles: widget.energiasDisponibles ?? 0,
-                    enabled: _puedeEvolucionar,
-                    busy: _evolucionando,
-                    onTap: _confirmarEvolucion,
-                  ),
-                ],
-
-                // ── BOTÓN CAMBIAR DISEÑO ────────────────────────
-                if (widget.onCambiarDiseno != null) ...[
-                  const SizedBox(height: 14),
-                  _SkinButton(onTap: () {
-                    Navigator.of(context).pop();
-                    widget.onCambiarDiseno!();
-                  }),
-                ],
-
-                // ── BOTÓN SACRIFICAR ────────────────────────────
-                if (widget.onSacrificar != null) ...[
-                  const SizedBox(height: 14),
-                  _SacrificarButton(
-                    recompensa: widget.recompensaSacrificio,
-                    busy: _sacrificando,
-                    onTap: _confirmarSacrificio,
-                  ),
-                ],
-              ],
-            ),
+              );
+            },
           ),
         ),
+      ),
+    );
+  }
+
+  /// Carta + botones/chips que la acompañan, en columna.
+  Widget _contenido(Size sz) {
+    return GestureDetector(
+      onTap: () {},
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // ── BOTÓN LANZAR HABILIDAD (encima de la carta) ──
+          if (_muestraHabilidad) ...[
+            _HabilidadButton(
+              coste: widget.carta.costeHabilidad,
+              energiasDisponibles: widget.energiasDisponibles ?? 0,
+              enfriamientoRestante: widget.enfriamientoRestante,
+              enabled: _puedeLanzarHabilidad,
+              busy: _lanzandoHabilidad,
+              onTap: _confirmarLanzarHabilidad,
+            ),
+            const SizedBox(height: 14),
+          ],
+
+          // ── CARTA ─────────────────────────────────────
+          // Envuelta en _PinchZoomCard: se puede ampliar con dos dedos
+          // (pellizco) y, al soltar, vuelve animada a su tamaño original.
+          _PinchZoomCard(
+            child: _FlippingCard(
+              controller: _flipCtrl,
+              front: widget.carta,
+              back: _evolucion,
+              cardWidth: sz.width,
+              cardHeight: sz.height,
+              esLegendaria: widget.esLegendaria,
+            ),
+          ),
+
+          // ── CHIP DE VENENO (defensa reducida) ──
+          if (widget.defensaReducida > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF11331C),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: const Color(0xFF2BA046).withOpacity(0.7), width: 1),
+              ),
+              child: Text(
+                '☠  Envenenada · Defensa '
+                '${widget.carta.defensa} → '
+                '${(widget.carta.defensa - widget.defensaReducida).clamp(0, 99999)}'
+                '  (-${widget.defensaReducida})',
+                style: const TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  color: Color(0xFF5AD07A),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+
+          // ── CHIP DE DEFENSA (+escudo / potenciar defensa) ──
+          if (widget.defensaExtra > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0E2440),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: const Color(0xFF3A78C8).withOpacity(0.7), width: 1),
+              ),
+              child: Text(
+                '🛡  Defensa '
+                '${widget.carta.defensa} → '
+                '${widget.carta.defensa + widget.defensaExtra}'
+                '  (+${widget.defensaExtra})',
+                style: const TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  color: Color(0xFF9AD0FF),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+
+          // ── CHIP DE FUERZA (potenciar fuerza) ──
+          if (widget.fuerzaExtra > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF3A2408),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: const Color(0xFFFFB84D).withOpacity(0.7), width: 1),
+              ),
+              child: Text(
+                '💪  Fuerza '
+                '${widget.carta.fuerza} → '
+                '${widget.carta.fuerza + widget.fuerzaExtra}'
+                '  (+${widget.fuerzaExtra})',
+                style: const TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  color: Color(0xFFFFCC80),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+
+          // ── CHIP DE MOVIMIENTO (potenciar movimiento) ──
+          if (widget.movimientoExtra > 0) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0E2E36),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: const Color(0xFF40C0D0).withOpacity(0.7), width: 1),
+              ),
+              child: Text(
+                '💨  Movimiento '
+                '${widget.carta.movimiento} → '
+                '${widget.carta.movimiento + widget.movimientoExtra}'
+                '  (+${widget.movimientoExtra})',
+                style: const TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  color: Color(0xFF80E0E8),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+
+          // ── CHIP DE PARÁLISIS ──
+          if (widget.paralizada) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0E2836),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: const Color(0xFF2C90C8).withOpacity(0.7), width: 1),
+              ),
+              child: const Text(
+                '⏱  Paralizada · no puede moverse',
+                style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  color: Color(0xFF7AC8E8),
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
+
+          // ── FLECHA EVOLUCIÓN (debajo, alineada a la derecha) ──
+          if (_tieneEvolucion) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: sz.width,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  _EvolutionArrow(
+                    enabled: !_loadingEvol && _evolucion != null,
+                    loading: _loadingEvol,
+                    showingEvolution: _showingEvolution,
+                    onTap: _toggleFlip,
+                    evolucionCost: widget.carta.evolucion,
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          // ── BOTÓN EVOLUCIONAR ──────────────────────────
+          if (_showingEvolution && widget.onEvolucionar != null) ...[
+            const SizedBox(height: 18),
+            _EvolveButton(
+              cost: widget.carta.evolucion,
+              energiasDisponibles: widget.energiasDisponibles ?? 0,
+              enabled: _puedeEvolucionar,
+              busy: _evolucionando,
+              onTap: _confirmarEvolucion,
+            ),
+          ],
+
+          // ── BOTÓN CAMBIAR DISEÑO ────────────────────────
+          if (widget.onCambiarDiseno != null) ...[
+            const SizedBox(height: 14),
+            _SkinButton(onTap: () {
+              Navigator.of(context).pop();
+              widget.onCambiarDiseno!();
+            }),
+          ],
+
+          // ── BOTÓN SACRIFICAR ────────────────────────────
+          if (widget.onSacrificar != null) ...[
+            const SizedBox(height: 14),
+            _SacrificarButton(
+              recompensa: widget.recompensaSacrificio,
+              busy: _sacrificando,
+              onTap: _confirmarSacrificio,
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -580,6 +622,23 @@ class _SacrificarButton extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 // BOTÓN LANZAR HABILIDAD
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// lib/widgets/card_detail_overlay.dart · UN CAMBIO
+//
+// Sustituye la clase `_HabilidadButton` COMPLETA (la que empieza por
+//     // BOTÓN LANZAR HABILIDAD
+//     class _HabilidadButton extends StatelessWidget {
+// ) por esta. El resto del fichero no cambia.
+//
+// Qué cambia: si la habilidad no cuesta nada (coste 0) el botón dice
+// «LANZAR HABILIDAD · SIN COSTE» sin la ficha Ø. Lo usa el Rompe escudos de
+// Alexander en el reto «El duelo de Alexander» (game_screen lo inyecta en su
+// carta con coste 0), pero vale para cualquier habilidad gratuita.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// BOTÓN LANZAR HABILIDAD
+// ─────────────────────────────────────────────────────────────
 class _HabilidadButton extends StatelessWidget {
   final int coste;
   final int energiasDisponibles;
@@ -600,14 +659,25 @@ class _HabilidadButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF40C0FF);
-    final color = enabled ? accent : const Color(0xFF506070);
+    // Durante la recarga el botón se tiñe de ámbar: se distingue de un botón
+    // simplemente deshabilitado por falta de energías.
+    const recarga = Color(0xFFE0A030);
+    final recargando = !busy && enfriamientoRestante > 0;
+    final color = enabled
+        ? accent
+        : recargando
+            ? recarga
+            : const Color(0xFF506070);
 
     final String label;
     bool mostrarCoste = false;
     if (busy) {
       label = 'LANZANDO…';
-    } else if (enfriamientoRestante > 0) {
-      label = 'ENFRIAMIENTO  ${enfriamientoRestante}t';
+    } else if (recargando) {
+      label = 'RECARGANDO';
+    } else if (coste <= 0) {
+      // Habilidad gratuita (p. ej. el Rompe escudos del duelo de Alexander).
+      label = 'LANZAR HABILIDAD  ·  SIN COSTE';
     } else if (energiasDisponibles < coste) {
       label = 'ENERGÍAS INSUFICIENTES  ($energiasDisponibles / $coste)';
     } else {
@@ -623,7 +693,11 @@ class _HabilidadButton extends StatelessWidget {
         height: 46,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: enabled ? accent.withOpacity(0.18) : const Color(0xFF0A1220),
+          color: enabled
+              ? accent.withOpacity(0.18)
+              : recargando
+                  ? recarga.withOpacity(0.10)
+                  : const Color(0xFF0A1220),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: color.withOpacity(0.6), width: 1.2),
           boxShadow: enabled
@@ -643,7 +717,8 @@ class _HabilidadButton extends StatelessWidget {
                 ),
               )
             else
-              Icon(Icons.flash_on, size: 14, color: color),
+              Icon(recargando ? Icons.hourglass_bottom : Icons.flash_on,
+                  size: 14, color: color),
             const SizedBox(width: 10),
             Text(
               label,
@@ -658,6 +733,34 @@ class _HabilidadButton extends StatelessWidget {
             if (mostrarCoste) ...[
               const SizedBox(width: 6),
               const ZeroChip(size: 15),
+            ],
+            // ── CONTADOR DE TURNOS, al lado del botón ──
+            // Va dentro del propio botón (a su derecha) para que se vea sin
+            // tocar el layout del overlay: una píldora con los turnos que
+            // faltan para poder relanzar la habilidad.
+            if (recargando) ...[
+              const SizedBox(width: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: recarga.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                      Border.all(color: recarga.withOpacity(0.70), width: 1),
+                ),
+                child: Text(
+                  enfriamientoRestante == 1
+                      ? '1 turno'
+                      : '$enfriamientoRestante turnos',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: recarga,
+                    fontFamily: 'Cinzel',
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ),
             ],
           ],
         ),

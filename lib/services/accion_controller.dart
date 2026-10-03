@@ -16,9 +16,12 @@ enum FaseAccion {
   /// Las celdas elegibles están en [AccionController.objetivosValidos].
   seleccionandoObjetivos,
 
-  /// Solo para habilidades con carta propia (teletransporte, invisibilidad y
-  /// clon): ya se eligió la celda, falta que el jugador elija qué carta
-  /// propia usar (vía modal/sidebar).
+  /// Solo para habilidades con carta propia (teletransporte, invisibilidad,
+  /// clon y supervivencia): ya se eligió la celda, falta que el jugador elija
+  /// qué carta propia usar (vía modal/sidebar).
+  ///
+  /// El nombre habla de "teleport" por historia: la fase la dispara
+  /// `habilidad.requiereCartaPropia`, no el teletransporte en concreto.
   seleccionandoCartaTeleport,
 }
 
@@ -39,8 +42,9 @@ enum FaseAccion {
 ///        - Fractura: 1º la celda origen (con cartas), luego el destino a
 ///          ≤ kFracturaDistanciaMax.
 ///      Quitar una celda ya elegida descarta también las posteriores.
-///        - Si la habilidad es teletransporte, al completar pasa a
-///          `seleccionandoCartaTeleport`.
+///        - Si la habilidad requiere carta propia (`requiereCartaPropia`:
+///          teletransporte, invisibilidad, clon y supervivencia), al completar
+///          los objetivos pasa a `seleccionandoCartaTeleport`.
 ///        - Si no, queda en estado "listo": `lista == true`.
 ///   3. (Solo teletransporte) `setCartaTeleport(coord, indice)` para
 ///      registrar la carta propia.
@@ -135,6 +139,10 @@ class AccionController {
         return 'Fractura: elige la celda cuyas cartas quieres desplazar.';
       case EfectoTipo.clon:
         return 'Clon: elige la celda donde aparecerá el clon.';
+      case EfectoTipo.invisibilidad:
+        return 'Invisibilidad: elige la celda con la carta que quieres ocultar.';
+      case EfectoTipo.supervivencia:
+        return 'Supervivencia: elige la celda con la carta que quieres proteger.';
       default:
         return h.numObjetivos == 1
             ? 'Selecciona una celda objetivo.'

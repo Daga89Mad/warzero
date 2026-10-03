@@ -33,6 +33,11 @@ enum EfectoTipoEstado {
   // sola cada turno, su dueño no la controla y en combate lucha como un bando
   // propio (también contra las cartas de su dueño). Es público.
   confusion,
+  // Supervivencia: efecto anclado a UNA CARTA (acción Supervivencia). Mientras
+  // dure, la carta no muere al perder un combate: huye a una celda colindante
+  // respetando su terreno y pierde `magnitud` % de fuerza para el resto de la
+  // partida. Es público (el rival debe poder ver que esa carta puede escapar).
+  supervivencia,
   // futuro: regeneracion...
 }
 
@@ -59,6 +64,8 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return 'Muro';
       case EfectoTipoEstado.confusion:
         return 'Confusión';
+      case EfectoTipoEstado.supervivencia:
+        return 'Supervivencia';
     }
   }
 
@@ -84,6 +91,8 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return '🧱';
       case EfectoTipoEstado.confusion:
         return '🌀';
+      case EfectoTipoEstado.supervivencia:
+        return '🏃';
     }
   }
 
@@ -112,6 +121,8 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return const Color(0xFFA8845C);
       case EfectoTipoEstado.confusion:
         return const Color(0xFFE060C0);
+      case EfectoTipoEstado.supervivencia:
+        return const Color(0xFFB8E060);
     }
   }
 
@@ -138,6 +149,8 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
         return 8;
       case EfectoTipoEstado.invisibilidad:
         return 9;
+      case EfectoTipoEstado.supervivencia:
+        return 10;
     }
   }
 
@@ -158,6 +171,10 @@ extension EfectoTipoEstadoExt on EfectoTipoEstado {
       case EfectoTipoEstado.potDefensa:
       case EfectoTipoEstado.potMovimiento:
         return '+$magnitud';
+      // La magnitud de la supervivencia es el % de fuerza que cuesta cada
+      // huida, no una cantidad plana: se pinta con el símbolo de porcentaje.
+      case EfectoTipoEstado.supervivencia:
+        return '-$magnitud%';
       default:
         return '';
     }

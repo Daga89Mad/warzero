@@ -107,6 +107,41 @@ class TrofeosService {
     }
   }
 
+  /// Avisos de trofeo PENDIENTES de [uid]: los que ya tiene conseguidos pero que
+  /// aún no se le han mostrado. El servidor los devuelve y los marca como
+  /// avisados en la misma llamada.
+  ///
+  /// Sirve para recoger los trofeos que se ganaron cuando el jugador no estaba
+  /// mirando: un turno que resolvió OTRO jugador, una resolución forzosa por
+  /// fecha límite, o la red de seguridad del perfil. Conviene llamarlo al
+  /// arrancar la app y al volver del fondo.
+  ///
+  /// OJO: la llamada CONSUME la cola. Si devuelve trofeos hay que mostrarlos
+  /// (o guardarlos) porque el servidor ya los ha dado por vistos; por eso no se
+  /// reintenta en caso de error, para no perder avisos por un doble consumo.
+  Future<List<TrofeoModel>> pendientes(String uid) async {
+    if (uid.isEmpty) return const [];
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl/warzero/trofeos/pendientes'),
+            headers: _headers,
+            body: jsonEncode({'uid': uid}),
+          )
+          .timeout(_timeout);
+      debugPrint('[WZ][trofeos] POST pendientes status=${res.statusCode}');
+      if (res.statusCode < 200 || res.statusCode >= 300) return const [];
+
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      return ((j['trofeos'] as List?) ?? const [])
+          .map((e) => TrofeoModel.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (e) {
+      debugPrint('[WZ][trofeos] pendientes falló: $e');
+      return const [];
+    }
+  }
+
   /// Trofeo destacado (icono + nombre) de VARIOS jugadores de una vez. Para la
   /// sala de espera / listados: una sola petición para todos los uids. Devuelve
   /// un mapa uid → TrofeoModel (solo los que tengan un destacado válido).

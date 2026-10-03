@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     id("com.android.application")
@@ -38,6 +39,7 @@ android {
     namespace = "com.example.warzero"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
+
     compileOptions {
         // flutter_local_notifications (v17+) usa APIs de Java 8+ que en Android
         // requieren "desugaring" de la librería base.
@@ -45,9 +47,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
-    }
+
     defaultConfig {
         applicationId = "com.example.warzero"
         minSdk = flutter.minSdkVersion
@@ -55,6 +55,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
+
     signingConfigs {
         create("release") {
             if (hayClaveRelease) {
@@ -65,6 +66,7 @@ android {
             }
         }
     }
+
     buildTypes {
         release {
             signingConfig = if (hayClaveRelease) {
@@ -73,6 +75,14 @@ android {
                 signingConfigs.getByName("debug")
             }
         }
+    }
+}
+
+// Sustituye al antiguo android.kotlinOptions, eliminado en Kotlin 2.2.
+// Va fuera del bloque android { }, al mismo nivel.
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_11
     }
 }
 

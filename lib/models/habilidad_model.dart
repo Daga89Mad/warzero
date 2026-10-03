@@ -120,6 +120,21 @@ enum EfectoTipo {
   /// [kFracturaDistanciaMax] celdas. La que no puede estar en el destino
   /// (terreno) o es estática se queda donde está. Objetivos = [origen, destino].
   fractura,
+
+  /// Supervivencia: se aplica sobre UNA carta PROPIA (no sobre la celda), igual
+  /// que la invisibilidad (`requiereCartaPropia`).
+  ///
+  /// Mientras el efecto esté activo ([kSupervivenciaDuracionTurnos] turnos), si
+  /// la carta PIERDE un combate NO muere: HUYE a una celda colindante al azar
+  /// respetando siempre su terreno (una unidad de tierra no huye al mar). Tras
+  /// sobrevivir pierde, para el RESTO DE LA PARTIDA, un
+  /// [kSupervivenciaPerdidaFuerzaPct] % de su fuerza — la penalización es
+  /// acumulativa si vuelve a salvarse, y NO caduca con el efecto.
+  ///
+  /// Si no queda ninguna celda colindante válida (terreno incompatible, muro,
+  /// cuartel, celda escudada por un rival u ocupada por un enemigo), la carta
+  /// muere como siempre: la supervivencia no garantiza la huida.
+  supervivencia,
 }
 
 /// Parámetros configurables de las acciones de distorsión. Su espejo en el
@@ -140,6 +155,62 @@ const int kPotFuerzaMagnitud = 5;
 const int kPotDefensaMagnitud = 5;
 const int kPotMovimientoMagnitud = 2;
 const int kPotDuracionTurnos = 3;
+
+// ─────────────────────────────────────────────────────────────
+// SUPERVIVENCIA (ids 39 / 40 / 41)
+// ─────────────────────────────────────────────────────────────
+
+/// Turnos que la supervivencia permanece activa sobre la carta.
+/// Espejo servidor: `CatalogoHabilidades.SupervivenciaDuracion`.
+const int kSupervivenciaDuracionTurnos = 8;
+
+/// Porcentaje de FUERZA que la carta pierde PARA TODA LA PARTIDA cada vez que
+/// se salva de un combate gracias a la supervivencia. Es acumulativo.
+/// Espejo servidor: `CatalogoHabilidades.SupervivenciaPerdidaFuerzaPct`.
+const int kSupervivenciaPerdidaFuerzaPct = 25;
+
+/// Aplica [veces] penalizaciones del [kSupervivenciaPerdidaFuerzaPct] % a
+/// [fuerzaBase], con aritmética ENTERA para que cliente y servidor den
+/// exactamente el mismo número (en C# es `f = f * 3 / 4`, división entera).
+///
+/// Aplica la penalización acumulada de Supervivencia sobre la fuerza base.
+///
+/// Se aplica UNA VEZ POR HUIDA y de forma compuesta, no sumando porcentajes:
+/// con 2 huidas una carta de 10 queda en 5 (10 → 7 → 5), no en 5 por "-50%".
+///
+/// División entera truncada a propósito, para que coincida exactamente con
+/// el `f = f * (100 - kSupervivenciaPerdidaFuerzaPct) / 100` del servidor
+/// (en C# la división de enteros también trunca).
+int fuerzaTrasSupervivencia(int fuerzaBase, int veces) {
+  var f = fuerzaBase;
+  final n = veces < 0 ? 0 : veces;
+  for (var i = 0; i < n; i++) {
+    f = (f * (100 - kSupervivenciaPerdidaFuerzaPct)) ~/ 100;
+  }
+  return f < 0 ? 0 : f;
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENFRIAMIENTO DE HABILIDAD (recarga)
+// ─────────────────────────────────────────────────────────────
+
+/// Turnos MÍNIMOS que una carta debe esperar entre dos lanzamientos de su
+/// habilidad, independientemente de lo que diga `CartaModel.enfriamientoHabilidad`.
+///
+/// El editor de cartas puede dejar `EnfriamientoHabilidad` a 0 (y muchas cartas
+/// antiguas lo tienen así), lo que permitía relanzar la habilidad cada turno.
+/// Este suelo se aplica en TODOS los caminos que consultan el enfriamiento
+/// (UI del botón, validación del cliente, planificadores del bot y validación
+/// autoritativa del servidor), así que subirlo o bajarlo aquí basta para
+/// cambiar la regla en el cliente.
+/// Espejo servidor: `CatalogoHabilidades.EnfriamientoMinimo`.
+const int kEnfriamientoHabilidadMinimo = 5;
+
+/// Enfriamiento REAL de una carta: el mayor entre el suyo y el mínimo global.
+int enfriamientoEfectivo(int enfriamientoCarta) =>
+    enfriamientoCarta > kEnfriamientoHabilidadMinimo
+        ? enfriamientoCarta
+        : kEnfriamientoHabilidadMinimo;
 
 class EfectoHabilidad {
   final EfectoTipo tipo;
@@ -214,6 +285,15 @@ class EfectoHabilidad {
       : tipo = EfectoTipo.fractura,
         defensaReducida = 0,
         duracionTurnos = 0;
+
+  /// Supervivencia. `defensaReducida` se reutiliza —como en escudo y en las
+  /// potenciaciones— como MAGNITUD del efecto: aquí, el % de fuerza que se
+  /// pierde por cada huida. Así el badge del tablero puede pintar "-25%" sin
+  /// conocer la habilidad concreta.
+  const EfectoHabilidad.supervivencia({
+    this.duracionTurnos = kSupervivenciaDuracionTurnos,
+  })  : tipo = EfectoTipo.supervivencia,
+        defensaReducida = kSupervivenciaPerdidaFuerzaPct;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -287,7 +367,8 @@ class Habilidad {
 ///   30, 31, 32 → muro (cercano, medio, lejano)
 ///   33, 34, 35 → confusión (cercana, media, lejana)
 ///   36, 37, 38 → fractura (cercana, media, lejana)
-///   39+      → reservado (futuras)
+///   39, 40, 41 → supervivencia (cerca, media, lejos) — solo cartas propias
+///   42+      → reservado (futuras)
 class CatalogoHabilidades {
   CatalogoHabilidades._();
 
@@ -754,6 +835,56 @@ class CatalogoHabilidades {
       efecto: EfectoHabilidad.fractura(),
       excluyeCG: true,
       numObjetivos: 2,
+    ),
+    // ── SUPERVIVENCIA (solo cartas PROPIAS) ────────────────
+    // Mismo patrón de selección que la invisibilidad: el objetivo NO es una
+    // celda vacía sino una carta propia, y los rangos son
+    //   cerca  → solo cartas de la celda desde la que se lanza (propia).
+    //   media  → la propia celda y las colindantes (frontera + origen).
+    //   lejos  → cualquier carta propia del tablero.
+    // `HabilidadService.calcularObjetivosValidos` restringe los objetivos a
+    // celdas que contengan una carta propia (igual que la invisibilidad).
+    39: Habilidad(
+      id: 39,
+      nombre: 'Supervivencia cercana',
+      descripcion:
+          'Durante $kSupervivenciaDuracionTurnos turnos, una carta propia de la '
+          'celda desde la que se lanza no muere al perder un combate: huye a una '
+          'celda colindante al azar que admita su terreno. Cada huida le cuesta '
+          'un $kSupervivenciaPerdidaFuerzaPct % de fuerza para el resto de la '
+          'partida. Si no hay salida válida, muere.',
+      icon: '🏃',
+      rango: RangoHabilidad.propia(),
+      efecto: EfectoHabilidad.supervivencia(),
+      requiereCartaPropia: true,
+    ),
+    40: Habilidad(
+      id: 40,
+      nombre: 'Supervivencia media',
+      descripcion:
+          'Durante $kSupervivenciaDuracionTurnos turnos, una carta propia de la '
+          'propia celda o de una adyacente no muere al perder un combate: huye a '
+          'una celda colindante al azar que admita su terreno. Cada huida le '
+          'cuesta un $kSupervivenciaPerdidaFuerzaPct % de fuerza para el resto '
+          'de la partida. Si no hay salida válida, muere.',
+      icon: '🏃',
+      rango: RangoHabilidad.frontera(),
+      efecto: EfectoHabilidad.supervivencia(),
+      requiereCartaPropia: true,
+    ),
+    41: Habilidad(
+      id: 41,
+      nombre: 'Supervivencia lejana',
+      descripcion:
+          'Durante $kSupervivenciaDuracionTurnos turnos, cualquier carta propia '
+          'del tablero no muere al perder un combate: huye a una celda '
+          'colindante al azar que admita su terreno. Cada huida le cuesta un '
+          '$kSupervivenciaPerdidaFuerzaPct % de fuerza para el resto de la '
+          'partida. Si no hay salida válida, muere.',
+      icon: '🏃',
+      rango: RangoHabilidad.cualquiera(),
+      efecto: EfectoHabilidad.supervivencia(),
+      requiereCartaPropia: true,
     ),
   };
 

@@ -10,6 +10,10 @@ import 'package:http/http.dart' as http;
 import '../models/accion_pendiente.dart';
 import '../models/carta_model.dart';
 import '../models/historia_model.dart';
+import '../models/accion_pendiente.dart';
+import '../models/carta_model.dart';
+import '../models/historia_model.dart';
+import '../models/trofeo_model.dart';
 
 /// Resultado de cerrar un turno a través de la API.
 class CerrarTurnoResult {
@@ -32,6 +36,15 @@ class CerrarTurnoResult {
   /// Energies ganadas por jugador (combate + farmeo).
   final Map<String, int> energiesPorJugador;
 
+  /// Trofeos que ESTE jugador acaba de conseguir (ya con nombre, icono y
+  /// descripción). Vienen drenados de su cola de avisos del servidor, así que
+  /// incluyen tanto los de métrica acumulada como los de reto y de historia.
+  ///
+  /// El servidor los da por MOSTRADOS en cuanto los manda aquí: si el cliente no
+  /// abre el pop-up, ese aviso se pierde. Por eso hay que consumirlos siempre,
+  /// incluso si la pantalla se está cerrando.
+  final List<TrofeoModel> trofeosNuevos;
+
   final String mensaje;
 
   /// Estado completo de la partida tras la operación (mismo shape que el doc de
@@ -49,6 +62,7 @@ class CerrarTurnoResult {
     required this.conquistas,
     required this.energiesPorJugador,
     required this.mensaje,
+    this.trofeosNuevos = const [],
     this.estado,
   });
 
@@ -68,6 +82,9 @@ class CerrarTurnoResult {
       energiesPorJugador: energiesRaw.map(
         (k, v) => MapEntry(k.toString(), (v as num?)?.toInt() ?? 0),
       ),
+      trofeosNuevos: ((j['trofeosNuevos'] as List?) ?? [])
+          .map((e) => TrofeoModel.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList(),
       mensaje: j['mensaje'] as String? ?? '',
       estado: j['estado'] is Map
           ? Map<String, dynamic>.from(j['estado'] as Map)
@@ -314,6 +331,27 @@ class WarZeroApi {
       return jsonDecode(res.body) as Map<String, dynamic>;
     } catch (_) {
       throw Exception('crearHistoria HTTP ${res.statusCode}: ${res.body}');
+    }
+  }
+
+  /// Abandona una batalla del modo historia: el servidor la da por perdida
+  /// (gana el bot) y hay que volver a empezar la historia desde la parte 1.
+  /// Fire-and-forget: nunca lanza (el jugador ya está saliendo).
+  Future<void> abandonarHistoria({
+    required String lobbyId,
+    required String uid,
+  }) async {
+    try {
+      await http
+          .post(
+            Uri.parse('$baseUrl/warzero/historia/abandonar'),
+            headers: _headers,
+            body: jsonEncode({'lobbyId': lobbyId, 'uid': uid}),
+          )
+          .timeout(const Duration(seconds: 15));
+      debugPrint('[WZ][api] historia abandonada lobby=$lobbyId');
+    } catch (e) {
+      debugPrint('[WZ][api] abandonarHistoria falló (ignorado): $e');
     }
   }
 

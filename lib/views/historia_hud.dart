@@ -4,6 +4,10 @@
 // tablero durante la partida. Muestra el objetivo del jugador y, si es de
 // supervivencia, el progreso de turnos ("AGUANTA · TURNO 3/6").
 //
+// Si la batalla define un texto propio (`historia.hudObjetivo`, p. ej.
+// "DERRIBA A UN GENERAL" en el reto «El duelo de Alexander»), se usa ese texto
+// con el contador de turnos (`turnosSupervivencia` como límite).
+//
 // Se alimenta de la config `historia` que GameScreen recibe por constructor y
 // del turno actual del tablero. Es puramente informativo (IgnorePointer en el
 // punto de inserción), así que no interfiere con los toques del tablero.
@@ -27,15 +31,19 @@ class HistoriaObjetivoHud extends StatelessWidget {
   Widget build(BuildContext context) {
     final objetivo = (historia['jugadorObjetivo'] ?? 'sobrevivir').toString();
     final total = (historia['turnosSupervivencia'] as num?)?.toInt() ?? 0;
+    final propio = (historia['hudObjetivo'] ?? '').toString().trim();
+    final actual = total > 0 ? turnoActual.clamp(1, total) : turnoActual;
 
     final IconData icono;
     final String texto;
-    if (objetivo == 'conquistar') {
+    if (propio.isNotEmpty) {
+      icono = Icons.flag_rounded;
+      texto = total > 0 ? '$propio · TURNO $actual/$total' : propio;
+    } else if (objetivo == 'conquistar') {
       icono = Icons.local_fire_department_rounded;
       texto = 'CONQUISTA EL CUARTEL';
     } else {
       icono = Icons.shield_rounded;
-      final actual = total > 0 ? turnoActual.clamp(1, total) : turnoActual;
       texto =
           total > 0 ? 'AGUANTA · TURNO $actual/$total' : 'AGUANTA EL ASEDIO';
     }

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../models/game_config.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
+import 'bombardeo_overlay.dart';
+import 'historia_tunel.dart';
 import 'cell_widget.dart';
 import '../services/settings_controller.dart';
 
@@ -125,6 +127,15 @@ class BoardWidget extends StatefulWidget {
   final List<RevisionFantasma> fantasmasRevision;
   final Set<String> accionesRevision;
 
+  /// BOMBARDEO de historia del turno en curso (% de impacto por celda y
+  /// casillas desactivadoras). null = no se pinta nada. Ver
+  /// bombardeo_overlay.dart.
+  final BombardeoVista? bombardeo;
+
+  /// Capa de HISTORIA: túnel inundable, papeles del bot (🎯/⚔) y cartas
+  /// clave (👑). null = no se pinta nada. Ver historia_tunel.dart.
+  final CapaHistoriaVista? capaHistoria;
+
   final Function(String coord, int ri, int ci) onCellTap;
 
   /// Toque dentro del área del tablero pero FUERA de cualquier celda (el marco
@@ -152,6 +163,8 @@ class BoardWidget extends StatefulWidget {
     this.fantasmasAccion = const {},
     this.fantasmasRevision = const [],
     this.accionesRevision = const {},
+    this.bombardeo,
+    this.capaHistoria,
     required this.onCellTap,
   });
 
@@ -345,6 +358,8 @@ class _BoardWidgetState extends State<BoardWidget>
                     fantasmasAccion: widget.fantasmasAccion,
                     fantasmasRevision: widget.fantasmasRevision,
                     accionesRevision: widget.accionesRevision,
+                    bombardeo: widget.bombardeo,
+                    capaHistoria: widget.capaHistoria,
                     onCellTap: widget.onCellTap,
                   ),
                 ),
@@ -352,6 +367,22 @@ class _BoardWidgetState extends State<BoardWidget>
             ),
           ),
         ),
+
+        // ── Leyenda del bombardeo (historia) ──────────────
+        if (widget.bombardeo != null)
+          Positioned(
+            left: 12,
+            top: 12,
+            child: BombardeoLeyenda(vista: widget.bombardeo!),
+          ),
+
+        // ── Leyenda de la capa de historia (asalto general, túnel) ──
+        if (widget.capaHistoria != null && !widget.capaHistoria!.vacia)
+          Positioned(
+            left: 12,
+            top: widget.bombardeo != null ? 64 : 12,
+            child: HistoriaCapaLeyenda(vista: widget.capaHistoria!),
+          ),
 
         // ── Controles de zoom ─────────────────────────────
         Positioned(
@@ -493,6 +524,8 @@ class _PerspectiveBoard extends StatelessWidget {
   final Map<String, List<CartaModel>> fantasmasAccion;
   final List<RevisionFantasma> fantasmasRevision;
   final Set<String> accionesRevision;
+  final BombardeoVista? bombardeo;
+  final CapaHistoriaVista? capaHistoria;
   final Function(String, int, int) onCellTap;
 
   const _PerspectiveBoard({
@@ -512,6 +545,8 @@ class _PerspectiveBoard extends StatelessWidget {
     this.fantasmasAccion = const {},
     this.fantasmasRevision = const [],
     this.accionesRevision = const {},
+    this.bombardeo,
+    this.capaHistoria,
     required this.onCellTap,
   });
 
@@ -536,6 +571,8 @@ class _PerspectiveBoard extends StatelessWidget {
         fantasmasAccion: fantasmasAccion,
         fantasmasRevision: fantasmasRevision,
         accionesRevision: accionesRevision,
+        bombardeo: bombardeo,
+        capaHistoria: capaHistoria,
         onCellTap: onCellTap,
       ),
     );
@@ -928,6 +965,8 @@ class _GridContent extends StatelessWidget {
   final Map<String, List<CartaModel>> fantasmasAccion;
   final List<RevisionFantasma> fantasmasRevision;
   final Set<String> accionesRevision;
+  final BombardeoVista? bombardeo;
+  final CapaHistoriaVista? capaHistoria;
   final Function(String, int, int) onCellTap;
 
   const _GridContent({
@@ -947,6 +986,8 @@ class _GridContent extends StatelessWidget {
     this.fantasmasAccion = const {},
     this.fantasmasRevision = const [],
     this.accionesRevision = const {},
+    this.bombardeo,
+    this.capaHistoria,
     required this.onCellTap,
   });
 
@@ -1035,6 +1076,20 @@ class _GridContent extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: cellRows,
               ),
+              // Capa de BOMBARDEO (historia): % de impacto por celda y
+              // casillas desactivadoras. Encima de las celdas, sin interceptar
+              // toques (IgnorePointer dentro de la propia capa).
+              if (bombardeo != null)
+                Positioned.fill(
+                  child: BombardeoLayer(config: config, vista: bombardeo!),
+                ),
+              // Capa de HISTORIA: túnel inundable, papeles del bot y cartas
+              // clave. Encima de las celdas, sin interceptar toques.
+              if (capaHistoria != null && !capaHistoria!.vacia)
+                Positioned.fill(
+                  child:
+                      HistoriaCapaLayer(config: config, vista: capaHistoria!),
+                ),
               // Capa de REVISIÓN post-cierre: silueta fantasma de cada carta en
               // su celda de origen + resaltado de celdas objetivo de acciones.
               // Va encima de las celdas (hereda la misma perspectiva 3D). No
