@@ -19,6 +19,7 @@ class _BatallaDisponible {
 
 const Map<String, _BatallaDisponible> _batallasDisponibles = {
   '1-1': _BatallaDisponible('humanos_1', 'Los hermanos del alba'),
+  '2-1': _BatallaDisponible('bionicos_1', 'La guardia de Izanagi'),
   '3-1': _BatallaDisponible('demonios_1', 'El asedio de Diente de Invierno'),
 };
 
