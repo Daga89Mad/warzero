@@ -22,10 +22,16 @@
 //     bloqueadas: ["C3", ...]   // nadie las pisa ni las atraviesa (duelo)
 //   }
 //   duelo: {                                  (HistoriaDuelo.cs · humanos_3)
+//     modo: "generales" | "embestida",
 //     roles: {instanceId: "jefe"|"cazador"|"verdugo"}, vidas, vidasMax, nombres,
 //     paralizadoHasta, sinEscudoHasta, rompe: {turno, prob}, turno,
 //     turnoLimite, lluviaEsteTurno, rompeEsteTurno, canaliza,
-//     ultimo: {turno, eventos: [{tipo, texto, coord}]}
+//     ultimo: {turno, eventos: [{tipo, texto, coord}]},
+//     embestida: {                            (solo modo "embestida", bionicos_3)
+//       pilares: [...], escombros: [...],
+//       carga: {turno, dir, origen, fin, choque, carril: [...]},
+//       cargaEsteTurno, proximaCarga, onda, enL, bordeAturde
+//     }
 //   }
 //
 // Aquí está:
@@ -286,6 +292,23 @@ class DueloVista {
   final int lluviaMaxFilas;
   final int lluviaPorFila;
 
+  /// Modo EMBESTIDA (bionicos_3): un solo general contra un jefe que carga.
+  /// Pilares en pie (aturden), escombros (bloquean pero ya no aturden), la
+  /// carga publicada para `cargaTurno` (carril que barre, ancho 3) y las
+  /// fases activas (onda de choque, giro en L).
+  final bool embestida;
+  final Set<String> pilares;
+  final Set<String> escombros;
+  final int cargaTurno;
+  final String cargaDir;
+  final String cargaFin;
+  final String cargaChoque;
+  final Set<String> cargaCarril;
+  final int proximaCarga;
+  final bool onda;
+  final bool enL;
+  final bool bordeAturde;
+
   const DueloVista({
     required this.roles,
     required this.vidas,
@@ -312,6 +335,18 @@ class DueloVista {
     this.lluviaUltimoTurno = 0,
     this.lluviaMaxFilas = 0,
     this.lluviaPorFila = 1,
+    this.embestida = false,
+    this.pilares = const {},
+    this.escombros = const {},
+    this.cargaTurno = 0,
+    this.cargaDir = '',
+    this.cargaFin = '',
+    this.cargaChoque = '',
+    this.cargaCarril = const {},
+    this.proximaCarga = 0,
+    this.onda = false,
+    this.enL = false,
+    this.bordeAturde = false,
   });
 
   static DueloVista? fromEstado(Map<String, dynamic> estado) {
@@ -336,6 +371,8 @@ class DueloVista {
     final rompe = raw['rompe'] is Map ? raw['rompe'] as Map : const {};
     final lluvia = raw['lluvia'] is Map ? raw['lluvia'] as Map : const {};
     final ult = raw['ultimo'] is Map ? raw['ultimo'] as Map : const {};
+    final emb = raw['embestida'] is Map ? raw['embestida'] as Map : const {};
+    final carga = emb['carga'] is Map ? emb['carga'] as Map : const {};
     final eventos = <({String tipo, String texto, String coord, bool malo})>[];
     if (ult['eventos'] is List) {
       for (final e in ult['eventos'] as List) {
@@ -375,8 +412,27 @@ class DueloVista {
       lluviaUltimoTurno: _n(lluvia['ultimoTurno']),
       lluviaMaxFilas: _n(lluvia['maxFilas']),
       lluviaPorFila: lluvia['porFila'] == null ? 1 : _n(lluvia['porFila']),
+      embestida: raw['modo'] == 'embestida',
+      pilares: _strs(emb['pilares']).toSet(),
+      escombros: _strs(emb['escombros']).toSet(),
+      cargaTurno: _n(carga['turno']),
+      cargaDir: (carga['dir'] ?? '').toString(),
+      cargaFin: (carga['fin'] ?? '').toString(),
+      cargaChoque: (carga['choque'] ?? '').toString(),
+      cargaCarril: _strs(carga['carril']).toSet(),
+      proximaCarga: _n(emb['proximaCarga']),
+      onda: emb['onda'] == true,
+      enL: emb['enL'] == true,
+      bordeAturde: emb['bordeAturde'] == true,
     );
   }
+
+  /// True si en [turnoActual] el jefe embiste (hay carril publicado).
+  bool cargaEn(int turnoActual) =>
+      embestida &&
+      cargaTurno == turnoActual &&
+      cargaDir.isNotEmpty &&
+      cargaCarril.isNotEmpty;
 
   /// True si el jefe NO puede moverse en [turnoActual] por las reglas del
   /// duelo (paralizado o canalizando la lluvia del calendario). La lluvia
@@ -539,6 +595,32 @@ class HistoriaCapaLayer extends StatelessWidget {
     }
     final d = vista.duelo;
     if (d != null) {
+      // Embestida: pilares en pie / escombros (sobre el negro de la casilla
+      // bloqueada) y el carril de la carga de este turno.
+      if (d.embestida) {
+        for (final coord in d.pilares) {
+          final r = rect(coord);
+          if (r == null) continue;
+          hijos.add(Positioned.fromRect(
+              rect: r, child: const _CeldaPilar(enPie: true)));
+        }
+        for (final coord in d.escombros) {
+          final r = rect(coord);
+          if (r == null) continue;
+          hijos.add(Positioned.fromRect(
+              rect: r, child: const _CeldaPilar(enPie: false)));
+        }
+        if (d.cargaEn(vista.turno)) {
+          for (final coord in d.cargaCarril) {
+            final r = rect(coord);
+            if (r == null) continue;
+            hijos.add(Positioned.fromRect(
+              rect: r,
+              child: _CeldaCarril(dir: d.cargaDir, fin: coord == d.cargaFin),
+            ));
+          }
+        }
+      }
       if (d.rompeTurno == vista.turno) {
         d.rompeProb.forEach((coord, pct) {
           final r = rect(coord);
@@ -754,6 +836,74 @@ class _CeldaBloqueada extends StatelessWidget {
   }
 }
 
+/// Pilar del duelo de la embestida: en pie (⛰, aturde al jefe) o derrumbado
+/// (✖, sigue bloqueado pero ya no aturde). Va encima del negro de la casilla
+/// bloqueada.
+class _CeldaPilar extends StatelessWidget {
+  final bool enPie;
+  const _CeldaPilar({required this.enPie});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = enPie ? _oro : Colors.white38;
+    return Container(
+      margin: const EdgeInsets.all(3),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withOpacity(enPie ? 0.85 : 0.5)),
+      ),
+      child: Center(
+        child: Text(
+          enPie ? '⛰' : '✖',
+          style: TextStyle(
+              fontSize: enPie ? 20 : 16,
+              color: enPie ? null : Colors.white38,
+              fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+}
+
+/// Casilla del CARRIL de la embestida de este turno: roja, con la flecha de
+/// la dirección. [fin] = casilla donde se detendrá si no alcanza a nadie.
+class _CeldaCarril extends StatelessWidget {
+  final String dir;
+  final bool fin;
+  const _CeldaCarril({required this.dir, required this.fin});
+
+  @override
+  Widget build(BuildContext context) {
+    final flecha = switch (dir) {
+      'N' => '↑',
+      'S' => '↓',
+      'E' => '→',
+      'O' => '←',
+      _ => '•',
+    };
+    return Container(
+      margin: const EdgeInsets.all(1.5),
+      decoration: BoxDecoration(
+        color: _rojoCaza.withOpacity(0.28),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+            color: _rojoCaza.withOpacity(fin ? 0.95 : 0.6), width: fin ? 2 : 1),
+      ),
+      child: Stack(children: [
+        Positioned(
+          right: 3,
+          top: 2,
+          child: Text(fin ? '🐂' : flecha,
+              style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFFFC2BA))),
+        ),
+      ]),
+    );
+  }
+}
+
 const Color _morado = Color(0xFFB57BFF);
 
 /// Casilla elegida por el jugador para su lluvia de rocas.
@@ -897,7 +1047,8 @@ class HistoriaCapaLeyenda extends StatelessWidget {
 
       lineas.add(Text(
         '⚔ Duelo · turno ${vista.turno}${d.turnoLimite > 0 ? '/${d.turnoLimite}' : ''} · '
-        '${vidas('jefe')} · ${vidas('cazador')} · ${vidas('verdugo')}',
+        '${vidas('jefe')} · ${vidas('cazador')}'
+        '${d.embestida ? '' : ' · ${vidas('verdugo')}'}',
         style: const TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.bold,
@@ -905,7 +1056,34 @@ class HistoriaCapaLeyenda extends StatelessWidget {
             fontFamily: 'Cinzel'),
       ));
       final avisos = <String>[];
-      if (d.jugadorEsJefe) {
+      if (d.embestida) {
+        // Duelo de la embestida (bionicos_3).
+        final jefe = d.nombreDe('jefe');
+        if (d.paralizado(vista.turno)) {
+          avisos.add('🔗 $jefe está ATURDIDO: ¡entra en su casilla!');
+        } else if (d.cargaEn(vista.turno)) {
+          final contra = switch (d.cargaChoque) {
+            'pilar' => 'se estrellará contra un pilar',
+            'muro' => 'se detendrá en los escombros',
+            _ => 'llegará hasta el borde',
+          };
+          avisos
+              .add('🐂 ¡EMBESTIDA! Sal del carril rojo (3 de ancho): $contra');
+          if (d.enL && d.cargaChoque != 'pilar') {
+            avisos.add('🔥 Furia: si no choca con un pilar, girará hacia ti');
+          }
+        } else {
+          final faltan = d.proximaCarga - vista.turno;
+          avisos.add(d.proximaCarga <= 0
+              ? '💨 $jefe te acecha'
+              : faltan == 1
+                  ? '💨 $jefe te acecha · embiste el turno que viene: colócate con un pilar a tu espalda'
+                  : '💨 $jefe te acecha · próxima embestida en el turno ${d.proximaCarga}');
+        }
+        avisos.add('⛰ Pilares en pie: ${d.pilares.length}'
+            '${d.bordeAturde ? ' · el borde también le aturde' : ''}'
+            '${d.onda ? ' · 💥 onda de choque activa' : ''}');
+      } else if (d.jugadorEsJefe) {
         // Duelo invertido: el jugador es el jefe.
         final lanzada = vista.lluviaCeldas.isNotEmpty;
         if (d.paralizado(vista.turno)) {
