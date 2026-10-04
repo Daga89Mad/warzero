@@ -3,12 +3,19 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/lobby_model.dart'; // kEjercitos
+import '../models/trofeo_model.dart'; // TrofeoOrigen
+import 'edicion_trofeos_screen.dart';
 
 /// Pantalla de administración de HISTORIAS (solo editores). Mismo patrón que la
 /// pantalla de Historias del jugador: selector por ejército arriba y 10 slots
 /// debajo. Aquí, en cambio, cada slot se puede crear/editar: título y páginas
 /// (imagen + descripción). Escribe directamente en la colección Firestore
 /// `Historias` (docs con Ejercito, Orden, Titulo, Paginas[]).
+///
+/// TROFEOS: se asignan desde Edición · Trofeos ("al completar una historia").
+/// Aquí solo se MUESTRAN los asignados a cada historia. El campo `TrofeoId`
+/// del doc es el sistema anterior: el servidor lo sigue respetando y el editor
+/// solo permite quitarlo.
 class EdicionHistoriasScreen extends StatefulWidget {
   const EdicionHistoriasScreen({super.key});
 
@@ -27,6 +34,10 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
   /// ejercito → orden → resumen
   final Map<int, Map<int, _HistoriaResumen>> _porEjercito = {};
 
+  /// Ids de historia que tienen algún trofeo ACTIVO asignado desde el editor
+  /// de trofeos. Solo para pintar el 🏆 en el slot.
+  Set<String> _conTrofeo = const {};
+
   @override
   void initState() {
     super.initState();
@@ -42,6 +53,7 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
       _error = null;
     });
     try {
+      final trofeosFuture = _cargarTrofeosRef();
       final snap = await _col.get();
       final map = <int, Map<int, _HistoriaResumen>>{};
       for (final doc in snap.docs) {
@@ -57,11 +69,17 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
           trofeoId: (d['TrofeoId'] ?? d['trofeoId'] ?? '').toString(),
         );
       }
+      final trofeos = await trofeosFuture;
       if (!mounted) return;
       setState(() {
         _porEjercito
           ..clear()
           ..addAll(map);
+        _conTrofeo = {
+          for (final t in trofeos)
+            if (t.origen == TrofeoOrigen.historia && t.origenId.isNotEmpty)
+              t.origenId,
+        };
         _loading = false;
       });
     } catch (e) {
@@ -171,7 +189,8 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
                     titulo: r?.titulo ?? '',
                     numPaginas: r?.numPaginas ?? 0,
                     existe: r != null,
-                    conTrofeo: (r?.trofeoId ?? '').isNotEmpty,
+                    conTrofeo: r != null &&
+                        (r.trofeoId.isNotEmpty || _conTrofeo.contains(r.docId)),
                     onTap: () => _editar(orden),
                   );
                 },
@@ -188,7 +207,8 @@ class _HistoriaResumen {
   final String titulo;
   final int numPaginas;
 
-  /// Id del trofeo asociado ('' = ninguno). Solo para pintar el 🏆 en el slot.
+  /// Id del trofeo del sistema anterior (`TrofeoId`, '' = ninguno). Solo para
+  /// pintar el 🏆 en el slot.
   final String trofeoId;
 
   const _HistoriaResumen({
@@ -331,17 +351,24 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
   /// desbloqueada en la colección de TODOS los jugadores.
   bool _porDefecto = false;
 
-  /// Trofeo que se otorga al completar la historia ('' = ninguno).
+  /// Trofeo del SISTEMA ANTERIOR (`TrofeoId` del doc, '' = ninguno). Ya no se
+  /// elige aquí; solo se muestra y se puede quitar.
   String _trofeoId = '';
 
-  /// Catálogo de trofeos para el selector, ya ordenado. Se lee una vez al abrir
-  /// el editor. Si la lectura falla se queda vacío: el selector avisa y el resto
-  /// del editor sigue funcionando.
+  /// Catálogo de trofeos activos, ya ordenado. Se lee al abrir el editor (y al
+  /// volver de Edición · Trofeos). Si la lectura falla se queda vacío.
   List<_TrofeoRef> _trofeos = const [];
 
-  /// El trofeo elegido, o null si no hay ninguno (o si el id guardado ya no
-  /// existe en el catálogo, p. ej. porque lo borraron).
-  _TrofeoRef? get _trofeoSel {
+  /// Trofeos asignados a ESTA historia desde el editor de trofeos.
+  List<_TrofeoRef> get _asignados => _docId == null
+      ? const []
+      : _trofeos
+          .where(
+              (t) => t.origen == TrofeoOrigen.historia && t.origenId == _docId)
+          .toList();
+
+  /// El trofeo antiguo resuelto contra el catálogo, o null si ya no existe.
+  _TrofeoRef? get _trofeoLegado {
     if (_trofeoId.isEmpty) return null;
     for (final t in _trofeos) {
       if (t.id == _trofeoId) return t;
@@ -367,7 +394,7 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
 
   Future<void> _load() async {
     // El catálogo de trofeos y el doc de la historia se leen en paralelo.
-    final trofeosFuture = _cargarTrofeos();
+    final trofeosFuture = _cargarTrofeosRef();
     try {
       if (widget.docId != null) {
         final doc = await _col.doc(widget.docId!).get();
@@ -392,35 +419,14 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
     if (mounted) setState(() => _loading = false);
   }
 
-  /// Lee la colección `Trofeos` para el selector. Solo los ACTIVOS: un trofeo
-  /// desactivado no se puede otorgar (`OtorgarManualAsync` lo rechaza), así que
-  /// no tiene sentido ofrecerlo.
-  Future<List<_TrofeoRef>> _cargarTrofeos() async {
-    try {
-      final snap = await FirebaseFirestore.instance.collection('Trofeos').get();
-      final lista = <_TrofeoRef>[];
-      for (final doc in snap.docs) {
-        final d = doc.data();
-        // Ausencia del campo = activo (igual que WarZeroTrofeos.EstaActivo).
-        final rawActivo = d['Activo'] ?? d['activo'];
-        if (rawActivo != null && rawActivo != true) continue;
-        final icono = (d['Icono'] ?? d['icono'] ?? '').toString().trim();
-        lista.add(_TrofeoRef(
-          id: doc.id,
-          nombre: (d['Nombre'] ?? d['nombre'] ?? doc.id).toString(),
-          icono: icono.isEmpty ? '🏆' : icono,
-          metrica: (d['Metrica'] ?? d['metrica'] ?? '').toString().trim(),
-          orden: _EdicionHistoriasScreenState._int(d['Orden'] ?? d['orden']),
-        ));
-      }
-      lista.sort((a, b) {
-        final o = a.orden.compareTo(b.orden);
-        return o != 0 ? o : a.nombre.compareTo(b.nombre);
-      });
-      return lista;
-    } catch (_) {
-      return const [];
-    }
+  /// Abre Edición · Trofeos para asignar/quitar trofeos y, al volver, recarga
+  /// el catálogo para reflejar los cambios.
+  Future<void> _gestionarTrofeos() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const EdicionTrofeosScreen()),
+    );
+    final lista = await _cargarTrofeosRef();
+    if (mounted) setState(() => _trofeos = lista);
   }
 
   void _toast(String msg, {bool error = false}) {
@@ -451,107 +457,6 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
     });
   }
 
-  /// Hoja inferior para elegir el trofeo (o quitarlo).
-  Future<void> _elegirTrofeo() async {
-    if (_trofeos.isEmpty) {
-      _toast('No hay trofeos activos. Créalos primero en Edición · Trofeos.',
-          error: true);
-      return;
-    }
-    final elegido = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: const Color(0xFF0A1525),
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
-      ),
-      builder: (bctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(bctx).size.height * 0.7,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 16, 16, 10),
-                child: Text(
-                  'TROFEO AL COMPLETARLA',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontFamily: 'Cinzel',
-                    letterSpacing: 2,
-                    color: Color(0xFFC8A860),
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              Flexible(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  children: [
-                    // Opción de quitar.
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.block,
-                          size: 20, color: Color(0xFF506070)),
-                      title: const Text(
-                        'Sin trofeo',
-                        style: TextStyle(
-                            fontFamily: 'Cinzel',
-                            fontSize: 12,
-                            color: Color(0xFF90A0B0)),
-                      ),
-                      trailing: _trofeoId.isEmpty
-                          ? const Icon(Icons.check,
-                              size: 18, color: Color(0xFF4ABB58))
-                          : null,
-                      onTap: () => Navigator.of(bctx).pop(''),
-                    ),
-                    const Divider(color: Color(0xFF203040), height: 12),
-                    for (final t in _trofeos)
-                      ListTile(
-                        dense: true,
-                        leading:
-                            Text(t.icono, style: const TextStyle(fontSize: 20)),
-                        title: Text(
-                          t.nombre,
-                          style: const TextStyle(
-                              fontFamily: 'Cinzel',
-                              fontSize: 12,
-                              color: Color(0xFFE0D8C0)),
-                        ),
-                        // Aviso importante: un trofeo CON métrica se puede
-                        // conseguir acumulando, sin jugar la historia.
-                        subtitle: t.metrica.isEmpty
-                            ? null
-                            : Text(
-                                '⚠ tiene métrica "${t.metrica}": se puede '
-                                'conseguir sin completar la historia',
-                                style: const TextStyle(
-                                    fontSize: 9,
-                                    fontFamily: 'Cinzel',
-                                    height: 1.3,
-                                    color: Color(0xFFE0A030)),
-                              ),
-                        trailing: _trofeoId == t.id
-                            ? const Icon(Icons.check,
-                                size: 18, color: Color(0xFF4ABB58))
-                            : null,
-                        onTap: () => Navigator.of(bctx).pop(t.id),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (elegido == null) return; // cerró sin elegir
-    setState(() => _trofeoId = elegido);
-  }
-
   Future<void> _guardar() async {
     if (_tituloCtrl.text.trim().isEmpty) {
       _toast('El título no puede estar vacío.', error: true);
@@ -564,8 +469,8 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
       'Orden': widget.orden,
       'Titulo': _tituloCtrl.text.trim(),
       'PorDefecto': _porDefecto,
-      // Id del trofeo que otorga al completarla ('' = ninguno). Lo lee el
-      // servidor en DesbloquearHistoriaAsync.
+      // Trofeo del sistema anterior ('' = ninguno). Ya no se elige aquí (se
+      // asigna en Edición · Trofeos); se guarda para conservarlo o quitarlo.
       'TrofeoId': _trofeoId,
       'Paginas': [
         for (int i = 0; i < _paginas.length; i++)
@@ -746,76 +651,8 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
                 ),
                 const SizedBox(height: 12),
 
-                // ── Trofeo al completarla ────────────────────────
-                GestureDetector(
-                  onTap: _saving ? null : _elegirTrofeo,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0A1220),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: _trofeoId.isNotEmpty
-                            ? const Color(0xFFC8A860)
-                            : const Color(0xFF506070).withOpacity(0.35),
-                        width: _trofeoId.isNotEmpty ? 1.4 : 1,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Text(
-                          _trofeoSel?.icono ?? '🏆',
-                          style: TextStyle(
-                            fontSize: 20,
-                            color: _trofeoId.isEmpty
-                                ? const Color(0xFF405060)
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'TROFEO AL COMPLETARLA',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontFamily: 'Cinzel',
-                                  letterSpacing: 1,
-                                  fontWeight: FontWeight.bold,
-                                  color: _trofeoId.isNotEmpty
-                                      ? const Color(0xFFC8A860)
-                                      : const Color(0xFF90A0B0),
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                _trofeoId.isEmpty
-                                    ? 'Ninguno. Toca para elegir uno.'
-                                    : (_trofeoSel?.nombre ??
-                                        'Trofeo "$_trofeoId" '
-                                            '(ya no existe o está desactivado)'),
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontFamily: 'Cinzel',
-                                  height: 1.4,
-                                  color:
-                                      _trofeoSel == null && _trofeoId.isNotEmpty
-                                          ? const Color(0xFFE06060)
-                                          : const Color(0xFF506070),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right,
-                            size: 20, color: Color(0xFF506070)),
-                      ],
-                    ),
-                  ),
-                ),
+                // ── Trofeos al completarla (solo lectura) ────────
+                _panelTrofeos(),
 
                 const SizedBox(height: 20),
                 Row(
@@ -883,6 +720,141 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
                 ),
               ),
             ),
+    );
+  }
+
+  /// Trofeos que da esta historia. Solo lectura: se asignan en Edición ·
+  /// Trofeos ("al completar una historia"), a la que lleva el botón.
+  Widget _panelTrofeos() {
+    const oro = Color(0xFFC8A860);
+    const tenue = Color(0xFF506070);
+    final asignados = _asignados;
+    final legado = _trofeoLegado;
+    final hayAlgo = asignados.isNotEmpty || _trofeoId.isNotEmpty;
+
+    Widget fila(String icono, String nombre,
+        {String? nota, Color notaColor = tenue, Widget? accion}) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
+          children: [
+            Text(icono, style: const TextStyle(fontSize: 18)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(nombre,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'Cinzel',
+                          color: Color(0xFFE0D8C0))),
+                  if (nota != null)
+                    Text(nota,
+                        style: TextStyle(
+                            fontSize: 9,
+                            fontFamily: 'Cinzel',
+                            height: 1.3,
+                            color: notaColor)),
+                ],
+              ),
+            ),
+            if (accion != null) accion,
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0A1220),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: hayAlgo ? oro : tenue.withOpacity(0.35),
+          width: hayAlgo ? 1.4 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'TROFEOS AL COMPLETARLA',
+            style: TextStyle(
+              fontSize: 11,
+              fontFamily: 'Cinzel',
+              letterSpacing: 1,
+              fontWeight: FontWeight.bold,
+              color: hayAlgo ? oro : const Color(0xFF90A0B0),
+            ),
+          ),
+          if (_docId == null)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                'Guarda la historia primero; después podrás asignarle trofeos '
+                'desde Edición · Trofeos.',
+                style: TextStyle(
+                    fontSize: 9,
+                    fontFamily: 'Cinzel',
+                    height: 1.4,
+                    color: tenue),
+              ),
+            )
+          else if (!hayAlgo)
+            const Padding(
+              padding: EdgeInsets.only(top: 4),
+              child: Text(
+                'Ninguno. Se asignan en Edición · Trofeos → "Al completar una '
+                'historia".',
+                style: TextStyle(
+                    fontSize: 9,
+                    fontFamily: 'Cinzel',
+                    height: 1.4,
+                    color: tenue),
+              ),
+            ),
+          for (final t in asignados) fila(t.icono, t.nombre),
+          // Trofeo del sistema anterior: se muestra para poder quitarlo.
+          if (_trofeoId.isNotEmpty)
+            fila(
+              legado?.icono ?? '🏆',
+              legado?.nombre ?? 'Trofeo "$_trofeoId"',
+              nota: legado == null
+                  ? 'Ya no existe o está desactivado.'
+                  : 'Asignado con el sistema anterior. Para unificarlo, '
+                      'asígnalo en Edición · Trofeos y quítalo de aquí.',
+              notaColor: legado == null
+                  ? const Color(0xFFE06060)
+                  : const Color(0xFFE0A030),
+              accion: TextButton(
+                onPressed:
+                    _saving ? null : () => setState(() => _trofeoId = ''),
+                child: const Text('QUITAR',
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 1,
+                        color: Color(0xFFE06060))),
+              ),
+            ),
+          if (_docId != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: _saving ? null : _gestionarTrofeos,
+                icon: const Icon(Icons.emoji_events_outlined,
+                    size: 16, color: Color(0xFFA040C0)),
+                label: const Text('GESTIONAR TROFEOS',
+                    style: TextStyle(
+                        fontSize: 9,
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 1,
+                        color: Color(0xFFA040C0))),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -963,17 +935,16 @@ class _PaginaEdit {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Trofeo del catálogo, para el selector del editor
+// Trofeo del catálogo, para mostrar los asignados a cada historia
 // ─────────────────────────────────────────────────────────────
 class _TrofeoRef {
   final String id;
   final String nombre;
   final String icono;
 
-  /// Métrica del trofeo. Si NO está vacía, el trofeo también se puede conseguir
-  /// acumulando esa métrica —sin completar la historia—, así que el selector lo
-  /// marca con un aviso. Los trofeos de historia deberían crearse sin métrica.
-  final String metrica;
+  /// Cómo se consigue (ver [TrofeoOrigen]) y a qué reto/historia apunta.
+  final String origen;
+  final String origenId;
 
   final int orden;
 
@@ -981,9 +952,42 @@ class _TrofeoRef {
     required this.id,
     required this.nombre,
     required this.icono,
-    required this.metrica,
+    required this.origen,
+    required this.origenId,
     required this.orden,
   });
+}
+
+/// Lee la colección `Trofeos` (solo los ACTIVOS: uno desactivado no se otorga)
+/// y la devuelve ordenada. Si la lectura falla devuelve una lista vacía: la
+/// pantalla sigue funcionando, solo que sin mostrar los trofeos.
+Future<List<_TrofeoRef>> _cargarTrofeosRef() async {
+  try {
+    final snap = await FirebaseFirestore.instance.collection('Trofeos').get();
+    final lista = <_TrofeoRef>[];
+    for (final doc in snap.docs) {
+      final d = doc.data();
+      // Ausencia del campo = activo (igual que WarZeroTrofeos.EstaActivo).
+      final rawActivo = d['Activo'] ?? d['activo'];
+      if (rawActivo != null && rawActivo != true) continue;
+      final icono = (d['Icono'] ?? d['icono'] ?? '').toString().trim();
+      lista.add(_TrofeoRef(
+        id: doc.id,
+        nombre: (d['Nombre'] ?? d['nombre'] ?? doc.id).toString(),
+        icono: icono.isEmpty ? '🏆' : icono,
+        origen: TrofeoOrigen.normalizar(d['Origen'] ?? d['origen']),
+        origenId: (d['OrigenId'] ?? d['origenId'] ?? '').toString().trim(),
+        orden: _EdicionHistoriasScreenState._int(d['Orden'] ?? d['orden']),
+      ));
+    }
+    lista.sort((a, b) {
+      final o = a.orden.compareTo(b.orden);
+      return o != 0 ? o : a.nombre.compareTo(b.nombre);
+    });
+    return lista;
+  } catch (_) {
+    return const [];
+  }
 }
 
 // ─────────────────────────────────────────────────────────────

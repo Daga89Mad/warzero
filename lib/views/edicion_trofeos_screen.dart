@@ -4,13 +4,24 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/lobby_model.dart'; // kEjercitos
 import '../models/trofeo_model.dart';
+import '../services/reto_service.dart'; // kRetosDisponibles
 
 /// Pantalla de administración de TROFEOS (solo editores). Lista todos los
 /// trofeos definidos y permite crear/editar/borrar cada uno: nombre, descripción,
-/// icono, condición de obtención (métrica + operador + objetivo), orden y si está
-/// activo. Escribe directamente en la colección Firestore `Trofeos` (mismo patrón
-/// que EdicionHistoriasScreen con `Historias`).
+/// icono, CÓMO SE CONSIGUE, orden y si está activo. Escribe directamente en la
+/// colección Firestore `Trofeos` (mismo patrón que EdicionHistoriasScreen con
+/// `Historias`).
+///
+/// "Cómo se consigue" (campo `Origen`):
+///   · `metrica`  → al alcanzar Metrica/Operador/Objetivo.
+///   · `reto`     → al GANAR el reto `OrigenId` (ids de RetoCatalogo.cs).
+///   · `historia` → al COMPLETAR la historia `OrigenId` (id del doc de
+///                  `Historias`).
+/// `OrigenNombre` es una etiqueta legible para el perfil del jugador. El
+/// servidor reparte estos trofeos también a quien YA había completado el
+/// reto/historia antes de asignarlos.
 class EdicionTrofeosScreen extends StatefulWidget {
   const EdicionTrofeosScreen({super.key});
 
@@ -57,6 +68,10 @@ class _EdicionTrofeosScreenState extends State<EdicionTrofeosScreen> {
           nombre: (d['Nombre'] ?? d['nombre'] ?? '').toString(),
           descripcion: (d['Descripcion'] ?? d['descripcion'] ?? '').toString(),
           icono: icono.isEmpty ? '🏆' : icono,
+          origen: TrofeoOrigen.normalizar(d['Origen'] ?? d['origen']),
+          origenId: (d['OrigenId'] ?? d['origenId'] ?? '').toString(),
+          origenNombre:
+              (d['OrigenNombre'] ?? d['origenNombre'] ?? '').toString(),
           metrica: (d['Metrica'] ?? d['metrica'] ?? '').toString(),
           operador: (d['Operador'] ?? d['operador'] ?? '>=').toString(),
           objetivo: _int(d['Objetivo'] ?? d['objetivo']),
@@ -208,6 +223,12 @@ class _TrofeoDoc {
   final String nombre;
   final String descripcion;
   final String icono;
+
+  /// Cómo se consigue (ver [TrofeoOrigen]).
+  final String origen;
+  final String origenId;
+  final String origenNombre;
+
   final String metrica;
   final String operador;
   final int objetivo;
@@ -219,12 +240,23 @@ class _TrofeoDoc {
     required this.nombre,
     required this.descripcion,
     required this.icono,
+    required this.origen,
+    required this.origenId,
+    required this.origenNombre,
     required this.metrica,
     required this.operador,
     required this.objetivo,
     required this.orden,
     required this.activo,
   });
+
+  String get condicionTexto => TrofeoOrigen.textoCondicion(
+        origen: origen,
+        origenNombre: origenNombre.isNotEmpty ? origenNombre : origenId,
+        metrica: metrica,
+        operador: operador,
+        objetivo: objetivo,
+      );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -245,11 +277,15 @@ class _TrofeoRow extends StatelessWidget {
   static const _oro = Color(0xFFC8A860);
   static const _tenue = Color(0xFF506070);
 
+  static String _iconoOrigen(String origen) => switch (origen) {
+        TrofeoOrigen.reto => '🎯  ',
+        TrofeoOrigen.historia => '📖  ',
+        _ => '',
+      };
+
   @override
   Widget build(BuildContext context) {
-    final m = TrofeoMetrica.porClave(trofeo.metrica);
-    final cond =
-        '${m?.label ?? trofeo.metrica} ${trofeo.operador} ${trofeo.objetivo}';
+    final cond = '${_iconoOrigen(trofeo.origen)}${trofeo.condicionTexto}';
     final activo = trofeo.activo;
 
     return GestureDetector(
@@ -339,6 +375,36 @@ class _TrofeoRow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Historia del catálogo, para el selector "al completar una historia"
+// ─────────────────────────────────────────────────────────────
+class _HistoriaRef {
+  /// Id del doc de `Historias` (lo que el servidor apunta en
+  /// `historiasDesbloqueadas` al completarla).
+  final String id;
+  final int ejercito;
+  final int orden;
+  final String titulo;
+  final bool porDefecto;
+
+  const _HistoriaRef({
+    required this.id,
+    required this.ejercito,
+    required this.orden,
+    required this.titulo,
+    required this.porDefecto,
+  });
+
+  /// Etiqueta que se guarda en `OrigenNombre`. Sin el título a propósito: el
+  /// perfil del jugador la muestra aunque aún no haya desbloqueado la historia,
+  /// y la pantalla de Historias oculta el título de las bloqueadas.
+  String get etiqueta {
+    final ej = kEjercitos.where((e) => e.id == ejercito);
+    final nombreEj = ej.isEmpty ? 'Ejército $ejercito' : ej.first.nombre;
+    return 'nº $orden · $nombreEj';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
 // EDITOR de un trofeo (crear / editar)
 // ─────────────────────────────────────────────────────────────
 class _EditorTrofeo extends StatefulWidget {
@@ -356,6 +422,7 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
   static const _card = Color(0xFF0A1220);
   static const _oro = Color(0xFFC8A860);
   static const _tenue = Color(0xFF506070);
+  static const _verde = Color(0xFF4ABB58);
 
   static const _operadores = ['>=', '>', '==', '<=', '<'];
 
@@ -367,9 +434,27 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
   late final TextEditingController _objetivoCtrl;
   late final TextEditingController _ordenCtrl;
 
+  /// Cómo se consigue (ver [TrofeoOrigen]).
+  late String _origen;
+
+  /// Reto elegido ('' = ninguno). Solo cuenta si `_origen == reto`.
+  late String _retoId;
+
+  /// Historia elegida ('' = ninguna). Solo cuenta si `_origen == historia`.
+  late String _historiaId;
+
   late String _metrica;
   late String _operador;
   late bool _activo;
+
+  /// Catálogo de historias para el selector. Se carga la primera vez que se
+  /// elige "al completar una historia" (o al abrir un trofeo que ya lo es).
+  List<_HistoriaRef>? _historias;
+  bool _cargandoHistorias = false;
+  String? _errorHistorias;
+
+  /// Ejército del filtro del selector de historias.
+  int _ejercitoHist = kEjercitos.first.id;
 
   bool _saving = false;
 
@@ -382,8 +467,14 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
     _nombreCtrl = TextEditingController(text: e?.nombre ?? '');
     _descCtrl = TextEditingController(text: e?.descripcion ?? '');
     _iconoCtrl = TextEditingController(text: e?.icono ?? '🏆');
-    _objetivoCtrl = TextEditingController(text: (e?.objetivo ?? 1).toString());
+    final objetivo = (e?.objetivo ?? 0) > 0 ? e!.objetivo : 1;
+    _objetivoCtrl = TextEditingController(text: objetivo.toString());
     _ordenCtrl = TextEditingController(text: (e?.orden ?? 0).toString());
+
+    _origen = e?.origen ?? TrofeoOrigen.metrica;
+    _retoId = e?.origen == TrofeoOrigen.reto ? e!.origenId : '';
+    _historiaId = e?.origen == TrofeoOrigen.historia ? e!.origenId : '';
+
     _metrica = e?.metrica.isNotEmpty == true
         ? e!.metrica
         : TrofeoMetrica.todas.first.clave;
@@ -393,6 +484,8 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
     }
     _operador = _operadores.contains(e?.operador) ? e!.operador : '>=';
     _activo = e?.activo ?? true;
+
+    if (_origen == TrofeoOrigen.historia) _cargarHistorias();
   }
 
   @override
@@ -408,24 +501,117 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
   static int _int(String s, {int fallback = 0}) =>
       int.tryParse(s.trim()) ?? fallback;
 
+  static int _intDyn(dynamic v) =>
+      v is num ? v.toInt() : int.tryParse(v?.toString() ?? '') ?? 0;
+
+  // ── Historias ─────────────────────────────────────────────
+
+  Future<void> _cargarHistorias() async {
+    if (_historias != null || _cargandoHistorias) return;
+    setState(() {
+      _cargandoHistorias = true;
+      _errorHistorias = null;
+    });
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('Historias').get();
+      final lista = snap.docs.map((doc) {
+        final d = doc.data();
+        return _HistoriaRef(
+          id: doc.id,
+          ejercito: _intDyn(d['Ejercito'] ?? d['ejercito']),
+          orden: _intDyn(d['Orden'] ?? d['orden']),
+          titulo: (d['Titulo'] ?? d['titulo'] ?? '').toString(),
+          porDefecto: d['PorDefecto'] == true || d['porDefecto'] == true,
+        );
+      }).toList()
+        ..sort((a, b) {
+          final e = a.ejercito.compareTo(b.ejercito);
+          return e != 0 ? e : a.orden.compareTo(b.orden);
+        });
+      if (!mounted) return;
+      setState(() {
+        _historias = lista;
+        _cargandoHistorias = false;
+        // Abre el filtro en el ejército de la historia ya elegida.
+        final sel = _historiaSel;
+        if (sel != null) _ejercitoHist = sel.ejercito;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _errorHistorias = e.toString();
+        _cargandoHistorias = false;
+      });
+    }
+  }
+
+  _HistoriaRef? get _historiaSel {
+    if (_historiaId.isEmpty) return null;
+    for (final h in _historias ?? const <_HistoriaRef>[]) {
+      if (h.id == _historiaId) return h;
+    }
+    return null;
+  }
+
+  RetoInfo? get _retoSel {
+    if (_retoId.isEmpty) return null;
+    for (final r in kRetosDisponibles) {
+      if (r.id == _retoId) return r;
+    }
+    return null;
+  }
+
+  /// Etiqueta legible que se guarda en `OrigenNombre`.
+  String get _origenNombre {
+    switch (_origen) {
+      case TrofeoOrigen.reto:
+        return _retoSel?.titulo ?? _retoId;
+      case TrofeoOrigen.historia:
+        // Si no se pudo cargar el catálogo se conserva la etiqueta anterior.
+        return _historiaSel?.etiqueta ??
+            (widget.existente?.origen == TrofeoOrigen.historia &&
+                    widget.existente?.origenId == _historiaId
+                ? widget.existente!.origenNombre
+                : _historiaId);
+    }
+    return '';
+  }
+
+  // ── Guardar ───────────────────────────────────────────────
+
   Future<void> _guardar() async {
     final nombre = _nombreCtrl.text.trim();
     if (nombre.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('El nombre no puede estar vacío.')),
-      );
+      _toast('El nombre no puede estar vacío.');
+      return;
+    }
+    if (_origen == TrofeoOrigen.reto && _retoId.isEmpty) {
+      _toast('Elige el reto que otorga el trofeo.');
+      return;
+    }
+    if (_origen == TrofeoOrigen.historia && _historiaId.isEmpty) {
+      _toast('Elige la historia que otorga el trofeo.');
       return;
     }
 
     setState(() => _saving = true);
     final icono = _iconoCtrl.text.trim();
+    final esMetrica = _origen == TrofeoOrigen.metrica;
     final data = <String, dynamic>{
       'Nombre': nombre,
       'Descripcion': _descCtrl.text.trim(),
       'Icono': icono.isEmpty ? '🏆' : icono,
-      'Metrica': _metrica,
-      'Operador': _operador,
-      'Objetivo': _int(_objetivoCtrl.text, fallback: 1),
+      'Origen': _origen,
+      'OrigenId': esMetrica
+          ? ''
+          : (_origen == TrofeoOrigen.reto ? _retoId : _historiaId),
+      'OrigenNombre': esMetrica ? '' : _origenNombre,
+      // En los de reto/historia la métrica se vacía: así ni un servidor
+      // antiguo podría regalarlo por acumulación.
+      'Metrica': esMetrica ? _metrica : '',
+      'Operador': esMetrica ? _operador : '>=',
+      'Objetivo': esMetrica ? _int(_objetivoCtrl.text, fallback: 1) : 0,
       'Orden': _int(_ordenCtrl.text),
       'Activo': _activo,
     };
@@ -441,17 +627,21 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo guardar: $e')),
-        );
+        _toast('No se pudo guardar: $e');
       }
     }
   }
 
+  void _toast(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
+  }
+
+  // ── UI ────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
-    final metricaSel = TrofeoMetrica.porClave(_metrica);
-
     return Scaffold(
       backgroundColor: _fondo,
       appBar: AppBar(
@@ -520,8 +710,10 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
             ],
           ),
           const SizedBox(height: 20),
-          _label('CONDICIÓN DE OBTENCIÓN'),
+          _label('CÓMO SE CONSIGUE'),
           const SizedBox(height: 8),
+          _selectorOrigen(),
+          const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -532,59 +724,13 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                _subLabel('MÉTRICA'),
-                const SizedBox(height: 6),
-                _dropdownMetrica(),
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 2,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _subLabel('OPERADOR'),
-                          const SizedBox(height: 6),
-                          _dropdownOperador(),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      flex: 3,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _subLabel('OBJETIVO'),
-                          const SizedBox(height: 6),
-                          _campo(_objetivoCtrl,
-                              hint: '100',
-                              keyboard: TextInputType.number,
-                              soloDigitos: true),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                switch (_origen) {
+                  TrofeoOrigen.reto => _panelReto(),
+                  TrofeoOrigen.historia => _panelHistoria(),
+                  _ => _panelMetrica(),
+                },
                 const SizedBox(height: 12),
-                // Vista previa de la condición.
-                Container(
-                  width: double.infinity,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: _oro.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: _oro.withOpacity(0.3)),
-                  ),
-                  child: Text(
-                    'Se consigue cuando  '
-                    '${metricaSel?.label ?? _metrica} '
-                    '$_operador ${_objetivoCtrl.text.trim().isEmpty ? '?' : _objetivoCtrl.text.trim()}',
-                    style: const TextStyle(
-                        color: _oro, fontSize: 11, fontFamily: 'Cinzel'),
-                  ),
-                ),
+                _vistaPrevia(),
               ],
             ),
           ),
@@ -617,6 +763,348 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
       ),
     );
   }
+
+  /// Tres botones: métrica / reto / historia.
+  Widget _selectorOrigen() {
+    Widget opcion(String valor, String icono, String texto) {
+      final sel = _origen == valor;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () {
+            setState(() => _origen = valor);
+            if (valor == TrofeoOrigen.historia) _cargarHistorias();
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            decoration: BoxDecoration(
+              color: sel ? _accent.withOpacity(0.18) : _card,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: sel ? _accent : _tenue.withOpacity(0.35),
+                width: sel ? 1.3 : 1,
+              ),
+            ),
+            child: Column(
+              children: [
+                Text(icono, style: const TextStyle(fontSize: 18)),
+                const SizedBox(height: 4),
+                Text(
+                  texto,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontFamily: 'Cinzel',
+                    letterSpacing: 0.5,
+                    height: 1.3,
+                    fontWeight: sel ? FontWeight.bold : FontWeight.normal,
+                    color: sel ? _accent : const Color(0xFF90A0B0),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        opcion(TrofeoOrigen.metrica, '📈', 'Por\nmétrica'),
+        const SizedBox(width: 8),
+        opcion(TrofeoOrigen.reto, '🎯', 'Al completar\nun reto'),
+        const SizedBox(width: 8),
+        opcion(TrofeoOrigen.historia, '📖', 'Al completar\nuna historia'),
+      ],
+    );
+  }
+
+  Widget _panelMetrica() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _subLabel('MÉTRICA'),
+        const SizedBox(height: 6),
+        _dropdownMetrica(),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            Expanded(
+              flex: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _subLabel('OPERADOR'),
+                  const SizedBox(height: 6),
+                  _dropdownOperador(),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _subLabel('OBJETIVO'),
+                  const SizedBox(height: 6),
+                  _campo(_objetivoCtrl,
+                      hint: '100',
+                      keyboard: TextInputType.number,
+                      soloDigitos: true),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _panelReto() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _subLabel('RETO'),
+        const SizedBox(height: 6),
+        // Un id guardado que ya no está en la lista (reto retirado).
+        if (_retoId.isNotEmpty && _retoSel == null)
+          _aviso('El reto "$_retoId" ya no está en la lista de retos.'),
+        for (final r in kRetosDisponibles)
+          _opcionLista(
+            seleccionada: _retoId == r.id,
+            titulo: '${r.numero}. ${r.titulo}',
+            subtitulo: r.etiquetas.join('   '),
+            onTap: () => setState(() => _retoId = r.id),
+          ),
+        const SizedBox(height: 4),
+        _nota('Se otorga al GANAR el reto. Quien ya lo hubiera ganado antes lo '
+            'recibe la próxima vez que se le evalúen los trofeos.'),
+      ],
+    );
+  }
+
+  Widget _panelHistoria() {
+    if (_cargandoHistorias) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2, color: _accent),
+          ),
+        ),
+      );
+    }
+    if (_errorHistorias != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _aviso('No se pudieron cargar las historias.\n$_errorHistorias'),
+          TextButton(
+            onPressed: () {
+              setState(() => _historias = null);
+              _cargarHistorias();
+            },
+            child: const Text('Reintentar',
+                style: TextStyle(color: _accent, fontFamily: 'Cinzel')),
+          ),
+        ],
+      );
+    }
+
+    final todas = _historias ?? const <_HistoriaRef>[];
+    final delEjercito =
+        todas.where((h) => h.ejercito == _ejercitoHist).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _subLabel('HISTORIA'),
+        const SizedBox(height: 6),
+        if (_historiaId.isNotEmpty && _historiaSel == null)
+          _aviso('La historia "$_historiaId" ya no existe.'),
+        // Filtro por ejército.
+        SizedBox(
+          height: 34,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: [
+              for (final e in kEjercitos)
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: GestureDetector(
+                    onTap: () => setState(() => _ejercitoHist = e.id),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: _ejercitoHist == e.id
+                            ? _accent.withOpacity(0.18)
+                            : _fondo,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: _ejercitoHist == e.id
+                              ? _accent
+                              : _tenue.withOpacity(0.4),
+                        ),
+                      ),
+                      child: Text(
+                        '${e.icono} ${e.nombre.toUpperCase()}',
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontFamily: 'Cinzel',
+                          letterSpacing: 1,
+                          color: _ejercitoHist == e.id ? _accent : _tenue,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (delEjercito.isEmpty)
+          _nota('Este ejército no tiene historias creadas. '
+              'Créalas en Edición · Historias.')
+        else
+          for (final h in delEjercito)
+            _opcionLista(
+              seleccionada: _historiaId == h.id,
+              titulo:
+                  '${h.orden}. ${h.titulo.isEmpty ? '(sin título)' : h.titulo}',
+              subtitulo: h.porDefecto
+                  ? '⚠ Por defecto: está abierta para todos, pero el trofeo '
+                      'solo se da al GANARLA en el modo historia.'
+                  : '',
+              onTap: () => setState(() => _historiaId = h.id),
+            ),
+        const SizedBox(height: 4),
+        _nota('Se otorga al completar la historia (ganar su última parte). '
+            'Quien ya la tuviera completada lo recibe la próxima vez que se le '
+            'evalúen los trofeos.'),
+      ],
+    );
+  }
+
+  Widget _vistaPrevia() {
+    final String texto;
+    switch (_origen) {
+      case TrofeoOrigen.reto:
+        texto = _retoId.isEmpty
+            ? 'Elige un reto'
+            : TrofeoOrigen.textoCondicion(
+                origen: _origen,
+                origenNombre: _origenNombre,
+                metrica: '',
+                operador: '>=',
+                objetivo: 0);
+      case TrofeoOrigen.historia:
+        texto = _historiaId.isEmpty
+            ? 'Elige una historia'
+            : TrofeoOrigen.textoCondicion(
+                origen: _origen,
+                origenNombre: _origenNombre,
+                metrica: '',
+                operador: '>=',
+                objetivo: 0);
+      default:
+        final metricaSel = TrofeoMetrica.porClave(_metrica);
+        final obj = _objetivoCtrl.text.trim();
+        texto = 'Se consigue cuando  ${metricaSel?.label ?? _metrica} '
+            '$_operador ${obj.isEmpty ? '?' : obj}';
+    }
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: _oro.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _oro.withOpacity(0.3)),
+      ),
+      child: Text(
+        texto,
+        style: const TextStyle(color: _oro, fontSize: 11, fontFamily: 'Cinzel'),
+      ),
+    );
+  }
+
+  Widget _opcionLista({
+    required bool seleccionada,
+    required String titulo,
+    required String subtitulo,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: seleccionada ? _verde.withOpacity(0.08) : _fondo,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: seleccionada ? _verde : _tenue.withOpacity(0.3),
+            width: seleccionada ? 1.3 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              seleccionada
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_off,
+              size: 18,
+              color: seleccionada ? _verde : _tenue,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    titulo,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'Cinzel',
+                      color: seleccionada
+                          ? const Color(0xFFE0D8C0)
+                          : const Color(0xFFB0C0D0),
+                    ),
+                  ),
+                  if (subtitulo.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitulo,
+                      style: const TextStyle(
+                          fontSize: 9, height: 1.3, color: _tenue),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _nota(String t) => Text(t,
+      style: const TextStyle(
+          fontSize: 9, height: 1.4, color: _tenue, fontFamily: 'Cinzel'));
+
+  Widget _aviso(String t) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(t,
+            style: const TextStyle(
+                fontSize: 10,
+                height: 1.4,
+                color: Color(0xFFE06060),
+                fontFamily: 'Cinzel')),
+      );
 
   Widget _label(String t) => Padding(
         padding: const EdgeInsets.only(bottom: 6),
