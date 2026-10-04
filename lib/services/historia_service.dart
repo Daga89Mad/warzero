@@ -42,6 +42,77 @@ class LluviaResultado {
   });
 }
 
+/// Una historia JUGABLE del modo historia (una entrada de la lista de
+/// ModoHistoriaScreen). Se identifica por el id de su PARTE 1 en el catálogo
+/// del servidor (`HistoriaCatalogo`, p. ej. 'demonios_1'): es el id que lanza
+/// la batalla y también el que guardan los trofeos de origen "historia"
+/// (`Trofeos.OrigenId`) y el servidor en `Jugadores/{uid}.modoHistoriaCompletada`
+/// al ganar la última parte.
+///
+/// No confundir con los documentos de la colección `Historias`: esos son el
+/// LORE (historias del juego para leer), que se abre al completar la historia
+/// jugable con el mismo ejército y orden.
+class HistoriaModoInfo {
+  /// Ejército de la campaña (pestaña): 1 Humanos · 2 Biónicos · 3 Demonios ·
+  /// 4 Nefilim.
+  final int ejercito;
+
+  /// Posición dentro de la campaña (1..10).
+  final int orden;
+
+  /// Id de la parte 1 en `HistoriaCatalogo` del servidor.
+  final String id;
+
+  final String titulo;
+
+  const HistoriaModoInfo({
+    required this.ejercito,
+    required this.orden,
+    required this.id,
+    required this.titulo,
+  });
+}
+
+/// Historias del modo historia ya disponibles. El resto de huecos de cada
+/// campaña salen bloqueados. Los ids DEBEN coincidir con `HistoriaDef.Id` de
+/// la parte 1 en HistoriaCatalogo.cs.
+const List<HistoriaModoInfo> kHistoriasModo = [
+  HistoriaModoInfo(
+    ejercito: 1,
+    orden: 1,
+    id: 'humanos_1',
+    titulo: 'Los hermanos del alba',
+  ),
+  HistoriaModoInfo(
+    ejercito: 2,
+    orden: 1,
+    id: 'bionicos_1',
+    titulo: 'La guardia de Izanagi',
+  ),
+  HistoriaModoInfo(
+    ejercito: 3,
+    orden: 1,
+    id: 'demonios_1',
+    titulo: 'El asedio de Diente de Invierno',
+  ),
+];
+
+/// Historia del modo historia con ese id, o null si no existe.
+HistoriaModoInfo? historiaModoPorId(String id) {
+  for (final h in kHistoriasModo) {
+    if (h.id == id) return h;
+  }
+  return null;
+}
+
+/// Historia del modo historia de ese ejército y orden, o null si no existe.
+HistoriaModoInfo? historiaModoDe(int ejercito, int orden) {
+  for (final h in kHistoriasModo) {
+    if (h.ejercito == ejercito && h.orden == orden) return h;
+  }
+  return null;
+}
+
 class HistoriaService {
   HistoriaService({WarZeroApi? api}) : _api = api ?? WarZeroApi();
 

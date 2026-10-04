@@ -4,24 +4,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'package:warzero/models/lobby_model.dart'; // kEjercitos
-import 'package:warzero/services/historia_service.dart';
+import 'package:warzero/services/historia_service.dart'; // kHistoriasModo
 import 'package:warzero/services/settings_controller.dart';
-
-/// Una batalla de historia YA disponible (jugable). El resto de entradas
-/// aparecen bloqueadas hasta que se desarrollen.
-///
-/// Clave del mapa: '<ejercitoId>-<orden>' (p. ej. '3-1' = Demonios, historia 1).
-class _BatallaDisponible {
-  final String id; // historiaId del catálogo del servidor (p. ej. 'demonios_1')
-  final String titulo;
-  const _BatallaDisponible(this.id, this.titulo);
-}
-
-const Map<String, _BatallaDisponible> _batallasDisponibles = {
-  '1-1': _BatallaDisponible('humanos_1', 'Los hermanos del alba'),
-  '2-1': _BatallaDisponible('bionicos_1', 'La guardia de Izanagi'),
-  '3-1': _BatallaDisponible('demonios_1', 'El asedio de Diente de Invierno'),
-};
 
 /// Modo Historia: pestañas con los 4 ejércitos. Cada ejército tiene 10 historias.
 /// Las disponibles arrancan una partida contra la máquina al pulsarlas; el resto
@@ -115,7 +99,8 @@ class _ListaHistorias extends StatelessWidget {
         }
 
         final orden = i;
-        final disponible = _batallasDisponibles['$ejercitoId-$orden'];
+        // Lista compartida con el editor de trofeos (historia_service.dart).
+        final disponible = historiaModoDe(ejercitoId, orden);
         if (disponible != null) {
           return _EntradaDisponible(numero: orden, batalla: disponible);
         }
@@ -130,7 +115,7 @@ class _ListaHistorias extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────
 class _EntradaDisponible extends StatelessWidget {
   final int numero;
-  final _BatallaDisponible batalla;
+  final HistoriaModoInfo batalla;
 
   const _EntradaDisponible({required this.numero, required this.batalla});
 

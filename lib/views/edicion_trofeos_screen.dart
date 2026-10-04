@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../models/lobby_model.dart'; // kEjercitos
 import '../models/trofeo_model.dart';
+import '../services/historia_service.dart'; // kHistoriasModo
 import '../services/reto_service.dart'; // kRetosDisponibles
 
 /// Pantalla de administración de TROFEOS (solo editores). Lista todos los
@@ -17,8 +18,10 @@ import '../services/reto_service.dart'; // kRetosDisponibles
 /// "Cómo se consigue" (campo `Origen`):
 ///   · `metrica`  → al alcanzar Metrica/Operador/Objetivo.
 ///   · `reto`     → al GANAR el reto `OrigenId` (ids de RetoCatalogo.cs).
-///   · `historia` → al COMPLETAR la historia `OrigenId` (id del doc de
-///                  `Historias`).
+///   · `historia` → al COMPLETAR la historia `OrigenId` del MODO HISTORIA
+///                  (ganar su última parte). `OrigenId` es el id de su parte 1
+///                  en HistoriaCatalogo.cs (ver [kHistoriasModo]), NO el de un
+///                  documento de la colección `Historias` (eso es el lore).
 /// `OrigenNombre` es una etiqueta legible para el perfil del jugador. El
 /// servidor reparte estos trofeos también a quien YA había completado el
 /// reto/historia antes de asignarlos.
@@ -375,36 +378,6 @@ class _TrofeoRow extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Historia del catálogo, para el selector "al completar una historia"
-// ─────────────────────────────────────────────────────────────
-class _HistoriaRef {
-  /// Id del doc de `Historias` (lo que el servidor apunta en
-  /// `historiasDesbloqueadas` al completarla).
-  final String id;
-  final int ejercito;
-  final int orden;
-  final String titulo;
-  final bool porDefecto;
-
-  const _HistoriaRef({
-    required this.id,
-    required this.ejercito,
-    required this.orden,
-    required this.titulo,
-    required this.porDefecto,
-  });
-
-  /// Etiqueta que se guarda en `OrigenNombre`. Sin el título a propósito: el
-  /// perfil del jugador la muestra aunque aún no haya desbloqueado la historia,
-  /// y la pantalla de Historias oculta el título de las bloqueadas.
-  String get etiqueta {
-    final ej = kEjercitos.where((e) => e.id == ejercito);
-    final nombreEj = ej.isEmpty ? 'Ejército $ejercito' : ej.first.nombre;
-    return 'nº $orden · $nombreEj';
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
 // EDITOR de un trofeo (crear / editar)
 // ─────────────────────────────────────────────────────────────
 class _EditorTrofeo extends StatefulWidget {
@@ -440,18 +413,13 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
   /// Reto elegido ('' = ninguno). Solo cuenta si `_origen == reto`.
   late String _retoId;
 
-  /// Historia elegida ('' = ninguna). Solo cuenta si `_origen == historia`.
+  /// Historia del MODO HISTORIA elegida (id de su parte 1, '' = ninguna).
+  /// Solo cuenta si `_origen == historia`.
   late String _historiaId;
 
   late String _metrica;
   late String _operador;
   late bool _activo;
-
-  /// Catálogo de historias para el selector. Se carga la primera vez que se
-  /// elige "al completar una historia" (o al abrir un trofeo que ya lo es).
-  List<_HistoriaRef>? _historias;
-  bool _cargandoHistorias = false;
-  String? _errorHistorias;
 
   /// Ejército del filtro del selector de historias.
   int _ejercitoHist = kEjercitos.first.id;
@@ -485,7 +453,9 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
     _operador = _operadores.contains(e?.operador) ? e!.operador : '>=';
     _activo = e?.activo ?? true;
 
-    if (_origen == TrofeoOrigen.historia) _cargarHistorias();
+    // Abre el filtro en el ejército de la historia ya elegida.
+    final sel = _historiaSel;
+    if (sel != null) _ejercitoHist = sel.ejercito;
   }
 
   @override
@@ -501,57 +471,19 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
   static int _int(String s, {int fallback = 0}) =>
       int.tryParse(s.trim()) ?? fallback;
 
-  static int _intDyn(dynamic v) =>
-      v is num ? v.toInt() : int.tryParse(v?.toString() ?? '') ?? 0;
+  // ── Historias del modo historia ───────────────────────────
 
-  // ── Historias ─────────────────────────────────────────────
+  /// Historia elegida, resuelta contra [kHistoriasModo]. null si no hay o si
+  /// el id guardado no es de una historia del modo historia (p. ej. un trofeo
+  /// antiguo que apuntaba a un documento de lore de `Historias`).
+  HistoriaModoInfo? get _historiaSel =>
+      _historiaId.isEmpty ? null : historiaModoPorId(_historiaId);
 
-  Future<void> _cargarHistorias() async {
-    if (_historias != null || _cargandoHistorias) return;
-    setState(() {
-      _cargandoHistorias = true;
-      _errorHistorias = null;
-    });
-    try {
-      final snap =
-          await FirebaseFirestore.instance.collection('Historias').get();
-      final lista = snap.docs.map((doc) {
-        final d = doc.data();
-        return _HistoriaRef(
-          id: doc.id,
-          ejercito: _intDyn(d['Ejercito'] ?? d['ejercito']),
-          orden: _intDyn(d['Orden'] ?? d['orden']),
-          titulo: (d['Titulo'] ?? d['titulo'] ?? '').toString(),
-          porDefecto: d['PorDefecto'] == true || d['porDefecto'] == true,
-        );
-      }).toList()
-        ..sort((a, b) {
-          final e = a.ejercito.compareTo(b.ejercito);
-          return e != 0 ? e : a.orden.compareTo(b.orden);
-        });
-      if (!mounted) return;
-      setState(() {
-        _historias = lista;
-        _cargandoHistorias = false;
-        // Abre el filtro en el ejército de la historia ya elegida.
-        final sel = _historiaSel;
-        if (sel != null) _ejercitoHist = sel.ejercito;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _errorHistorias = e.toString();
-        _cargandoHistorias = false;
-      });
+  static String _nombreEjercito(int id) {
+    for (final e in kEjercitos) {
+      if (e.id == id) return e.nombre;
     }
-  }
-
-  _HistoriaRef? get _historiaSel {
-    if (_historiaId.isEmpty) return null;
-    for (final h in _historias ?? const <_HistoriaRef>[]) {
-      if (h.id == _historiaId) return h;
-    }
-    return null;
+    return 'Ejército $id';
   }
 
   RetoInfo? get _retoSel {
@@ -568,12 +500,10 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
       case TrofeoOrigen.reto:
         return _retoSel?.titulo ?? _retoId;
       case TrofeoOrigen.historia:
-        // Si no se pudo cargar el catálogo se conserva la etiqueta anterior.
-        return _historiaSel?.etiqueta ??
-            (widget.existente?.origen == TrofeoOrigen.historia &&
-                    widget.existente?.origenId == _historiaId
-                ? widget.existente!.origenNombre
-                : _historiaId);
+        final h = _historiaSel;
+        return h == null
+            ? _historiaId
+            : '«${h.titulo}» (${_nombreEjercito(h.ejercito)})';
     }
     return '';
   }
@@ -590,8 +520,10 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
       _toast('Elige el reto que otorga el trofeo.');
       return;
     }
-    if (_origen == TrofeoOrigen.historia && _historiaId.isEmpty) {
-      _toast('Elige la historia que otorga el trofeo.');
+    if (_origen == TrofeoOrigen.historia && _historiaSel == null) {
+      _toast(_historiaId.isEmpty
+          ? 'Elige la historia que otorga el trofeo.'
+          : 'La historia guardada no es del modo historia. Elige una de la lista.');
       return;
     }
 
@@ -770,10 +702,7 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
       final sel = _origen == valor;
       return Expanded(
         child: GestureDetector(
-          onTap: () {
-            setState(() => _origen = valor);
-            if (valor == TrofeoOrigen.historia) _cargarHistorias();
-          },
+          onTap: () => setState(() => _origen = valor),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
@@ -885,46 +814,22 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
   }
 
   Widget _panelHistoria() {
-    if (_cargandoHistorias) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2, color: _accent),
-          ),
-        ),
-      );
-    }
-    if (_errorHistorias != null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _aviso('No se pudieron cargar las historias.\n$_errorHistorias'),
-          TextButton(
-            onPressed: () {
-              setState(() => _historias = null);
-              _cargarHistorias();
-            },
-            child: const Text('Reintentar',
-                style: TextStyle(color: _accent, fontFamily: 'Cinzel')),
-          ),
-        ],
-      );
-    }
-
-    final todas = _historias ?? const <_HistoriaRef>[];
-    final delEjercito =
-        todas.where((h) => h.ejercito == _ejercitoHist).toList();
+    final delEjercito = kHistoriasModo
+        .where((h) => h.ejercito == _ejercitoHist)
+        .toList()
+      ..sort((a, b) => a.orden.compareTo(b.orden));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _subLabel('HISTORIA'),
+        _subLabel('HISTORIA DEL MODO HISTORIA'),
         const SizedBox(height: 6),
+        // Un id guardado que no es de ninguna historia del modo historia: o la
+        // historia se retiró, o es un trofeo antiguo que apuntaba a un
+        // documento de lore de `Historias`. Hay que volver a elegirla.
         if (_historiaId.isNotEmpty && _historiaSel == null)
-          _aviso('La historia "$_historiaId" ya no existe.'),
+          _aviso('La historia guardada ("$_historiaId") no es del modo '
+              'historia. Vuelve a elegirla en la lista y guarda.'),
         // Filtro por ejército.
         SizedBox(
           height: 34,
@@ -968,24 +873,19 @@ class _EditorTrofeoState extends State<_EditorTrofeo> {
         ),
         const SizedBox(height: 8),
         if (delEjercito.isEmpty)
-          _nota('Este ejército no tiene historias creadas. '
-              'Créalas en Edición · Historias.')
+          _nota('Este ejército aún no tiene historias en el modo historia.')
         else
           for (final h in delEjercito)
             _opcionLista(
               seleccionada: _historiaId == h.id,
-              titulo:
-                  '${h.orden}. ${h.titulo.isEmpty ? '(sin título)' : h.titulo}',
-              subtitulo: h.porDefecto
-                  ? '⚠ Por defecto: está abierta para todos, pero el trofeo '
-                      'solo se da al GANARLA en el modo historia.'
-                  : '',
+              titulo: '${h.orden}. ${h.titulo}',
+              subtitulo: '',
               onTap: () => setState(() => _historiaId = h.id),
             ),
         const SizedBox(height: 4),
-        _nota('Se otorga al completar la historia (ganar su última parte). '
-            'Quien ya la tuviera completada lo recibe la próxima vez que se le '
-            'evalúen los trofeos.'),
+        _nota('Se otorga al completar la historia en el MODO HISTORIA (ganar '
+            'su última parte). Quien ya la tuviera completada lo recibe la '
+            'próxima vez que se le evalúen los trofeos.'),
       ],
     );
   }

@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/lobby_model.dart'; // kEjercitos
 import '../models/trofeo_model.dart'; // TrofeoOrigen
+import '../services/historia_service.dart'; // historiaModoDe
 import 'edicion_trofeos_screen.dart';
 
 /// Pantalla de administración de HISTORIAS (solo editores). Mismo patrón que la
@@ -12,8 +13,10 @@ import 'edicion_trofeos_screen.dart';
 /// (imagen + descripción). Escribe directamente en la colección Firestore
 /// `Historias` (docs con Ejercito, Orden, Titulo, Paginas[]).
 ///
-/// TROFEOS: se asignan desde Edición · Trofeos ("al completar una historia").
-/// Aquí solo se MUESTRAN los asignados a cada historia. El campo `TrofeoId`
+/// TROFEOS: se asignan desde Edición · Trofeos ("al completar una historia") a
+/// las historias del MODO HISTORIA, no a estos documentos de lore. Este lore se
+/// abre al completar la historia jugable del mismo ejército y orden, así que
+/// aquí se MUESTRAN los trofeos de esa historia jugable. El campo `TrofeoId`
 /// del doc es el sistema anterior: el servidor lo sigue respetando y el editor
 /// solo permite quitarlo.
 class EdicionHistoriasScreen extends StatefulWidget {
@@ -34,8 +37,9 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
   /// ejercito → orden → resumen
   final Map<int, Map<int, _HistoriaResumen>> _porEjercito = {};
 
-  /// Ids de historia que tienen algún trofeo ACTIVO asignado desde el editor
-  /// de trofeos. Solo para pintar el 🏆 en el slot.
+  /// Ids de historias del MODO HISTORIA que tienen algún trofeo ACTIVO
+  /// asignado desde el editor de trofeos. Solo para pintar el 🏆 en el slot
+  /// del lore con el mismo ejército y orden.
   Set<String> _conTrofeo = const {};
 
   @override
@@ -190,7 +194,9 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
                     numPaginas: r?.numPaginas ?? 0,
                     existe: r != null,
                     conTrofeo: r != null &&
-                        (r.trofeoId.isNotEmpty || _conTrofeo.contains(r.docId)),
+                        (r.trofeoId.isNotEmpty ||
+                            _conTrofeo.contains(
+                                historiaModoDe(_ejercitoSel, orden)?.id)),
                     onTap: () => _editar(orden),
                   );
                 },
@@ -359,13 +365,19 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
   /// volver de Edición · Trofeos). Si la lectura falla se queda vacío.
   List<_TrofeoRef> _trofeos = const [];
 
-  /// Trofeos asignados a ESTA historia desde el editor de trofeos.
-  List<_TrofeoRef> get _asignados => _docId == null
-      ? const []
-      : _trofeos
-          .where(
-              (t) => t.origen == TrofeoOrigen.historia && t.origenId == _docId)
-          .toList();
+  /// Historia del MODO HISTORIA con el mismo ejército y orden que este lore
+  /// (la que, al completarla, lo abre y da sus trofeos). null si no hay.
+  HistoriaModoInfo? get _historiaModo =>
+      historiaModoDe(widget.ejercito, widget.orden);
+
+  /// Trofeos que se consiguen al completar esa historia del modo historia.
+  List<_TrofeoRef> get _asignados {
+    final h = _historiaModo;
+    if (h == null) return const [];
+    return _trofeos
+        .where((t) => t.origen == TrofeoOrigen.historia && t.origenId == h.id)
+        .toList();
+  }
 
   /// El trofeo antiguo resuelto contra el catálogo, o null si ya no existe.
   _TrofeoRef? get _trofeoLegado {
@@ -723,8 +735,9 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
     );
   }
 
-  /// Trofeos que da esta historia. Solo lectura: se asignan en Edición ·
-  /// Trofeos ("al completar una historia"), a la que lleva el botón.
+  /// Trofeos que da la historia del modo historia de este hueco. Solo
+  /// lectura: se asignan en Edición · Trofeos ("al completar una historia"),
+  /// a la que lleva el botón.
   Widget _panelTrofeos() {
     const oro = Color(0xFFC8A860);
     const tenue = Color(0xFF506070);
@@ -788,20 +801,19 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
               color: hayAlgo ? oro : const Color(0xFF90A0B0),
             ),
           ),
-          if (_docId == null)
-            const Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Text(
-                'Guarda la historia primero; después podrás asignarle trofeos '
-                'desde Edición · Trofeos.',
-                style: TextStyle(
-                    fontSize: 9,
-                    fontFamily: 'Cinzel',
-                    height: 1.4,
-                    color: tenue),
-              ),
-            )
-          else if (!hayAlgo)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              _historiaModo == null
+                  ? 'Este hueco aún no tiene historia en el modo historia, así '
+                      'que no da trofeos.'
+                  : 'Se consiguen al completar «${_historiaModo!.titulo}» en el '
+                      'modo historia.',
+              style: const TextStyle(
+                  fontSize: 9, fontFamily: 'Cinzel', height: 1.4, color: tenue),
+            ),
+          ),
+          if (_historiaModo != null && !hayAlgo)
             const Padding(
               padding: EdgeInsets.only(top: 4),
               child: Text(
@@ -838,7 +850,7 @@ class _EditorHistoriaState extends State<_EditorHistoria> {
                         color: Color(0xFFE06060))),
               ),
             ),
-          if (_docId != null)
+          if (_historiaModo != null)
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
