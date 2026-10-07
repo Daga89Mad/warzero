@@ -40,10 +40,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -82,7 +82,18 @@ jobs:
         run: flutter pub get
 
       - name: Compilar APK release
-        run: flutter build apk --release --build-number=${{ github.run_number }}
+        run: |
+          set -o pipefail
+          if ! flutter build apk --release --build-number=${{ github.run_number }} 2>&1 | tee build.log; then
+            # Vuelca el motivo del fallo como anotación para verlo en el resumen
+            # de la ejecución sin tener que abrir el log completo.
+            RESUMEN=$(grep -n -i -E "error|what went wrong|exception|failed|caused by|^lib/" build.log | grep -v -i "warning" | head -60)
+            [ -z "$RESUMEN" ] && RESUMEN=$(tail -60 build.log)
+            RESUMEN="${RESUMEN//'%'/'%25'}"
+            RESUMEN="${RESUMEN//$'\n'/'%0A'}"
+            echo "::error title=Fallo al compilar la APK::${RESUMEN}"
+            exit 1
+          fi
 
       - name: Preparar fichero
         id: apk
