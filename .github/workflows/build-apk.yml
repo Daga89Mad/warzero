@@ -1,0 +1,127 @@
+# Compila la APK release de WarZero en GitHub Actions.
+#
+# Cuándo se ejecuta:
+#   - En cada push a main.
+#   - A mano: pestaña Actions > "Build APK release" > Run workflow.
+#
+# Dónde queda la APK:
+#   - Release "apk-latest" (siempre la última compilación de main). Enlace fijo:
+#     https://github.com/Daga89Mad/warzero/releases/download/apk-latest/warzero-release.apk
+#   - Artefacto adjunto a cada ejecución (pestaña Actions, se guarda 30 días).
+#
+# Firma:
+#   Si existen estos secrets en Settings > Secrets and variables > Actions,
+#   la APK se firma con la clave de release:
+#     ANDROID_KEYSTORE_BASE64   -> el .jks codificado en base64 (base64 -w0 upload-keystore.jks)
+#     ANDROID_KEYSTORE_PASSWORD -> storePassword
+#     ANDROID_KEY_ALIAS         -> keyAlias
+#     ANDROID_KEY_PASSWORD      -> keyPassword
+#   Si no existen, build.gradle.kts firma con la clave de debug (instalable en el
+#   móvil, pero no válida para Google Play).
+
+name: Build APK release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Versión de Flutter
+        run: flutter --version
+
+      - name: Firma de release (si hay secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+            {
+              echo "storeFile=$RUNNER_TEMP/upload-keystore.jks"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/key.properties
+            echo "Firmando con la clave de release."
+          else
+            echo "::warning::Sin secrets de firma: la APK se firma con la clave de debug."
+          fi
+
+      - name: Dependencias
+        run: flutter pub get
+
+      - name: Compilar APK release
+        run: flutter build apk --release --build-number=${{ github.run_number }}
+
+      - name: Preparar fichero
+        id: apk
+        run: |
+          VERSION=$(grep -m1 '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          cp build/app/outputs/flutter-apk/app-release.apk warzero-release.apk
+          cp warzero-release.apk "warzero-${VERSION}-build${{ github.run_number }}.apk"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "versioned=warzero-${VERSION}-build${{ github.run_number }}.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.versioned }}
+          path: ${{ steps.apk.outputs.versioned }}
+          retention-days: 30
+
+      - name: Mover la etiqueta apk-latest
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git tag -f apk-latest
+          git push -f origin apk-latest
+
+      - name: Publicar en la release apk-latest
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: WarZero APK (última de main)
+          prerelease: true
+          make_latest: false
+          body: |
+            APK release compilada automáticamente desde `main`.
+
+            - Versión: ${{ steps.apk.outputs.version }} (build ${{ github.run_number }})
+            - Commit: ${{ steps.apk.outputs.sha }}
+
+            Descarga directa: `warzero-release.apk`.
+          files: warzero-release.apk
+          overwrite_files: true
