@@ -37,11 +37,6 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
   /// ejercito → orden → resumen
   final Map<int, Map<int, _HistoriaResumen>> _porEjercito = {};
 
-  /// Ids de historias del MODO HISTORIA que tienen algún trofeo ACTIVO
-  /// asignado desde el editor de trofeos. Solo para pintar el 🏆 en el slot
-  /// del lore con el mismo ejército y orden.
-  Set<String> _conTrofeo = const {};
-
   @override
   void initState() {
     super.initState();
@@ -57,7 +52,6 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
       _error = null;
     });
     try {
-      final trofeosFuture = _cargarTrofeosRef();
       final snap = await _col.get();
       final map = <int, Map<int, _HistoriaResumen>>{};
       for (final doc in snap.docs) {
@@ -70,20 +64,13 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
           docId: doc.id,
           titulo: titulo,
           numPaginas: paginas.length,
-          trofeoId: (d['TrofeoId'] ?? d['trofeoId'] ?? '').toString(),
         );
       }
-      final trofeos = await trofeosFuture;
       if (!mounted) return;
       setState(() {
         _porEjercito
           ..clear()
           ..addAll(map);
-        _conTrofeo = {
-          for (final t in trofeos)
-            if (t.origen == TrofeoOrigen.historia && t.origenId.isNotEmpty)
-              t.origenId,
-        };
         _loading = false;
       });
     } catch (e) {
@@ -193,10 +180,6 @@ class _EdicionHistoriasScreenState extends State<EdicionHistoriasScreen> {
                     titulo: r?.titulo ?? '',
                     numPaginas: r?.numPaginas ?? 0,
                     existe: r != null,
-                    conTrofeo: r != null &&
-                        (r.trofeoId.isNotEmpty ||
-                            _conTrofeo.contains(
-                                historiaModoDe(_ejercitoSel, orden)?.id)),
                     onTap: () => _editar(orden),
                   );
                 },
@@ -213,21 +196,13 @@ class _HistoriaResumen {
   final String titulo;
   final int numPaginas;
 
-  /// Id del trofeo del sistema anterior (`TrofeoId`, '' = ninguno). Solo para
-  /// pintar el 🏆 en el slot.
-  final String trofeoId;
-
   const _HistoriaResumen({
     required this.docId,
     required this.titulo,
     required this.numPaginas,
-    this.trofeoId = '',
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// SLOT (fila) de la lista de administración
-// ─────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
 // SLOT (fila) de la lista de administración
 // ─────────────────────────────────────────────────────────────
@@ -236,11 +211,6 @@ class _SlotTile extends StatelessWidget {
   final String titulo;
   final int numPaginas;
   final bool existe;
-
-  /// True si la historia tiene un trofeo asociado: se marca con 🏆 para verlo
-  /// de un vistazo sin abrir el editor.
-  final bool conTrofeo;
-
   final VoidCallback onTap;
 
   const _SlotTile({
@@ -249,7 +219,6 @@ class _SlotTile extends StatelessWidget {
     required this.numPaginas,
     required this.existe,
     required this.onTap,
-    this.conTrofeo = false,
   });
 
   @override
@@ -301,8 +270,7 @@ class _SlotTile extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
                       child: Text(
-                        '$numPaginas página${numPaginas == 1 ? '' : 's'}'
-                        '${conTrofeo ? '  ·  🏆 con trofeo' : ''}',
+                        '$numPaginas página${numPaginas == 1 ? '' : 's'}',
                         style: const TextStyle(
                           fontSize: 9,
                           fontFamily: 'Cinzel',
