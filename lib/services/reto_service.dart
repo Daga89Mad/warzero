@@ -12,6 +12,13 @@
 // En los dos casos aquí solo hay que pedirla (POST /warzero/reto/crear) y
 // entrar a la pantalla de juego con el lobbyId devuelto.
 //
+// SALIR = ABANDONAR: igual que en el modo historia, salir de un reto lo da por
+// perdido. La pantalla de juego llama a `abandonarReto` (POST
+// /warzero/reto/abandonar): el servidor para los bots y borra la partida, así
+// que un reto nunca queda "en curso" en la Sala de Guerra y cada intento
+// empieza de cero. (Los retos sobre el motor de historia usan
+// `HistoriaService.abandonarHistoria`, con el mismo efecto.)
+//
 // NOTA: se usa `http` directamente (con la baseUrl de WarZeroApi) para no tener
 // que tocar warzero_api.dart. Si algún día hay más llamadas de retos, conviene
 // moverlas allí junto al resto de la API.
@@ -84,11 +91,7 @@ class RetoService {
   static const Duration _timeout = Duration(seconds: 45);
   static const int _intentos = 3;
 
-  /// Crea (o reanuda) el reto [retoId] y entra a la partida.
-  ///
-  /// Si el jugador dejó un intento a medias de un reto de partida normal, el
-  /// servidor devuelve ESA partida en vez de reiniciarla: se vuelve justo donde
-  /// lo dejó. Los retos sobre el motor de historia empiezan siempre de cero.
+  /// Crea el reto [retoId] (siempre de cero) y entra a la partida.
   Future<void> lanzarReto(
     BuildContext context, {
     required String uid,
@@ -138,6 +141,7 @@ class RetoService {
           playerCount: historia != null ? 2 : jugadores,
           lobbyId: lobbyId,
           historia: historia,
+          esReto: historia == null,
         ),
       ),
     );
@@ -180,6 +184,29 @@ class RetoService {
     }
     throw Exception('reto/crear sin respuesta tras $_intentos intentos: '
         '$ultimoError');
+  }
+
+  /// Abandona el reto [lobbyId] (salir por el menú, botón atrás, cerrar la
+  /// app…): el servidor para sus bots y BORRA la partida (POST
+  /// /warzero/reto/abandonar). Es "dispara y olvida": nunca lanza, para no
+  /// bloquear la salida.
+  Future<void> abandonarReto({
+    required String uid,
+    required String lobbyId,
+  }) async {
+    if (uid.isEmpty || lobbyId.isEmpty) return;
+    try {
+      final res = await http
+          .post(
+            Uri.parse('${_api.baseUrl}/warzero/reto/abandonar'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'uid': uid, 'lobbyId': lobbyId}),
+          )
+          .timeout(const Duration(seconds: 15));
+      debugPrint('[WZ][api] POST reto/abandonar status=${res.statusCode}');
+    } catch (e) {
+      debugPrint('[WZ][api] abandonarReto falló (ignorado): $e');
+    }
   }
 
   // ── UI auxiliar ───────────────────────────────────────────────────────────

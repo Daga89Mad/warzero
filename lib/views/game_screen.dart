@@ -33,6 +33,7 @@ import 'cuartel_screen.dart';
 import 'puntuaciones_screen.dart';
 import 'recompensas_batalla_screen.dart';
 import '../services/historia_service.dart';
+import '../services/reto_service.dart';
 import 'historia_hud.dart';
 import '../widgets/trofeo_conseguido_overlay.dart';
 import '../models/trofeo_model.dart';
@@ -65,12 +66,19 @@ class GameScreen extends StatefulWidget {
   /// diálogo de fin de historia (victoria/derrota/reintento).
   final Map<String, dynamic>? historia;
 
+  /// True si la partida es un RETO de partida normal (lo lanza RetoService).
+  /// Salir de un reto lo abandona: el servidor para sus bots y borra la
+  /// partida, así que nunca queda "en curso" en la Sala de Guerra. Si llega a
+  /// false pero el documento trae `esReto`, se detecta igualmente al cargar.
+  final bool esReto;
+
   const GameScreen({
     super.key,
     required this.localPlayerUid,
     this.playerCount = 4,
     this.lobbyId,
     this.historia,
+    this.esReto = false,
   });
 
   @override
@@ -285,6 +293,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// (salir, botón atrás, dispose, cierre de la app).
   bool _historiaAbandonada = false;
 
+  /// El documento de la partida trae `esReto` (detectado al cargar). Respaldo
+  /// de `widget.esReto` por si se entra a un reto desde otro sitio.
+  bool _retoDoc = false;
+
+  /// RETO: ya se ha dado por abandonado (se pidió al servidor que lo borrase).
+  /// Evita repetir la petición desde varios sitios (salir, botón atrás,
+  /// dispose, cierre de la app).
+  bool _retoAbandonado = false;
+
   /// Hay una eliminación del jugador local pendiente de comunicar. No se
   /// muestra el diálogo en el acto: primero se deja ver el INFORME del turno en
   /// el que le destruyeron el cuartel (y su revisión), y al cerrarlo se abre el
@@ -322,6 +339,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// ampliación de mano/mazo (ActualizarStatsAsync). El cliente tiene que
   /// respetarlo o se pinta una mano fantasma que se evapora al resolver el turno.
   bool get _esHistoria => widget.historia != null;
+
+  /// True si esta partida es un RETO de partida normal (los retos sobre el
+  /// motor de historia van por `_esHistoria`). Salir de él lo abandona.
+  bool get _esReto => !_esHistoria && (widget.esReto || _retoDoc);
+
+  /// Salir de la pantalla ahora CIERRA la partida (historia o reto sin
+  /// terminar): el botón atrás pasa por el diálogo de confirmación.
+  bool get _salirAbandona => (_esHistoria || _esReto) && !_juegoTerminado;
 
   /// Batalla de historia en PARTIDA NORMAL (`historia.conMano`, p. ej. la
   /// parte 3 de Diente de Invierno): hay mano, mazo fijo, robo de fin de turno
@@ -1684,6 +1709,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           _estoyEliminado = eliminados.contains(widget.localPlayerUid);
           _juegoTerminado = juegoTerminado;
           _ganadorUid = lobby!.ganadorUid;
+          if (data['esReto'] == true) _retoDoc = true;
         });
 
         // Red de seguridad de rejilla: garantiza que el tablero contiene todas
@@ -2374,14 +2400,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // abandona la pantalla sin cerrar el turno (además del hook de ciclo de
     // vida, por si el pop ocurre sin pasar por `paused`). En dispose NO se puede
     // llamar a setState, así que se pide la variante sin reconstruir la UI.
-    // En historia no hace falta: la batalla se borra entera (ver abajo).
-    if (!_esHistoria) {
+    // En historia y en retos no hace falta: la partida se borra entera (ver
+    // abajo).
+    if (!_esHistoria && !_esReto) {
       _revertirCambiosPorSalidaSiProcede(permitirSetState: false);
     }
     // MODO HISTORIA: salir de la pantalla de juego (por el menú, el botón
     // atrás o cualquier otra vía) sin haber terminado la batalla la cierra: se
     // borra en el servidor y hay que empezar la historia de nuevo.
     _abandonarHistoria();
+    // RETO: igual. Salir sin terminarlo lo da por perdido y se borra, así que
+    // no aparece en la Sala de Guerra como partida en curso.
+    _abandonarReto();
     WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _stopTimer();
@@ -2405,6 +2435,28 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     _pollTimer = null;
     debugPrint('[WZ][historia] batalla abandonada: $id');
     HistoriaService().abandonarHistoria(
+      uid: widget.localPlayerUid,
+      lobbyId: id,
+    );
+  }
+
+  /// RETO (partida normal): lo da por ABANDONADO y pide al servidor que pare
+  /// sus bots y lo borre. Un reto no aparece en la Sala de Guerra, así que no
+  /// hay forma de volver a él: si el jugador sale o cierra la app, tiene que
+  /// empezarlo de nuevo desde Retos.
+  ///
+  /// No hace nada fuera de retos, si el reto ya terminó (se gestiona con el
+  /// fin de partida normal) o si ya se pidió. Fire-and-forget: puede llamarse
+  /// desde `dispose`.
+  void _abandonarReto() {
+    if (!_esReto || _retoAbandonado || _juegoTerminado) return;
+    final id = widget.lobbyId;
+    if (id == null || id.isEmpty) return;
+    _retoAbandonado = true;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    debugPrint('[WZ][reto] reto abandonado: $id');
+    RetoService().abandonarReto(
       uid: widget.localPlayerUid,
       lobbyId: id,
     );
@@ -2440,8 +2492,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     }
   }
 
-  /// RETO de partida normal: ventana explicativa del turno 1. «SALIR» solo
-  /// cierra la pantalla (el reto sigue en curso y se reanuda desde Retos).
+  /// RETO de partida normal: ventana explicativa del turno 1. «SALIR»
+  /// abandona el reto (igual que salir por el menú): se borra y hay que
+  /// empezarlo de nuevo desde Retos.
   Future<void> _mostrarExplicacionReto(Map<String, dynamic> reto) async {
     if (!mounted) {
       _explicacionAbierta = false;
@@ -2456,6 +2509,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!mounted) return;
     _explicacionAbierta = false;
     if (!jugar) {
+      _abandonarReto();
       _stopTimer();
       if (Navigator.of(context).canPop()) Navigator.of(context).pop();
       return;
@@ -2472,13 +2526,15 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.detached) {
-      // La app se está cerrando: en historia la batalla se pierde.
+      // La app se está cerrando: en historia y en retos la partida se pierde.
       _abandonarHistoria();
+      _abandonarReto();
     }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       // La app pasa a segundo plano o se cierra: revertir energía revertible.
-      _revertirCambiosPorSalidaSiProcede();
+      // (En un reto abandonado la partida ya no existe: nada que revertir.)
+      if (!_retoAbandonado) _revertirCambiosPorSalidaSiProcede();
       // Detener el sondeo mientras la app no está visible: no tiene sentido
       // gastar lecturas de Firestore si el jugador no está mirando. Al volver
       // (resumed) se reanuda con una lectura inmediata para ponerse al día.
@@ -2489,7 +2545,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       _revirtiendoPorSalida = false;
       // Reanudar el sondeo (se detuvo al pasar a segundo plano) si la partida
       // sigue viva. `_iniciarPolling` hace una primera lectura inmediata.
-      if (!_juegoTerminado && widget.lobbyId != null && _pollTimer == null) {
+      if (!_juegoTerminado &&
+          !_retoAbandonado &&
+          widget.lobbyId != null &&
+          _pollTimer == null) {
         _iniciarPolling();
       }
       // Si al pausar quedó una reversión pendiente de reembolsar (el reembolso
@@ -5330,8 +5389,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _confirmExit() async {
-    // MODO HISTORIA: salir cierra la batalla (no se puede retomar después).
+    // MODO HISTORIA y RETOS: salir cierra la partida (no se puede retomar).
     final historia = _esHistoria && !_juegoTerminado;
+    final reto = _esReto && !_juegoTerminado;
+    final abandona = historia || reto;
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -5340,7 +5401,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           borderRadius: BorderRadius.circular(8),
           side: const BorderSide(color: Color(0x40C8A860), width: 1),
         ),
-        title: Text(historia ? 'ABANDONAR LA BATALLA' : 'SALIR DE LA PARTIDA',
+        title: Text(
+            historia
+                ? 'ABANDONAR LA BATALLA'
+                : reto
+                    ? 'ABANDONAR EL RETO'
+                    : 'SALIR DE LA PARTIDA',
             style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 12,
@@ -5350,7 +5416,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             historia
                 ? 'Si sales, la batalla se cerrará y tendrás que empezar la '
                     'historia de nuevo desde el principio. ¿Abandonar?'
-                : 'Tu progreso de este turno se perderá si no cerraste el turno. ¿Salir al menú?',
+                : reto
+                    ? 'Si sales, el reto se dará por perdido y la partida se '
+                        'cerrará. Tendrás que empezarlo de nuevo desde Retos. '
+                        '¿Abandonar?'
+                    : 'Tu progreso de este turno se perderá si no cerraste el turno. ¿Salir al menú?',
             style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 10,
@@ -5367,7 +5437,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text(historia ? 'ABANDONAR' : 'SALIR',
+            child: Text(abandona ? 'ABANDONAR' : 'SALIR',
                 style: const TextStyle(
                     fontFamily: 'Cinzel',
                     fontSize: 9,
@@ -5382,6 +5452,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // La batalla se borra entera en el servidor: no hay gastos que
         // devolver, simplemente deja de existir.
         _abandonarHistoria();
+      } else if (reto) {
+        // Igual que en historia: el reto se borra (y sus bots se paran).
+        _abandonarReto();
       } else {
         // BUG QAS #2: al salir a mitad de turno se DESHACEN los gastos no
         // consolidados (se devuelven los Zeros de despliegues/compras/evoluciones
@@ -6221,12 +6294,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final String? selectedCoord =
         _inMoveMode ? _moveFromCoord : (_sidebarOpen ? _sidebarCoord : null);
 
-    // MODO HISTORIA: el botón atrás del sistema no puede sacar al jugador de la
-    // batalla sin avisar (salir la cierra y hay que empezar de nuevo): pasa por
-    // el mismo diálogo que "Salir de la partida". Terminada la batalla, manda
-    // el cartel de fin. En PvP el comportamiento no cambia.
+    // MODO HISTORIA y RETOS: el botón atrás del sistema no puede sacar al
+    // jugador sin avisar (salir cierra la partida y hay que empezar de nuevo):
+    // pasa por el mismo diálogo que "Salir de la partida". Terminada la
+    // partida, sale sin más. En PvP el comportamiento no cambia.
     return PopScope(
-      canPop: !_esHistoria || _juegoTerminado,
+      canPop: !_salirAbandona,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _confirmExit();
       },

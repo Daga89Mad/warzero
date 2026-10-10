@@ -1311,7 +1311,12 @@ class _MisPartidasListState extends State<_MisPartidasList> {
     // decide qué partidas finalizadas mostrar (solo al GANADOR y solo hasta que
     // entra a ver el mensaje de victoria). Si filtrásemos aquí por estado, el
     // ganador nunca vería la partida para entrar y ver su victoria.
+    //
+    // Retos y batallas de historia nunca son "partidas en curso" de la Sala
+    // de Guerra: salir de ellos los abandona. El servidor ya los descarta;
+    // esto es solo una defensa por si llegara alguno (servidor antiguo).
     final list = docs
+        .where((d) => d['esReto'] != true && d['esHistoria'] != true)
         .map((d) => LobbyModel.fromMap(d['id'] as String? ?? '', d))
         .toList();
     list.sort((a, b) => b.creadoEn.compareTo(a.creadoEn));

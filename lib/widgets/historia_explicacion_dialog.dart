@@ -149,7 +149,7 @@ Future<bool> mostrarExplicacionHistoria(
 /// Ventana explicativa de un RETO de partida normal ([reto] = el campo `reto`
 /// del estado de la partida). [segundosTurno] es la duración del turno en
 /// partida rápida (0 = sin límite de tiempo). Devuelve true = jugar, false =
-/// salir (el reto sigue en curso y se puede reanudar desde Retos).
+/// salir (el reto se abandona: hay que empezarlo de nuevo desde Retos).
 Future<bool> mostrarExplicacionReto(
   BuildContext context, {
   required Map<String, dynamic> reto,
@@ -181,8 +181,8 @@ Future<bool> mostrarExplicacionReto(
         if (segundosTurno > 0)
           '• Turnos por tiempo: tienes $segundosTurno segundos por turno. Si se '
               'agota, el turno se cierra con lo que hayas hecho.',
-        '• Si sales, el reto sigue en curso: vuelve a entrar desde la pantalla de '
-            'Retos y lo reanudas donde lo dejaste.',
+        '• Si sales de la partida, el reto se da por perdido y tendrás que '
+            'empezarlo de nuevo desde la pantalla de Retos.',
         '• Si lo pierdes, puedes volver a intentarlo cuando quieras.',
       ].join('\n')));
 
