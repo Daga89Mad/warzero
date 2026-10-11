@@ -6717,7 +6717,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   onInforme: _abrirInformeBatalla,
                   puedePuntuaciones: true,
                   onPuntuaciones: _abrirPuntuaciones,
-                  puedeAlianza: _jugadoresEnPartida >= 4 && !_estoyEliminado,
+                  // En historia las alianzas vienen dadas (aliado permanente
+                  // de la batalla): no se proponen ni se rompen.
+                  puedeAlianza: _jugadoresEnPartida >= 4 &&
+                      !_estoyEliminado &&
+                      !_esHistoria,
                   onAlianza: _abrirAlianza,
                   propuestasAlianzaPendientes: _propuestasPendientes,
                   puedeDeshacer: _hayCambiosPendientes &&

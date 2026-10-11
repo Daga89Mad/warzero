@@ -183,11 +183,14 @@ class HistoriaService {
 
     final estado = (res!['estado'] as Map?)?.cast<String, dynamic>();
     final historia = (estado?['historia'] as Map?)?.cast<String, dynamic>();
+    // Nº de ejércitos de la batalla (2 normalmente; 4 en las batallas de
+    // varios ejércitos, p. ej. «La batalla de Nar-Khal»).
+    final nJugadores = (estado?['jugadores'] as List?)?.length ?? 2;
 
     final route = MaterialPageRoute<void>(
       builder: (_) => GameScreen(
         localPlayerUid: uid,
-        playerCount: 2,
+        playerCount: nJugadores < 2 ? 2 : nJugadores,
         lobbyId: lobbyId,
         historia: historia,
       ),
