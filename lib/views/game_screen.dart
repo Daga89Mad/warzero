@@ -141,6 +141,31 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// Último turno resuelto del duelo del que ya se avisó (golpes, rocas…).
   int _dueloTurnoAvisado = 0;
 
+  /// CÁRCEL BIÓNICA (campo `carcel`, nefilim_1): puertas, núcleos, % de los
+  /// guardias, pistas, alarma y odio. Null en el resto de partidas.
+  CarcelVista? _carcel;
+
+  /// Último turno resuelto de la cárcel del que ya se avisó.
+  int _carcelTurnoAvisado = 0;
+
+  /// Id sintético de la "habilidad" ODIO de Alexander: se inyecta en su carta
+  /// SOLO para el panel lateral, para que su ficha muestre el botón de lanzar
+  /// habilidad (sin coste) mientras no la haya usado.
+  static const int _kHabilidadOdioCarcel = 9103;
+
+  /// Turno para el que el jugador ha desatado el odio (0 = ninguno).
+  int _odioTurno = 0;
+  bool _odioEnviando = false;
+
+  /// Id sintético de la "habilidad" EMBESTIDA DEL ODIO del duelo de la
+  /// muralla (nefilim_2): se inyecta en la carta de Alexander SOLO para el
+  /// panel lateral cuando tiene los puntos de odio necesarios.
+  static const int _kHabilidadOdioDuelo = 9104;
+  bool _odioDueloEnviando = false;
+
+  /// Turno para el que el jugador ha lanzado la embestida del odio (0 = ninguno).
+  int _odioDueloTurno = 0;
+
   // ── Duelo INVERTIDO (reto «El duelo de Alexander»): el jugador es el jefe ──
   /// Id sintético de la "habilidad" Lluvia de rocas: se inyecta en la carta
   /// del jefe SOLO para el panel lateral, para que su ficha muestre el botón
@@ -2682,9 +2707,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // MURO: no se puede atravesar ni terminar en él (hay que rodearlo). El
         // servidor revierte cualquier movimiento que lo pise o lo cruce.
         if (_boardState.celdaTieneMuro(nCoord)) continue;
-        // Casillas BLOQUEADAS de la historia (pilares del duelo): nadie las
-        // pisa ni las atraviesa.
+        // Casillas BLOQUEADAS de la historia (pilares del duelo, muros de la
+        // cárcel): nadie las pisa ni las atraviesa.
         if (_marcasHistoria?.bloqueadas.contains(nCoord) ?? false) continue;
+        // MURALLA (nefilim_2): a la casilla de Izanami se llega, pero no se
+        // atraviesa.
+        if (nCoord == _celdaJefeMuralla) {
+          visited[nCoord] = newSteps;
+          if (_config.canLand(nCoord, tipo)) result.add(nCoord);
+          continue;
+        }
+        // PUERTAS CERRADAS de la cárcel: pared, salvo las que Alexander puede
+        // abrir (lleva sus núcleos), en las que entra pero no las atraviesa.
+        final cc = _carcel;
+        if (cc != null && cc.puertasCerradas.contains(nCoord)) {
+          if (!cc.puertasAbribles.contains(nCoord)) continue;
+          visited[nCoord] = newSteps;
+          if (_config.canLand(nCoord, tipo)) result.add(nCoord);
+          continue;
+        }
         visited[nCoord] = newSteps;
         if (nCoord != from &&
             _config.canLand(nCoord, tipo) &&
@@ -2755,6 +2796,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     _tunel = TunelVista.fromEstado(estado);
     _marcasHistoria = MarcasHistoriaVista.fromEstado(estado);
     _duelo = DueloVista.fromEstado(estado);
+    _carcel = CarcelVista.fromEstado(estado);
+    // La embestida del odio declarada viaja en la partida (`duelo.odioTurno`).
+    final mu = _duelo?.muralla;
+    if (mu != null && !_odioDueloEnviando) _odioDueloTurno = mu.odioTurno;
+    // El odio declarado viaja en la partida (`carcel.odio.turno`).
+    if (_carcel != null && !_odioEnviando) _odioTurno = _carcel!.odioTurno;
+    _avisarCarcel();
     // Turno nuevo: se deja de elegir la lluvia del turno anterior.
     if (_lluviaEligiendo && (_duelo?.turno ?? 0) != _lluviaTurno) {
       _lluviaEligiendo = false;
@@ -2816,6 +2864,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
+  /// Aviso (una vez por turno resuelto) de lo ocurrido en la CÁRCEL:
+  /// núcleos, guardias equivocados, pistas, puertas, intercambios, alarma…
+  void _avisarCarcel() {
+    final c = _carcel;
+    if (c == null ||
+        c.ultimoTurno <= 0 ||
+        c.ultimoTurno <= _carcelTurnoAvisado) {
+      return;
+    }
+    _carcelTurnoAvisado = c.ultimoTurno;
+    final textos = c.eventos.map((e) => e.texto).toList();
+    if (textos.isEmpty) return;
+    final malo = c.eventos.any((e) => e.malo);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _toast(textos.join('\n'),
+          error: malo,
+          duracion: Duration(seconds: 3 + textos.length.clamp(1, 5)));
+    });
+  }
+
   /// Uid sintético del bot de historia (WarZeroHistoria.HistoriaBotUid).
   static const String _historiaBotUid = 'historia_bot';
 
@@ -2835,8 +2904,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   /// Capa de historia para el tablero (null si la batalla no la usa).
   CapaHistoriaVista? get _capaHistoria {
-    if (_tunel == null && _marcasHistoria == null && _duelo == null)
-      return null;
+    if (_tunel == null &&
+        _marcasHistoria == null &&
+        _duelo == null &&
+        _carcel == null) return null;
     final vip = _marcasHistoria?.vip ?? const <String>{};
     final celdasVip = <String>{};
     if (vip.isNotEmpty) {
@@ -2867,7 +2938,272 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       posiciones: posiciones,
       lluviaCeldas: lluviaVigente ? _lluviaCeldas : const {},
       lluviaEligiendo: _lluviaEligiendo,
+      carcel: _carcel,
+      celdaAlexander: _celdaAlexanderCarcel,
+      odioActivo: _odioActivo || _odioDueloActivo,
     );
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // CÁRCEL BIÓNICA (nefilim_1): el ODIO de Alexander
+  // ─────────────────────────────────────────────────────────
+
+  /// True si [carta] es Alexander, del jugador local, en una cárcel.
+  bool _esAlexanderCarcel(CartaEnCelda carta) {
+    final c = _carcel;
+    return c != null &&
+        c.alexanderId.isNotEmpty &&
+        carta.instanceId == c.alexanderId &&
+        carta.ownerUid == widget.localPlayerUid;
+  }
+
+  /// Casilla de Alexander en la cárcel (null si no está en el tablero).
+  String? get _celdaAlexanderCarcel {
+    if (_carcel == null) return null;
+    for (final e in _boardState.celdas.entries) {
+      if (e.value.cartas.any(_esAlexanderCarcel)) return e.key;
+    }
+    return null;
+  }
+
+  /// True si el jugador ha desatado el odio para el turno en curso.
+  bool get _odioActivo =>
+      _carcel != null &&
+      !_carcel!.odioUsado &&
+      _odioTurno > 0 &&
+      _odioTurno == _boardState.turnoActual;
+
+  /// Celda del panel lateral con la "habilidad" Odio inyectada en la carta
+  /// de Alexander (sin coste) mientras no la haya usado. Solo es para pintar
+  /// el botón de la ficha: la carta real del tablero no cambia.
+  CeldaState? _celdaConOdio(CeldaState? celda) {
+    final c = _carcel;
+    if (celda == null || c == null || !c.odioDisponible) return celda;
+    var cambia = false;
+    final cartas = celda.cartas.map((x) {
+      if (!_esAlexanderCarcel(x)) return x;
+      cambia = true;
+      return x.copyWith(
+        carta: x.carta.copyWith(
+          idHabilidad: _kHabilidadOdioCarcel,
+          costeHabilidad: 0,
+          enfriamientoHabilidad: 0,
+        ),
+      );
+    }).toList();
+    return cambia ? celda.withCartas(cartas) : celda;
+  }
+
+  /// Pulsado LANZAR HABILIDAD en la ficha de Alexander: desatar (o anular)
+  /// el odio de este turno.
+  Future<void> _alternarOdio() async {
+    final c = _carcel;
+    final lobbyId = widget.lobbyId;
+    if (c == null || lobbyId == null || lobbyId.isEmpty) return;
+    if (_yoCerreElTurno) {
+      _toast('Ya has cerrado el turno.', error: true);
+      return;
+    }
+    if (!c.odioDisponible) {
+      _toast('Alexander ya ha desatado su odio en esta batalla.', error: true);
+      return;
+    }
+    if (_odioEnviando) return;
+    final turno = _boardState.turnoActual;
+    final activar = !_odioActivo;
+    if (activar) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A0A08),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('🔥 EL ODIO DE ALEXANDER',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 15,
+                  color: Color(0xFFFF8A80),
+                  letterSpacing: 1.2)),
+          content: Text(
+            'Alexander sumará +${c.odioFuerza} de fuerza en el combate de '
+            'ESTE turno.\n\nSolo puedes hacerlo una vez en toda la batalla: '
+            'guárdalo para una puerta llena de guardias.',
+            style: const TextStyle(
+                fontFamily: 'Cinzel', fontSize: 11, color: Color(0xFFE8E0D0)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('CANCELAR',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel', color: Color(0xFF9A9080))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('DESATAR',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel', color: Color(0xFFFF8A80))),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => _odioEnviando = true);
+    final res = await HistoriaService().declararOdio(
+      uid: widget.localPlayerUid,
+      lobbyId: lobbyId,
+      turno: turno,
+      activar: activar,
+    );
+    if (!mounted) return;
+    setState(() {
+      _odioEnviando = false;
+      if (res.ok) _odioTurno = res.activo ? turno : 0;
+    });
+    if (!res.ok) {
+      _toast('No se pudo desatar el odio: ${res.error}', error: true);
+    } else if (res.activo) {
+      _toast('🔥 Odio desatado: +${c.odioFuerza} de fuerza en el combate de '
+          'este turno. Púlsalo otra vez para anularlo antes de cerrar.');
+    } else {
+      _toast('Odio anulado: lo conservas para más adelante.');
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // DUELO DE LA MURALLA (nefilim_2): la EMBESTIDA DEL ODIO
+  // ─────────────────────────────────────────────────────────
+
+  /// Casilla de Izanami en el duelo de la muralla (null en el resto).
+  String? get _celdaJefeMuralla {
+    final d = _duelo;
+    if (d == null || d.muralla == null) return null;
+    final id = d.idDe('jefe');
+    if (id == null) return null;
+    for (final e in _boardState.celdas.entries) {
+      if (e.value.cartas.any((c) => c.instanceId == id)) return e.key;
+    }
+    return null;
+  }
+
+  /// True si el jugador ha lanzado la embestida del odio este turno.
+  bool get _odioDueloActivo =>
+      _duelo?.muralla != null &&
+      _odioDueloTurno > 0 &&
+      _odioDueloTurno == _boardState.turnoActual;
+
+  /// True si [carta] es el general del jugador en el duelo de la muralla.
+  bool _esGeneralMuralla(CartaEnCelda carta) {
+    final d = _duelo;
+    return d != null &&
+        d.muralla != null &&
+        carta.ownerUid == widget.localPlayerUid &&
+        d.roles[carta.instanceId] == 'cazador';
+  }
+
+  /// Celda del panel lateral con la "habilidad" Embestida del odio inyectada
+  /// en la carta de Alexander (sin coste) cuando tiene odio suficiente.
+  CeldaState? _celdaConOdioDuelo(CeldaState? celda) {
+    final mu = _duelo?.muralla;
+    if (celda == null || mu == null || (!mu.odioListo && !_odioDueloActivo)) {
+      return celda;
+    }
+    var cambia = false;
+    final cartas = celda.cartas.map((x) {
+      if (!_esGeneralMuralla(x)) return x;
+      cambia = true;
+      return x.copyWith(
+        carta: x.carta.copyWith(
+          idHabilidad: _kHabilidadOdioDuelo,
+          costeHabilidad: 0,
+          enfriamientoHabilidad: 0,
+        ),
+      );
+    }).toList();
+    return cambia ? celda.withCartas(cartas) : celda;
+  }
+
+  /// Pulsado LANZAR HABILIDAD en la ficha de Alexander (muralla): declarar
+  /// o anular la embestida del odio de este turno.
+  Future<void> _alternarOdioDuelo() async {
+    final mu = _duelo?.muralla;
+    final lobbyId = widget.lobbyId;
+    if (mu == null || lobbyId == null || lobbyId.isEmpty) return;
+    if (_yoCerreElTurno) {
+      _toast('Ya has cerrado el turno.', error: true);
+      return;
+    }
+    if (_odioDueloEnviando) return;
+    final turno = _boardState.turnoActual;
+    final activar = !_odioDueloActivo;
+    if (activar && !mu.odioListo) {
+      _toast('Necesitas ${mu.odioCoste} puntos de odio (tienes ${mu.odioPuntos}).',
+          error: true);
+      return;
+    }
+    if (activar) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF1A0A08),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('🔥 EMBESTIDA DEL ODIO',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 15,
+                  color: Color(0xFFFF8A80),
+                  letterSpacing: 1.2)),
+          content: Text(
+            'Este turno, si chocas con Izanami de FRENTE (entrando en su '
+            'casilla por delante o quedándote en su carga), será ella quien '
+            'pierda un núcleo.\n\nGasta ${mu.odioCoste} puntos de odio solo si '
+            'llegas a tocarla.',
+            style: const TextStyle(
+                fontFamily: 'Cinzel', fontSize: 11, color: Color(0xFFE8E0D0)),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('CANCELAR',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel', color: Color(0xFF9A9080))),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('LANZAR',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel', color: Color(0xFFFF8A80))),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => _odioDueloEnviando = true);
+    final res = await HistoriaService().declararOdio(
+      uid: widget.localPlayerUid,
+      lobbyId: lobbyId,
+      turno: turno,
+      activar: activar,
+      ruta: '/warzero/duelo/odio',
+    );
+    if (!mounted) return;
+    setState(() {
+      _odioDueloEnviando = false;
+      if (res.ok) _odioDueloTurno = res.activo ? turno : 0;
+    });
+    if (!res.ok) {
+      _toast('No se pudo lanzar la embestida: ${res.error}', error: true);
+      return;
+    }
+    _toast(res.activo
+        ? '🔥 Embestida del odio lista: choca con Izanami de frente este turno. '
+            'Púlsalo otra vez para anularla.'
+        : 'Embestida anulada: conservas tu odio.');
   }
 
   // ─────────────────────────────────────────────────────────
@@ -4246,6 +4582,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     // Duelo invertido: el botón de habilidad del jefe es la lluvia de rocas.
     if (_esJefeDueloLocal(carta)) {
       _iniciarLluviaDuelo();
+      return;
+    }
+    // Cárcel biónica: el botón de habilidad de Alexander es el odio.
+    if (_esAlexanderCarcel(carta)) {
+      await _alternarOdio();
+      return;
+    }
+    // Duelo de la muralla: el botón de Alexander es la embestida del odio.
+    if (_esGeneralMuralla(carta)) {
+      await _alternarOdioDuelo();
       return;
     }
     if (!carta.habilidadDisponible(_boardState.turnoActual)) {
@@ -6236,7 +6582,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
-  void _toast(String msg, {bool error = false}) {
+  void _toast(String msg, {bool error = false, Duration? duracion}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg,
           style: const TextStyle(
@@ -6247,7 +6593,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       backgroundColor:
           error ? const Color(0xFF7A1010) : const Color(0xFF1C3020),
       behavior: SnackBarBehavior.floating,
-      duration: const Duration(seconds: 2),
+      duration: duracion ?? const Duration(seconds: 2),
     ));
   }
 
@@ -6272,9 +6618,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
     // Celda visible para el jugador local: oculta las cartas invisibles del
     // rival también en el sidebar (las propias se conservan).
-    final sidebarCelda = _celdaConLluvia(_sidebarCoord != null
-        ? _boardState.celdaVisiblePara(_sidebarCoord!, _localPlayer.datos.uid)
-        : null);
+    final sidebarCelda = _celdaConOdioDuelo(_celdaConOdio(_celdaConLluvia(
+        _sidebarCoord != null
+            ? _boardState.celdaVisiblePara(
+                _sidebarCoord!, _localPlayer.datos.uid)
+            : null)));
     final sidebarTerrain = (_sidebarRi != null && _sidebarCi != null)
         ? _config.terrain(_sidebarRi!, _sidebarCi!)
         : null;

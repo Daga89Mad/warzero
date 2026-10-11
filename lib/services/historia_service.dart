@@ -12,6 +12,9 @@
 //   • abandonarHistoria(): salir de la batalla (el servidor la borra).
 //   • declararLluvia(): lluvia de rocas MANUAL del duelo invertido
 //     (POST /warzero/duelo/lluvia).
+//   • declararOdio(): el ODIO de Alexander en la cárcel biónica
+//     (POST /warzero/carcel/odio) y la EMBESTIDA DEL ODIO del duelo de la
+//     muralla (POST /warzero/duelo/odio).
 //
 // La partida es una `Partidas/{id}` real (misma pantalla de juego que el PvP);
 // lo único distinto es la config de historia, que viaja a GameScreen por el
@@ -40,6 +43,17 @@ class LluviaResultado {
     this.error = '',
     this.coords = const {},
   });
+}
+
+/// Resultado de desatar (o anular) el odio de Alexander en la cárcel.
+class OdioResultado {
+  final bool ok;
+  final String error;
+
+  /// El odio queda desatado para este turno.
+  final bool activo;
+
+  const OdioResultado({required this.ok, this.error = '', this.activo = false});
 }
 
 /// Una historia JUGABLE del modo historia (una entrada de la lista de
@@ -94,6 +108,12 @@ const List<HistoriaModoInfo> kHistoriasModo = [
     orden: 1,
     id: 'demonios_1',
     titulo: 'El asedio de Diente de Invierno',
+  ),
+  HistoriaModoInfo(
+    ejercito: 4,
+    orden: 1,
+    id: 'nefilim_1',
+    titulo: 'El hijo del odio',
   ),
 ];
 
@@ -244,6 +264,51 @@ class HistoriaService {
     } catch (e) {
       debugPrint('[WZ][duelo] lluvia falló: $e');
       return LluviaResultado(ok: false, error: e.toString());
+    }
+  }
+
+  /// Desata (o anula, con [activar] false) el ODIO de Alexander en la cárcel
+  /// biónica para el turno [turno]: +fuerza en el combate de ese turno, una
+  /// sola vez por batalla. Se puede anular mientras no se cierre el turno.
+  ///
+  /// Con [ruta] = '/warzero/duelo/odio' declara la EMBESTIDA DEL ODIO del
+  /// duelo de la muralla (nefilim_2), con el mismo cuerpo y respuesta.
+  Future<OdioResultado> declararOdio({
+    required String uid,
+    required String lobbyId,
+    required int turno,
+    required bool activar,
+    String ruta = '/warzero/carcel/odio',
+  }) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('${_api.baseUrl}$ruta'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'uid': uid,
+              'lobbyId': lobbyId,
+              'turno': turno,
+              'activar': activar,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
+      final body = jsonDecode(res.body);
+      if (body is! Map) {
+        return OdioResultado(ok: false, error: 'HTTP ${res.statusCode}');
+      }
+      if (body['ok'] != true) {
+        return OdioResultado(
+            ok: false,
+            error: (body['error'] ?? 'HTTP ${res.statusCode}').toString());
+      }
+      return OdioResultado(ok: true, activo: body['activo'] == true);
+    } on TimeoutException {
+      return const OdioResultado(
+          ok: false, error: 'El servidor no responde. Inténtalo de nuevo.');
+    } catch (e) {
+      debugPrint('[WZ][carcel] odio falló: $e');
+      return OdioResultado(ok: false, error: e.toString());
     }
   }
 
