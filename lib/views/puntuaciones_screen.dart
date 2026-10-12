@@ -11,6 +11,10 @@ class PuntuacionJugador {
   final int derrotas;
   final int pc;
   final bool eliminado;
+
+  /// Expulsado por pasar 3 turnos seguidos sin pulsar "fin de turno". Un
+  /// expulsado también cuenta como [eliminado]; la etiqueta muestra EXPULSADO.
+  final bool expulsado;
   final bool esLocal;
 
   const PuntuacionJugador({
@@ -20,14 +24,20 @@ class PuntuacionJugador {
     required this.derrotas,
     required this.pc,
     this.eliminado = false,
+    this.expulsado = false,
     this.esLocal = false,
   });
+
+  /// Fuera de la partida, por conquista de cuartel o por expulsión.
+  bool get fueraDePartida => eliminado || expulsado;
 }
 
 /// PUNTUACIONES de la partida en curso:
 ///   · V / D: se cuentan POR COMBATE (ganar un combate = +1 V; cada grupo
 ///     destruido = +1 D). No son "partidas ganadas".
 ///   · PC: 3 por cada carta enemiga destruida + 100 por conquistar un cuartel.
+///   · EXPULSADO: 3 turnos seguidos sin cerrar. El botín de su cuartel (100
+///     energías + 100 PC) se reparte entre los que siguen en la partida.
 class PuntuacionesScreen extends StatelessWidget {
   final String nombrePartida;
   final List<PuntuacionJugador> jugadores;
@@ -157,7 +167,7 @@ class _FilaPuntuacion extends StatelessWidget {
         ),
       ),
       child: Opacity(
-        opacity: jugador.eliminado ? 0.55 : 1,
+        opacity: jugador.fueraDePartida ? 0.55 : 1,
         child: Row(
           children: [
             SizedBox(
@@ -205,7 +215,10 @@ class _FilaPuntuacion extends StatelessWidget {
                     const SizedBox(width: 6),
                     _tag('TÚ', war.primario),
                   ],
-                  if (jugador.eliminado) ...[
+                  if (jugador.expulsado) ...[
+                    const SizedBox(width: 6),
+                    _tag('EXPULSADO', const Color(0xFFE08A30)),
+                  ] else if (jugador.eliminado) ...[
                     const SizedBox(width: 6),
                     _tag('ELIMINADO', war.error),
                   ],
@@ -284,7 +297,10 @@ class _LeyendaPC extends StatelessWidget {
             'V / D: victorias y derrotas por COMBATE (no partidas). Ganar un '
             'combate suma 1 V; cada grupo destruido suma 1 D.\n'
             'PC: 3 por cada carta enemiga destruida + 100 por conquistar un '
-            'cuartel. No depende de ganar, sino de cuánto destruyes.',
+            'cuartel. No depende de ganar, sino de cuánto destruyes.\n'
+            'EXPULSADO: 3 turnos seguidos sin pulsar fin de turno. Cuenta '
+            'como derrota y sus 100 energías y 100 PC de cuartel se reparten '
+            'entre los que siguen en la partida.',
             style: TextStyle(
                 fontSize: 9,
                 height: 1.6,

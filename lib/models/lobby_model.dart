@@ -115,7 +115,17 @@ class LobbyModel {
   final String? mapaId;
 
   /// UIDs de jugadores cuyo cuartel general fue conquistado (eliminados).
+  /// Incluye también a los EXPULSADOS por inactividad.
   final List<String> jugadoresEliminados;
+
+  /// UIDs de jugadores EXPULSADOS por pasar 3 turnos seguidos sin pulsar
+  /// "fin de turno". Son un subconjunto de [jugadoresEliminados]; sirve para
+  /// mostrar "EXPULSADO" en lugar de "ELIMINADO".
+  final List<String> jugadoresExpulsados;
+
+  /// Turnos seguidos que lleva cada jugador sin cerrar (uid → nº). A los 3 el
+  /// servidor lo expulsa. Los que están a 0 no aparecen.
+  final Map<String, int> turnosSinCerrar;
 
   /// UID del jugador ganador (disponible cuando estado == finalizada).
   final String? ganadorUid;
@@ -137,8 +147,13 @@ class LobbyModel {
     this.ultimoCombateLog = const [],
     this.mapaId,
     this.jugadoresEliminados = const [],
+    this.jugadoresExpulsados = const [],
+    this.turnosSinCerrar = const {},
     this.ganadorUid,
   });
+
+  /// True si [uid] fue expulsado por inactividad.
+  bool estaExpulsado(String uid) => jugadoresExpulsados.contains(uid);
 
   bool get estaLleno => jugadores.length >= maxJugadores;
   bool get todosListos =>
@@ -182,6 +197,17 @@ class LobbyModel {
     final rawElim = d['jugadoresEliminados'] as List<dynamic>? ?? [];
     final eliminados = rawElim.map((e) => e.toString()).toList();
 
+    final rawExp = d['jugadoresExpulsados'] as List<dynamic>? ?? [];
+    final expulsados = rawExp.map((e) => e.toString()).toList();
+
+    final rawSinCerrar = d['turnosSinCerrar'];
+    final sinCerrar = <String, int>{};
+    if (rawSinCerrar is Map) {
+      rawSinCerrar.forEach((k, v) {
+        if (v is num && v > 0) sinCerrar[k.toString()] = v.toInt();
+      });
+    }
+
     DateTime creadoEn;
     final rawCreado = d['creadoEn'];
     if (rawCreado is Timestamp) {
@@ -211,6 +237,8 @@ class LobbyModel {
       ultimoCombateLog: combateLog,
       mapaId: d['mapaId'] as String?,
       jugadoresEliminados: eliminados,
+      jugadoresExpulsados: expulsados,
+      turnosSinCerrar: sinCerrar,
       ganadorUid: d['ganadorUid'] as String?,
     );
   }
@@ -263,6 +291,8 @@ class LobbyModel {
         'statsPartida': statsPartida.map((uid, s) => MapEntry(uid, s.toMap())),
         'ultimoCombateLog': ultimoCombateLog,
         'jugadoresEliminados': jugadoresEliminados,
+        if (jugadoresExpulsados.isNotEmpty)
+          'jugadoresExpulsados': jugadoresExpulsados,
         if (ganadorUid != null) 'ganadorUid': ganadorUid,
         if (mapaId != null) 'mapaId': mapaId,
       };

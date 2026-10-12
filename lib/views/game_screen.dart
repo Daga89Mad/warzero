@@ -282,8 +282,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   /// badge del menú). Se recalcula en cada _revisarAlianzas desde el estado.
   int _propuestasPendientes = 0;
 
-  /// Jugadores eliminados (cuartel conquistado).
+  /// Jugadores eliminados (cuartel conquistado). Incluye a los expulsados.
   List<String> _jugadoresEliminados = [];
+
+  /// Jugadores EXPULSADOS por pasar 3 turnos seguidos sin pulsar "fin de
+  /// turno" (subconjunto de [_jugadoresEliminados]).
+  List<String> _jugadoresExpulsados = [];
+
+  /// Turno en el que ya se mostró el aviso de inactividad (para no repetirlo
+  /// en cada sondeo del mismo turno).
+  int _avisoInactividadTurno = -1;
 
   /// True si el jugador local fue eliminado.
   bool _estoyEliminado = false;
@@ -1731,11 +1739,14 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             _obeliscoOponente = obeliscoOponenteDoc;
           }
           _jugadoresEliminados = eliminados;
+          _jugadoresExpulsados = List<String>.from(lobby!.jugadoresExpulsados);
           _estoyEliminado = eliminados.contains(widget.localPlayerUid);
           _juegoTerminado = juegoTerminado;
           _ganadorUid = lobby!.ganadorUid;
           if (data['esReto'] == true) _retoDoc = true;
         });
+        final lobbyAviso = lobby;
+        if (lobbyAviso != null) _avisarInactividadSiProcede(lobbyAviso);
 
         // Red de seguridad de rejilla: garantiza que el tablero contiene todas
         // las coordenadas reales (obeliscos + cartas). Si el grid del mapa no se
@@ -2175,10 +2186,12 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _sincronizarAliasLocalDesdeLobby(lobby);
         _hostUid = lobby.hostUid;
         _jugadoresEliminados = nuevosEliminados;
+        _jugadoresExpulsados = List<String>.from(lobby.jugadoresExpulsados);
         _estoyEliminado = ahoraEliminado;
         _juegoTerminado = juegoTerminado;
         if (juegoTerminado) _ganadorUid = lobby.ganadorUid;
       });
+      _avisarInactividadSiProcede(lobby);
 
       // Red de seguridad de rejilla EN TIEMPO REAL (bug 8 jugadores): si algún
       // obelisco llega o cambia por el stream —en partidas de 8 jugadores los
@@ -3868,6 +3881,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         derrotas: s.derrotas,
         pc: s.pc,
         eliminado: lobby.jugadoresEliminados.contains(j.uid),
+        expulsado: lobby.estaExpulsado(j.uid) ||
+            _jugadoresExpulsados.contains(j.uid),
         esLocal: j.uid == localUid,
       );
     }).toList();
@@ -5866,8 +5881,13 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             .toList();
         final yaEliminadoAntes = _estoyEliminado;
         final ahoraEliminado = elimHttp.contains(widget.localPlayerUid);
+        final expHttp = (estado['jugadoresExpulsados'] as List?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            _jugadoresExpulsados;
         setState(() {
           _jugadoresEliminados = elimHttp;
+          _jugadoresExpulsados = expHttp;
           _estoyEliminado = ahoraEliminado;
         });
         // Si además la partida ha terminado, manda el flujo de fin de partida
@@ -6179,28 +6199,65 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     await mostrarTrofeosConseguidos(context, pendientes);
   }
 
+  /// True si el jugador local fue EXPULSADO por inactividad.
+  bool get _estoyExpulsado =>
+      _jugadoresExpulsados.contains(widget.localPlayerUid) ||
+      (_currentLobby?.estaExpulsado(widget.localPlayerUid) ?? false);
+
+  /// Aviso (una vez por turno) cuando el jugador local lleva turnos seguidos
+  /// sin pulsar "fin de turno". Al llegar a 3 el servidor lo expulsa.
+  void _avisarInactividadSiProcede(LobbyModel lobby) {
+    if (!mounted || _estoyEliminado || _juegoTerminado) return;
+    final sinCerrar = lobby.turnosSinCerrar[widget.localPlayerUid] ?? 0;
+    if (sinCerrar <= 0) return;
+    if (_avisoInactividadTurno == lobby.turnoActual) return;
+    _avisoInactividadTurno = lobby.turnoActual;
+    const limite = 3;
+    final quedan = limite - sinCerrar;
+    final turnos = sinCerrar == 1 ? '1 turno' : '$sinCerrar turnos';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _toast(
+        quedan <= 1
+            ? '⚠ Llevas $turnos sin cerrar. Si no pulsas FIN DE TURNO en este '
+                'turno serás EXPULSADO de la partida.'
+            : '⚠ Llevas $turnos sin cerrar. A los $limite turnos seguidos '
+                'serás expulsado de la partida.',
+        error: true,
+        duracion: const Duration(seconds: 6),
+      );
+    });
+  }
+
   // ── Diálogo de eliminación ────────────────────────────────
   void _showEliminadoDialog() {
     if (!mounted) return;
     final restantes = _jugadoresActivos;
+    final expulsado = _estoyExpulsado;
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF1A0505),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        title: const Text('💀 CUARTEL DESTRUIDO',
-            style: TextStyle(
+        title: Text(expulsado ? '⛔ EXPULSADO' : '💀 CUARTEL DESTRUIDO',
+            style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 14,
                 color: Color(0xFFCC3030),
                 letterSpacing: 1.5)),
         content: Text(
-            'Tu cuartel general ha sido conquistado.\n'
-            'Has sido eliminado de la partida.\n\n'
-            'Tus puntos de combate están cerrados y tu recompensa ya se ha '
-            'acreditado: no tienes que esperar a que acabe la batalla.\n\n'
-            'Siguen en pie $restantes comandantes. Puedes seguir observando.',
+            expulsado
+                ? 'Has pasado 3 turnos seguidos sin pulsar FIN DE TURNO.\n'
+                    'Has sido expulsado de la partida y cuenta como derrota.\n\n'
+                    'Las energías y PC de tu cuartel se han repartido entre '
+                    'los comandantes que siguen en la batalla.\n\n'
+                    'Siguen en pie $restantes comandantes. Puedes seguir observando.'
+                : 'Tu cuartel general ha sido conquistado.\n'
+                    'Has sido eliminado de la partida.\n\n'
+                    'Tus puntos de combate están cerrados y tu recompensa ya se ha '
+                    'acreditado: no tienes que esperar a que acabe la batalla.\n\n'
+                    'Siguen en pie $restantes comandantes. Puedes seguir observando.',
             style: const TextStyle(
                 fontFamily: 'Cinzel',
                 fontSize: 10,
@@ -6496,6 +6553,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         derrotas: s.derrotas,
         pc: s.pc,
         eliminado: lobby.jugadoresEliminados.contains(j.uid),
+        expulsado: lobby.estaExpulsado(j.uid) ||
+            _jugadoresExpulsados.contains(j.uid),
         esLocal: j.uid == localUid,
       );
     }).toList();
@@ -6503,7 +6562,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PuntuacionesScreen(
         nombrePartida: eliminado
-            ? '${lobby?.nombre ?? 'Partida'} · TU BATALLA HA TERMINADO'
+            ? (_estoyExpulsado
+                ? '${lobby?.nombre ?? 'Partida'} · HAS SIDO EXPULSADO'
+                : '${lobby?.nombre ?? 'Partida'} · TU BATALLA HA TERMINADO')
             : (lobby?.nombre ?? 'Partida'),
         jugadores: filas,
       ),
@@ -6565,6 +6626,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         ejercitoId: _miEjercitoId,
         esGanador: !eliminado && _ganadorUid == widget.localPlayerUid,
         eliminado: eliminado,
+        expulsado: _estoyExpulsado,
         jugadoresRestantes: eliminado ? _jugadoresActivos : 0,
         experiencia: xpGanada,
         oro: oroGanado,

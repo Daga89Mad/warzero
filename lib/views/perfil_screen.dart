@@ -46,6 +46,8 @@ class _PerfilScreenState extends State<PerfilScreen> {
   int _dinero = 0;
   // Victorias de PARTIDA por tamaño de sala (2/4/6/8 jugadores).
   int _vic2 = 0, _vic4 = 0, _vic6 = 0, _vic8 = 0;
+  // Partidas en las que fue EXPULSADO por pasar 3 turnos seguidos sin cerrar.
+  int _expulsiones = 0;
   String _fechaRegistro = '';
   // Coleccionismo: % de completado por ejército y saldos de las 5 monedas Zero.
   Map<int, int> _porcentajes = {};
@@ -141,6 +143,7 @@ class _PerfilScreenState extends State<PerfilScreen> {
         _vic4 = (d['victorias4'] as num?)?.toInt() ?? 0;
         _vic6 = (d['victorias6'] as num?)?.toInt() ?? 0;
         _vic8 = (d['victorias8'] as num?)?.toInt() ?? 0;
+        _expulsiones = (d['expulsiones'] as num?)?.toInt() ?? 0;
         _fechaRegistro = fechaStr;
         _zeros = zeros;
         _porcentajes = porcentajes;
@@ -487,6 +490,17 @@ class _PerfilScreenState extends State<PerfilScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: _StatCard(
+                      icon: '⛔',
+                      label: 'PARTIDAS EXPULSADO (3 TURNOS SIN CERRAR)',
+                      value: '$_expulsiones',
+                      // En gris si nunca le han expulsado.
+                      color: _expulsiones > 0 ? war.error : war.textoTenue,
+                    ),
                   ),
                   const SizedBox(height: 14),
                   _XpBar(nivel: _nivel, experiencia: _experiencia),

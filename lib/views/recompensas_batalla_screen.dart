@@ -11,6 +11,7 @@ import '../services/settings_controller.dart';
 ///
 ///   · Combate: los PC se convierten a razón de [pcPorZero] PC = 1 Zero.
 ///   · Participación: +[bonusParticipacion] Zero por no abandonar la batalla.
+///     El jugador EXPULSADO por inactividad ([expulsado]) no lo recibe.
 ///
 /// Además, en el cierre DEFINITIVO de la partida (no en el anticipo por
 /// eliminación) muestra la EXPERIENCIA y el ORO ganados por la posición final,
@@ -41,6 +42,11 @@ class RecompensasBatallaScreen extends StatelessWidget {
   /// etiqueta del botón de cierre.
   final bool eliminado;
 
+  /// True si el jugador local fue EXPULSADO por pasar 3 turnos seguidos sin
+  /// pulsar "fin de turno". No cobra el bono de participación (mismo criterio
+  /// que el servidor en WarZeroRecompensas).
+  final bool expulsado;
+
   /// Jugadores que siguen en pie (solo informativo, para el caso [eliminado]).
   final int jugadoresRestantes;
 
@@ -63,6 +69,7 @@ class RecompensasBatallaScreen extends StatelessWidget {
     required this.ejercitoId,
     this.esGanador = false,
     this.eliminado = false,
+    this.expulsado = false,
     this.jugadoresRestantes = 0,
     this.experiencia = 0,
     this.oro = 0,
@@ -71,8 +78,11 @@ class RecompensasBatallaScreen extends StatelessWidget {
   /// Zero ganado por combate: PC ÷ [pcPorZero] (redondeo hacia abajo).
   int get zeroCombate => pc ~/ pcPorZero;
 
+  /// Bono de participación que le corresponde: 0 si fue expulsado.
+  int get bonusAplicado => expulsado ? 0 : bonusParticipacion;
+
   /// Zero total acreditado = combate + bono de participación.
-  int get zeroTotal => zeroCombate + bonusParticipacion;
+  int get zeroTotal => zeroCombate + bonusAplicado;
 
   /// ¿Hay progreso (XP/oro) definitivo que mostrar?
   bool get _muestraProgreso => !eliminado && (experiencia > 0 || oro > 0);
@@ -215,9 +225,11 @@ class RecompensasBatallaScreen extends StatelessWidget {
                           _filaDesglose(
                             war,
                             etiqueta: 'Bono por no abandonar',
-                            detalle: 'Participación completa',
-                            valor: '+$bonusParticipacion',
-                            valorColor: acento,
+                            detalle: expulsado
+                                ? 'Perdido: expulsado por inactividad'
+                                : 'Participación completa',
+                            valor: '+$bonusAplicado',
+                            valorColor: expulsado ? war.error : acento,
                           ),
                           _sep(war, fuerte: true),
                           // Total.

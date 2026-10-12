@@ -1715,6 +1715,8 @@ class _FarmeoTile extends StatelessWidget {
     final isla = (detalle['islaCentral'] as num?)?.toInt() ?? 0;
     final rayo = (detalle['rayo'] as num?)?.toInt() ?? 0;
     final suerte = (detalle['suerteDelPerdedor'] as num?)?.toInt() ?? 0;
+    // Parte del botín (100 energías) de un jugador expulsado por inactividad.
+    final expulsion = (detalle['expulsion'] as num?)?.toInt() ?? 0;
     final esLocal = uid == localUid;
     final color = colorZona(zona);
 
@@ -1802,7 +1804,17 @@ class _FarmeoTile extends StatelessWidget {
                       label: 'Suerte del perdedor',
                       value: suerte,
                       highlight: true),
-                if (contEnemigo == 0 && isla == 0 && rayo == 0 && suerte == 0)
+                if (expulsion > 0)
+                  _FarmeoRow(
+                      icon: '⛔',
+                      label: 'Botín de jugador expulsado',
+                      value: expulsion,
+                      highlight: true),
+                if (contEnemigo == 0 &&
+                    isla == 0 &&
+                    rayo == 0 &&
+                    suerte == 0 &&
+                    expulsion == 0)
                   Text('Sin fuentes de farmeo.',
                       style: TextStyle(
                           fontFamily: 'Cinzel',

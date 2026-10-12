@@ -1388,7 +1388,8 @@ class _MisPartidasListState extends State<_MisPartidasList> {
               accentColor = war.primario;
               iconData = Icons.meeting_room;
             } else if (eliminado) {
-              estado = 'ELIMINADO';
+              // Expulsado = 3 turnos seguidos sin pulsar fin de turno.
+              estado = lobby.estaExpulsado(widget.uid) ? 'EXPULSADO' : 'ELIMINADO';
               accentColor = war.textoTenue;
               iconData = Icons.dangerous;
             } else if (yaCerre) {
