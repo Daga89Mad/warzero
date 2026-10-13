@@ -744,6 +744,11 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                   label: 'ALTO',
                   accent: const Color(0xFFE0703A),
                   onTap: () => _setDificultadTodos('alto')),
+              const SizedBox(width: 6),
+              _MiniBoton(
+                  label: 'MAESTRO',
+                  accent: const Color(0xFFC9A227),
+                  onTap: () => _setDificultadTodos('maestro')),
             ],
           ),
           const SizedBox(height: 10),
@@ -802,11 +807,15 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
 
 /// Valores admitidos para el perfil de un bot (deben coincidir con lo que lee el
 /// backend en `PerfilBot.Parse`).
-const kDificultades = <String>['medio', 'alto'];
+const kDificultades = <String>['medio', 'alto', 'maestro'];
 const kEstilos = <String>['equilibrado', 'defensivo', 'agresivo'];
 
 /// Etiquetas visibles.
-String etiquetaDificultad(String d) => d == 'alto' ? 'Alto' : 'Medio';
+String etiquetaDificultad(String d) => switch (d) {
+      'alto' => 'Alto',
+      'maestro' => 'Maestro',
+      _ => 'Medio',
+    };
 String etiquetaEstilo(String e) => switch (e) {
       'defensivo' => 'Defensivo',
       'agresivo' => 'Agresivo',
@@ -826,8 +835,10 @@ class _BotResumen {
   /// por relleno proactivo. 0 = de inmediato.
   int esperaSegundos;
 
-  /// Perfil de juego: dificultad ('medio'|'alto') y estilo
-  /// ('equilibrado'|'defensivo'|'agresivo').
+  /// Perfil de juego: dificultad ('medio'|'alto'|'maestro') y estilo
+  /// ('equilibrado'|'defensivo'|'agresivo'). Maestro = Alto + apertura
+  /// económica, asedio en masa, conversión del excedente y mazo propio por
+  /// ejército (lo escribe el backend en Jugadores/{uid}/Mazos).
   String dificultad;
   String estilo;
 
@@ -1047,7 +1058,7 @@ class _BotTile extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 8),
-                // DIFICULTAD: Medio / Alto.
+                // DIFICULTAD: Medio / Alto / Maestro.
                 Row(
                   children: [
                     const SizedBox(
@@ -1074,6 +1085,13 @@ class _BotTile extends StatelessWidget {
                       seleccionado: bot.dificultad == 'alto',
                       color: const Color(0xFFE0703A),
                       onTap: () => onDificultad('alto'),
+                    ),
+                    const SizedBox(width: 6),
+                    _PerfilChip(
+                      label: 'Maestro',
+                      seleccionado: bot.dificultad == 'maestro',
+                      color: const Color(0xFFC9A227),
+                      onTap: () => onDificultad('maestro'),
                     ),
                   ],
                 ),
