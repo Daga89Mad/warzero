@@ -1,15 +1,18 @@
 // lib/views/duelos/duelos_lobby_screen.dart
 //
 // MODO DUELOS — menú de salas: EN CURSO / PÚBLICAS / PRIVADA y CREAR DUELO
-// (nombre, mapa de 7×7 y si es privada). Mismo aspecto que la Sala de Guerra
-// del modo partida, pero todo va por la API de duelos (DuelosService).
+// (nombre, mapa de 7×7 obligatorio, fin de turno y si es privada). Mismo
+// aspecto que la Sala de Guerra del modo partida, pero todo va por la API de
+// duelos (DuelosService).
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:warzero/services/settings_controller.dart';
 
+import '../../models/lobby_model.dart' show ModoTurno;
 import '../../services/duelos_service.dart';
 import '../../services/mapa_service.dart';
+import '../lobby_screen.dart' show ModoTurnoSelector;
 import 'duelos_partida_screen.dart';
 import 'duelos_sala_screen.dart';
 
@@ -378,15 +381,18 @@ class _TarjetaDuelo extends StatelessWidget {
                       Icon(Icons.lock, size: 9, color: color.withOpacity(0.6)),
                     ],
                   ]),
-                  if (sala.mapaNombre.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(sala.mapaNombre.toUpperCase(),
-                        style: TextStyle(
-                            fontSize: 7,
-                            color: war.textoTenue,
-                            fontFamily: 'Cinzel',
-                            letterSpacing: 1)),
-                  ],
+                  const SizedBox(height: 3),
+                  Text(
+                      [
+                        if (sala.mapaNombre.isNotEmpty)
+                          sala.mapaNombre.toUpperCase(),
+                        textoModoDuelo(sala.modoTurno),
+                      ].join('  ·  '),
+                      style: TextStyle(
+                          fontSize: 7,
+                          color: war.textoTenue,
+                          fontFamily: 'Cinzel',
+                          letterSpacing: 1)),
                 ],
               ),
             ),
@@ -470,10 +476,13 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
   bool _creando = false;
   String? _error;
 
+  ModoTurno _modoTurno = ModoTurno.rapida;
+
   List<MapaInfo> _mapas = [];
   bool _cargandoMapas = true;
+  String? _errorMapas;
 
-  /// null = tablero de duelo por defecto (7×7 con 4 pilares).
+  /// Mapa elegido. Es obligatorio: no hay tablero "sin mapa".
   String? _mapaId;
 
   @override
@@ -482,20 +491,34 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
     _cargarMapas();
   }
 
-  /// Solo valen mapas de 7×7 (el tablero de los duelos). Las casillas que no
-  /// son de tierra quedan bloqueadas.
+  /// Solo valen los mapas de 7×7 (el tablero de los duelos) que NO están
+  /// ocultos (`seleccionable` = false en la edición de mapas). Las casillas
+  /// que no son de tierra quedan bloqueadas.
   Future<void> _cargarMapas() async {
     try {
       final todos = await MapaService().obtenerMapas(soloSeleccionables: true);
       if (!mounted) return;
       setState(() {
-        _mapas = todos.where((m) => m.filas == 7 && m.columnas == 7).toList();
+        _mapas = todos
+            .where((m) => m.seleccionable && m.filas == 7 && m.columnas == 7)
+            .toList();
+        if (_mapas.isNotEmpty && !_mapas.any((m) => m.id == _mapaId)) {
+          _mapaId = _mapas.first.id;
+        }
       });
-    } catch (_) {
-      // Sin mapas: se juega en el tablero por defecto.
+    } catch (e) {
+      if (mounted) setState(() => _errorMapas = e.toString());
     } finally {
       if (mounted) setState(() => _cargandoMapas = false);
     }
+  }
+
+  void _reintentarMapas() {
+    setState(() {
+      _cargandoMapas = true;
+      _errorMapas = null;
+    });
+    _cargarMapas();
   }
 
   @override
@@ -508,6 +531,10 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
   Future<void> _crear() async {
     final nombre = _nombreCtrl.text.trim();
     if (nombre.isEmpty) return;
+    if (_mapaId == null) {
+      setState(() => _error = 'Elige un mapa.');
+      return;
+    }
     if (_esPrivada && _passCtrl.text.isEmpty) {
       setState(() => _error = 'Una sala privada necesita contraseña.');
       return;
@@ -523,7 +550,8 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
         nombre: nombre,
         esPrivada: _esPrivada,
         contrasena: _esPrivada ? _passCtrl.text : '',
-        mapaId: _mapaId,
+        mapaId: _mapaId!,
+        modoTurno: _modoTurno,
       );
       if (mounted) Navigator.of(context).pop(sala);
     } catch (e) {
@@ -536,7 +564,6 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
   @override
   Widget build(BuildContext context) {
     final war = context.war;
-    final opciones = <MapaInfo?>[null, ..._mapas];
     return Dialog(
       backgroundColor: war.superficie,
       shape: RoundedRectangleBorder(
@@ -575,11 +602,20 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
                   ),
                 ),
               )
+            else if (_errorMapas != null)
+              _AvisoMapas(
+                texto: 'No se pudieron cargar los mapas.',
+                onReintentar: _reintentarMapas,
+              )
+            else if (_mapas.isEmpty)
+              const _AvisoMapas(
+                texto: 'No hay mapas de 7×7 disponibles para duelos.',
+              )
             else
-              ...opciones.map((m) {
-                final sel = m?.id == _mapaId;
+              ..._mapas.map((m) {
+                final sel = m.id == _mapaId;
                 return GestureDetector(
-                  onTap: () => setState(() => _mapaId = m?.id),
+                  onTap: () => setState(() => _mapaId = m.id),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     margin: const EdgeInsets.only(bottom: 6),
@@ -596,15 +632,13 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
                       ),
                     ),
                     child: Row(children: [
-                      Icon(m == null ? Icons.grid_on : Icons.map_outlined,
+                      Icon(Icons.map_outlined,
                           size: 14,
                           color: sel ? kDuelosAcento : war.textoTenue),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          m == null
-                              ? 'TABLERO DE DUELO  (7×7, 4 pilares)'
-                              : m.nombre.toUpperCase(),
+                          m.nombre.toUpperCase(),
                           style: TextStyle(
                               fontSize: 10,
                               color: sel ? kDuelosAcento : war.textoTenue,
@@ -621,7 +655,24 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
                   ),
                 );
               }),
-            const SizedBox(height: 10),
+            const SizedBox(height: 16),
+            const DuelosEtiqueta('FIN DE TURNO'),
+            ModoTurnoSelector(
+              selected: _modoTurno,
+              onChanged: (m) => setState(() => _modoTurno = m),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Si un jugador no cierra su turno a tiempo, se cierra sin '
+              'mover. Con 3 turnos seguidos sin pulsar FIN DE TURNO pierde '
+              'el duelo.',
+              style: TextStyle(
+                  fontSize: 8,
+                  color: war.textoTenue,
+                  fontFamily: 'Cinzel',
+                  height: 1.5),
+            ),
+            const SizedBox(height: 16),
             GestureDetector(
               onTap: () => setState(() => _esPrivada = !_esPrivada),
               child: Row(children: [
@@ -675,13 +726,47 @@ class _CrearDueloDialogState extends State<_CrearDueloDialog> {
                   label: 'CREAR',
                   icon: Icons.check,
                   cargando: _creando,
-                  onTap: _creando ? null : _crear,
+                  onTap: (_creando || _mapaId == null) ? null : _crear,
                 ),
               ),
             ]),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Aviso dentro del selector de mapas (sin mapas o error al cargarlos).
+class _AvisoMapas extends StatelessWidget {
+  final String texto;
+  final VoidCallback? onReintentar;
+  const _AvisoMapas({required this.texto, this.onReintentar});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: war.fondo,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: war.borde.withOpacity(0.3), width: 1),
+      ),
+      child: Row(children: [
+        Icon(Icons.map_outlined, size: 14, color: war.textoTenue),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(texto,
+              style: TextStyle(
+                  fontSize: 9, color: war.textoTenue, fontFamily: 'Cinzel')),
+        ),
+        if (onReintentar != null)
+          GestureDetector(
+            onTap: onReintentar,
+            child: Icon(Icons.refresh, size: 16, color: war.primario),
+          ),
+      ]),
     );
   }
 }
@@ -760,6 +845,14 @@ class _UnirsePrivadaDialogState extends State<_UnirsePrivadaDialog> {
 // ─────────────────────────────────────────────────────────────
 // WIDGETS COMPARTIDOS DEL MODO DUELOS
 // ─────────────────────────────────────────────────────────────
+
+/// Texto corto del modo de fin de turno de un duelo.
+String textoModoDuelo(ModoTurno m) => switch (m) {
+      ModoTurno.rapida => 'RÁPIDA · 30 S',
+      ModoTurno.diario => 'DIARIO · 00:00 UTC',
+      ModoTurno.turno12h => 'TURNO 12 H',
+    };
+
 class DuelosBoton extends StatelessWidget {
   final String label;
   final IconData icon;

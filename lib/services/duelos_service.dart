@@ -12,6 +12,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../models/lobby_model.dart' show ModoTurno;
 import 'warzero_api.dart';
 
 /// Nombre que ve el jugador para el general que hay que proteger. El servidor
@@ -224,9 +225,28 @@ class DuelosSala {
   /// En curso: true si ya mandaste tu jugada de este turno.
   final bool yaJugue;
 
+  /// En curso: true si el rival ya cerró su turno.
+  final bool rivalJugo;
+
   /// Terminada: "victoria" | "derrota" | "tablas" (desde tu punto de vista).
   final String resultado;
   final String motivo;
+
+  /// Fin de turno: rápida (30 s), diario (00:00 UTC) o cada 12 h.
+  final ModoTurno modoTurno;
+
+  /// En curso: cierre del turno (ms UTC). 0 si no hay.
+  final int fechaLimiteMs;
+
+  /// Diferencia entre la hora del servidor y la del dispositivo (ms), para
+  /// que la cuenta atrás no dependa del reloj del móvil.
+  final int desfaseServidorMs;
+
+  /// Turnos seguidos sin pulsar FIN DE TURNO (tuyos y del rival) y cuántos
+  /// hacen perder el duelo.
+  final int inactividad;
+  final int inactividadRival;
+  final int turnosInactividadDerrota;
 
   /// Vista de la partida (solo en GET partida, con el duelo empezado).
   final Map<String, dynamic>? partida;
@@ -246,8 +266,15 @@ class DuelosSala {
     required this.jugadores,
     required this.soyParticipante,
     required this.yaJugue,
+    this.rivalJugo = false,
     required this.resultado,
     required this.motivo,
+    this.modoTurno = ModoTurno.rapida,
+    this.fechaLimiteMs = 0,
+    this.desfaseServidorMs = 0,
+    this.inactividad = 0,
+    this.inactividadRival = 0,
+    this.turnosInactividadDerrota = 3,
     this.partida,
   });
 
@@ -255,6 +282,24 @@ class DuelosSala {
   bool get enCurso => estado == 'en_curso';
   bool get finalizada => estado == 'finalizada';
   bool get llena => numJugadores >= maxJugadores;
+
+  /// Hora actual según el servidor.
+  DateTime get ahoraServidor =>
+      DateTime.now().add(Duration(milliseconds: desfaseServidorMs));
+
+  /// Tiempo que queda para que se cierre el turno (null si no aplica).
+  Duration? get restante {
+    if (!enCurso || fechaLimiteMs <= 0) return null;
+    final d = DateTime.fromMillisecondsSinceEpoch(fechaLimiteMs, isUtc: true)
+        .difference(ahoraServidor.toUtc());
+    return d.isNegative ? Duration.zero : d;
+  }
+
+  static ModoTurno modoDesdeTexto(String? s) => switch (s) {
+        'diario' => ModoTurno.diario,
+        'turno12h' => ModoTurno.turno12h,
+        _ => ModoTurno.rapida,
+      };
 
   DuelosJugadorSala? jugador(String uid) {
     for (final j in jugadores) {
@@ -281,8 +326,19 @@ class DuelosSala {
             .toList(growable: false),
         soyParticipante: m['soyParticipante'] == true,
         yaJugue: m['yaJugue'] == true,
+        rivalJugo: m['rivalJugo'] == true,
         resultado: m['resultado'] as String? ?? '',
         motivo: m['motivo'] as String? ?? '',
+        modoTurno: modoDesdeTexto(m['modoTurno'] as String?),
+        fechaLimiteMs: (m['fechaLimite'] as num?)?.toInt() ?? 0,
+        desfaseServidorMs: m['ahora'] is num
+            ? (m['ahora'] as num).toInt() -
+                DateTime.now().millisecondsSinceEpoch
+            : 0,
+        inactividad: (m['inactividad'] as num?)?.toInt() ?? 0,
+        inactividadRival: (m['inactividadRival'] as num?)?.toInt() ?? 0,
+        turnosInactividadDerrota:
+            (m['turnosInactividadDerrota'] as num?)?.toInt() ?? 3,
         partida: _mapa(m['partida']),
       );
 }
@@ -333,7 +389,8 @@ class DuelosService {
     required String nombre,
     required bool esPrivada,
     required String contrasena,
-    String? mapaId,
+    required String mapaId,
+    ModoTurno modoTurno = ModoTurno.rapida,
   }) async =>
       DuelosSala.fromMap(await _post('/warzero/duelos/crear', {
         'uid': uid,
@@ -342,6 +399,7 @@ class DuelosService {
         'esPrivada': esPrivada,
         'contrasena': contrasena,
         'mapaId': mapaId,
+        'modoTurno': modoTurno.name,
       }));
 
   Future<DuelosSala> unirse({
@@ -381,7 +439,9 @@ class DuelosService {
       DuelosSala.fromMap(
           await _post('/warzero/duelos/iniciar', {'id': id, 'uid': uid}));
 
-  /// Manda la jugada del turno. El servidor resuelve cuando están las dos.
+  /// Manda la jugada del turno (movimientos, habilidades, disparos y habilidad
+  /// de ejército). El servidor resuelve
+  /// cuando están las dos.
   Future<DuelosSala> turno({
     required String id,
     required String uid,

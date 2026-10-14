@@ -485,7 +485,13 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
   @override
   void initState() {
     super.initState();
+    // CREAR se habilita según el nombre: repintar al escribir.
+    _nombreCtrl.addListener(_alCambiarNombre);
     _cargarMapas();
+  }
+
+  void _alCambiarNombre() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _cargarMapas() async {
@@ -500,7 +506,11 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
       if (!mounted) return;
       setState(() {
         _mapas = lista;
-        if (lista.length == 1) _mapaId = lista.first.id;
+        // El mapa es obligatorio: se preselecciona el primero.
+        if (lista.isNotEmpty &&
+            !lista.any((m) => m.id == _mapaId)) {
+          _mapaId = lista.first.id;
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -525,7 +535,11 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
       if (!mounted) return;
       setState(() {
         _mapas = lista;
-        if (lista.length == 1) _mapaId = lista.first.id;
+        // El mapa es obligatorio: se preselecciona el primero.
+        if (lista.isNotEmpty &&
+            !lista.any((m) => m.id == _mapaId)) {
+          _mapaId = lista.first.id;
+        }
       });
     } catch (e) {
       if (!mounted) return;
@@ -537,13 +551,18 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
 
   @override
   void dispose() {
+    _nombreCtrl.removeListener(_alCambiarNombre);
     _nombreCtrl.dispose();
     _passCtrl.dispose();
     super.dispose();
   }
 
+  /// Se puede crear con nombre y con un mapa elegido (ya no hay "sin mapa").
+  bool get _puedeCrear =>
+      _nombreCtrl.text.trim().isNotEmpty && _mapaId != null && !_loadingMapas;
+
   Future<void> _submit() async {
-    if (_nombreCtrl.text.trim().isEmpty) return;
+    if (!_puedeCrear) return;
     setState(() => _loading = true);
     try {
       await widget.onCreate(
@@ -627,7 +646,7 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
             ),
             const SizedBox(height: 16),
             _FieldLabel('FIN DE TURNO'),
-            _ModoTurnoSelector(
+            ModoTurnoSelector(
               selected: _modoTurno,
               onChanged: (m) => setState(() => _modoTurno = m),
             ),
@@ -691,15 +710,18 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: GestureDetector(
-                    onTap: _loading ? null : _submit,
+                    onTap: (_loading || !_puedeCrear) ? null : _submit,
                     child: Container(
                       height: 40,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: war.primario.withOpacity(0.15),
+                        color: war.primario
+                            .withOpacity(_puedeCrear ? 0.15 : 0.05),
                         borderRadius: BorderRadius.circular(4),
                         border: Border.all(
-                            color: war.primario.withOpacity(0.5), width: 1),
+                            color: war.primario
+                                .withOpacity(_puedeCrear ? 0.5 : 0.2),
+                            width: 1),
                       ),
                       child: _loading
                           ? SizedBox(
@@ -795,7 +817,7 @@ class _MapaSelector extends StatelessWidget {
           border: Border.all(color: war.borde.withOpacity(0.3), width: 1),
         ),
         child: Text(
-          'Sin mapas para esta configuración — terreno estándar',
+          'No hay mapas disponibles para este número de jugadores',
           style: TextStyle(
               fontSize: 9,
               color: war.textoTenue,
@@ -805,21 +827,17 @@ class _MapaSelector extends StatelessWidget {
       );
     }
 
-    final opciones = <MapaInfo?>[null, ...mapas];
-
     // Acento de "mapa seleccionado": mantengo el azul semántico del selector.
     const azulSel = Color(0xFF4090E0);
 
+    // El mapa es obligatorio: ya no existe la opción "sin mapa".
     return Column(
-      children: opciones.map((mapa) {
-        final isSelected =
-            mapa == null ? selectedId == null : mapa.id == selectedId;
-        final label = mapa == null
-            ? 'SIN MAPA  (todo terrestre)'
-            : mapa.nombre.toUpperCase();
+      children: mapas.map((mapa) {
+        final isSelected = mapa.id == selectedId;
+        final label = mapa.nombre.toUpperCase();
 
         return GestureDetector(
-          onTap: () => onSelected(mapa?.id),
+          onTap: () => onSelected(mapa.id),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             margin: const EdgeInsets.only(bottom: 6),
@@ -837,7 +855,7 @@ class _MapaSelector extends StatelessWidget {
             child: Row(
               children: [
                 Icon(
-                  mapa == null ? Icons.crop_square : Icons.map_outlined,
+                  Icons.map_outlined,
                   size: 14,
                   color: isSelected ? azulSel : war.textoTenue,
                 ),
@@ -1527,12 +1545,15 @@ class _MisPartidasListState extends State<_MisPartidasList> {
 
 // ─────────────────────────────────────────────────────────────
 // SELECTOR MODO TURNO
+// Público: también lo usa la ventana CREAR DUELO (modo Duelos), que tiene los
+// mismos tres modos de fin de turno.
 // ─────────────────────────────────────────────────────────────
-class _ModoTurnoSelector extends StatelessWidget {
+class ModoTurnoSelector extends StatelessWidget {
   final ModoTurno selected;
   final void Function(ModoTurno) onChanged;
 
-  const _ModoTurnoSelector({
+  const ModoTurnoSelector({
+    super.key,
     required this.selected,
     required this.onChanged,
   });

@@ -272,15 +272,17 @@ class _DuelosSalaScreenState extends State<DuelosSalaScreen> {
               Row(children: [
                 Icon(Icons.map_outlined, size: 12, color: war.textoTenue),
                 const SizedBox(width: 6),
-                Text(
-                  sala.mapaNombre.isEmpty
-                      ? 'TABLERO DE DUELO'
-                      : sala.mapaNombre.toUpperCase(),
-                  style: TextStyle(
-                      fontSize: 9,
-                      color: war.textoTenue,
-                      fontFamily: 'Cinzel',
-                      letterSpacing: 1.5),
+                Flexible(
+                  child: Text(
+                    '${sala.mapaNombre.isEmpty ? 'TABLERO DE DUELO' : sala.mapaNombre.toUpperCase()}'
+                    '  ·  ${textoModoDuelo(sala.modoTurno)}',
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 9,
+                        color: war.textoTenue,
+                        fontFamily: 'Cinzel',
+                        letterSpacing: 1.5),
+                  ),
                 ),
                 const Spacer(),
                 if (sala.esPrivada)
