@@ -2,6 +2,10 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'modo_partida.dart';
+
+export 'modo_partida.dart';
+
 // ── Estado de un jugador dentro del lobby ─────────────────────
 class LobbyJugador {
   final String uid;
@@ -108,6 +112,11 @@ class LobbyModel {
   final LobbyEstado estado;
   final DateTime creadoEn;
   final ModoTurno modoTurno;
+
+  /// Modo de partida (desplegable de CREAR SALA): normal, lluvia de meteoritos
+  /// o apocalipsis. Lo aplica el servidor en cada cierre de turno. Ver
+  /// modo_partida.dart.
+  final ModoPartida modoPartida;
   final int turnoActual;
   final List<String> cerradoPor;
   final Map<String, StatsPartidaJugador> statsPartida;
@@ -141,6 +150,7 @@ class LobbyModel {
     required this.estado,
     required this.creadoEn,
     this.modoTurno = ModoTurno.rapida,
+    this.modoPartida = ModoPartida.normal,
     this.turnoActual = 1,
     this.cerradoPor = const [],
     this.statsPartida = const {},
@@ -231,6 +241,7 @@ class LobbyModel {
       estado: _parseEstado(d['estado'] as String?),
       creadoEn: creadoEn,
       modoTurno: _parseModoTurno(d['modoTurno'] as String?),
+      modoPartida: modoPartidaFromString(d['modoPartida'] as String?),
       turnoActual: (d['turnoActual'] as num?)?.toInt() ?? 1,
       cerradoPor: List<String>.from(d['cerradoPor'] as List? ?? []),
       statsPartida: stats,
@@ -286,6 +297,7 @@ class LobbyModel {
         'estado': _estadoStr(estado),
         'creadoEn': Timestamp.fromDate(creadoEn),
         'modoTurno': modoTurnoStr(modoTurno),
+        'modoPartida': modoPartida.id,
         'turnoActual': turnoActual,
         'cerradoPor': cerradoPor,
         'statsPartida': statsPartida.map((uid, s) => MapEntry(uid, s.toMap())),

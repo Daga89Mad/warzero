@@ -230,6 +230,11 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   // ── Modo turno ────────────────────────────────────────────
   ModoTurno _modoTurno = ModoTurno.rapida;
+
+  /// Modo de partida (normal / lluvia de meteoritos / apocalipsis). Se lee del
+  /// lobby; decide el aviso de "próxima catástrofe" del tablero y el nombre del
+  /// "jugador" neutro en los informes. Ver modo_partida.dart.
+  ModoPartida _modoPartida = ModoPartida.normal;
   List<String> _cerradoPor = [];
   int _jugadoresEnPartida = 2;
 
@@ -1587,6 +1592,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // ── 4. Configurar estado del lobby ────────────────────────
         setState(() {
           _modoTurno = lobby!.modoTurno;
+          _modoPartida = lobby.modoPartida;
           _jugadoresEnPartida = lobby.jugadores.length;
           _cerradoPor = List<String>.from(lobby.cerradoPor);
         });
@@ -2110,6 +2116,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           accionesLog: accionesLog, // ← nuevo
           rayoCoords: rayoCoords.toList(),
           ultimaCartaRepartida: _ultimaCartaRepartida,
+          modoPartida: _modoPartida,
         ),
       ))
           .whenComplete(() {
@@ -2177,6 +2184,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _cerradoPor = List<String>.from(lobby.cerradoPor);
         _jugadoresEnPartida = lobby.jugadores.length;
         _modoTurno = lobby.modoTurno;
+        _modoPartida = lobby.modoPartida;
         _descargasCuartel = _descargasCuartelFromData(data);
         _bombardeo = BombardeoVista.fromEstado(data);
         _leerCapaHistoria(data);
@@ -3635,6 +3643,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // BUG QAS #2: al reabrir el informe del último turno también hay que
         // mostrar la carta repartida (antes solo la pasaba el informe en vivo).
         ultimaCartaRepartida: _ultimaCartaRepartida,
+        modoPartida: _modoPartida,
       ),
     ))
         .whenComplete(() {
@@ -6143,6 +6152,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             playerColors: _playerColors,
             obeliscoLocal: _obeliscoLocal,
             obeliscosPorJugador: _obeliscosPorJugador,
+            modoPartida: _modoPartida,
           ),
         ),
       );
@@ -6871,6 +6881,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             _bombardeo!.turno == _boardState.turnoActual)
                         ? _bombardeo
                         : null,
+                    modoPartida: _modoPartida,
                     capaHistoria: _capaHistoria,
                     fantasmasRevision:
                         _yoCerreElTurno ? _revisionFantasmas : const [],

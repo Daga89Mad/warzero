@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/board_state.dart';
 import '../models/game_config.dart';
+import '../models/modo_partida.dart';
 import '../services/settings_controller.dart';
 import '../widgets/cell_widget.dart' show ownerColor;
 
@@ -38,6 +39,10 @@ class RevisionTurnoScreen extends StatelessWidget {
   /// uid → coord del cuartel de cada jugador (para distinguir cuarteles).
   final Map<String, String> obeliscosPorJugador;
 
+  /// Modo de partida: nombra al "jugador" neutro de la lluvia de meteoritos /
+  /// apocalipsis en el detalle de celda (ver modo_partida.dart).
+  final ModoPartida modoPartida;
+
   const RevisionTurnoScreen({
     super.key,
     required this.config,
@@ -47,6 +52,7 @@ class RevisionTurnoScreen extends StatelessWidget {
     this.playerColors = const {},
     this.obeliscoLocal,
     this.obeliscosPorJugador = const {},
+    this.modoPartida = ModoPartida.normal,
   });
 
   // ── Extracción de eventos ───────────────────────────────────
@@ -146,7 +152,8 @@ class RevisionTurnoScreen extends StatelessWidget {
   // ── Detalle por celda (al pulsar) ───────────────────────────
 
   String _quien(String? uid) =>
-      (uid != null && uid == localUid) ? 'Tú' : 'Rival';
+      aliasEvento(uid, modo: modoPartida) ??
+      ((uid != null && uid == localUid) ? 'Tú' : 'Rival');
 
   /// True si [coord] es un cuartel general (de cualquier jugador). En los
   /// cuarteles NUNCA se revelan las cartas que hay dentro durante la revisión.

@@ -67,6 +67,8 @@ class LobbyService {
   // ── Crear lobby ───────────────────────────────────────────
   /// [mapaId] es opcional: si se pasa, se guarda en la partida para
   /// que todos los jugadores carguen el mismo terreno al entrar en juego.
+  /// [modoPartida] (normal / meteoritos / apocalipsis) lo aplica el servidor
+  /// en cada cierre de turno; ver modo_partida.dart.
   Future<String> crearLobby({
     required String nombre,
     required String hostUid,
@@ -75,6 +77,7 @@ class LobbyService {
     required String contrasena,
     required int maxJugadores,
     ModoTurno modoTurno = ModoTurno.rapida,
+    ModoPartida modoPartida = ModoPartida.normal,
     String? mapaId,
   }) async {
     final data = LobbyModel(
@@ -90,6 +93,7 @@ class LobbyService {
       estado: LobbyEstado.esperando,
       creadoEn: DateTime.now(),
       modoTurno: modoTurno,
+      modoPartida: modoPartida,
       turnoActual: 1,
       cerradoPor: const [],
       mapaId: mapaId,

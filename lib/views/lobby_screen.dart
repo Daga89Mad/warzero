@@ -11,6 +11,7 @@ import '../services/lobby_service.dart';
 import '../services/warzero_api.dart';
 import 'game_screen.dart';
 import '../services/mapa_service.dart';
+import '../widgets/modo_partida_widgets.dart';
 import 'room_screen.dart';
 
 // ─────────────────────────────────────────────────────────────
@@ -80,6 +81,7 @@ class _LobbyScreenState extends State<LobbyScreen>
           required contrasena,
           required maxJugadores,
           required modoTurno,
+          required modoPartida,
           required mapaId,
         }) async {
           final id = await _service.crearLobby(
@@ -90,6 +92,7 @@ class _LobbyScreenState extends State<LobbyScreen>
             contrasena: contrasena,
             maxJugadores: maxJugadores,
             modoTurno: modoTurno,
+            modoPartida: modoPartida,
             mapaId: mapaId,
           );
           if (mounted) {
@@ -385,6 +388,10 @@ class _LobbyCard extends StatelessWidget {
                           fontFamily: 'Cinzel',
                           letterSpacing: 1),
                     ),
+                    if (lobby.modoPartida.tieneCatastrofes) ...[
+                      const SizedBox(width: 8),
+                      ModoPartidaChip(modo: lobby.modoPartida),
+                    ],
                   ]),
                 ],
               ),
@@ -460,6 +467,7 @@ class _CrearSalaDialog extends StatefulWidget {
     required String contrasena,
     required int maxJugadores,
     required ModoTurno modoTurno,
+    required ModoPartida modoPartida,
     required String? mapaId,
   }) onCreate;
 
@@ -475,6 +483,7 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
   bool _esPrivada = false;
   int _maxJugadores = 4;
   ModoTurno _modoTurno = ModoTurno.rapida;
+  ModoPartida _modoPartida = ModoPartida.normal;
   bool _loading = false;
 
   List<MapaInfo> _mapas = [];
@@ -571,6 +580,7 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
         contrasena: _esPrivada ? _passCtrl.text : '',
         maxJugadores: _maxJugadores,
         modoTurno: _modoTurno,
+        modoPartida: _modoPartida,
         mapaId: _mapaId,
       );
     } finally {
@@ -643,6 +653,12 @@ class _CrearSalaDialogState extends State<_CrearSalaDialog> {
               loading: _loadingMapas,
               error: _errorMapas,
               onSelected: (id) => setState(() => _mapaId = id),
+            ),
+            const SizedBox(height: 16),
+            _FieldLabel('MODO DE PARTIDA'),
+            ModoPartidaDropdown(
+              selected: _modoPartida,
+              onChanged: (m) => setState(() => _modoPartida = m),
             ),
             const SizedBox(height: 16),
             _FieldLabel('FIN DE TURNO'),

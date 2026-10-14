@@ -8,6 +8,7 @@ import '../services/ejercito_service.dart';
 import '../services/lobby_service.dart';
 import '../services/warzero_api.dart';
 import 'game_screen.dart';
+import '../widgets/modo_partida_widgets.dart';
 import '../models/trofeo_model.dart';
 import '../services/trofeos_service.dart';
 
@@ -407,6 +408,11 @@ class _RoomHeader extends StatelessWidget {
                         letterSpacing: 1.5,
                       ),
                     ),
+                    // Modo de partida con catástrofes (meteoritos/apocalipsis).
+                    if (lobby.modoPartida.tieneCatastrofes) ...[
+                      const SizedBox(width: 8),
+                      ModoPartidaChip(modo: lobby.modoPartida),
+                    ],
                   ],
                 ),
               ],

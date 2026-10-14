@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/game_config.dart';
 import '../models/board_state.dart';
 import '../models/carta_model.dart';
+import '../models/modo_partida.dart';
 import 'bombardeo_overlay.dart';
 import 'historia_tunel.dart';
 import 'cell_widget.dart';
@@ -132,6 +133,11 @@ class BoardWidget extends StatefulWidget {
   /// bombardeo_overlay.dart.
   final BombardeoVista? bombardeo;
 
+  /// MODO DE PARTIDA (meteoritos/apocalipsis): cuando no hay plan activo
+  /// ([bombardeo] == null) se muestra el aviso del próximo turno de impacto.
+  /// Ver modo_partida.dart.
+  final ModoPartida modoPartida;
+
   /// Capa de HISTORIA: túnel inundable, papeles del bot (🎯/⚔) y cartas
   /// clave (👑). null = no se pinta nada. Ver historia_tunel.dart.
   final CapaHistoriaVista? capaHistoria;
@@ -164,6 +170,7 @@ class BoardWidget extends StatefulWidget {
     this.fantasmasRevision = const [],
     this.accionesRevision = const {},
     this.bombardeo,
+    this.modoPartida = ModoPartida.normal,
     this.capaHistoria,
     required this.onCellTap,
   });
@@ -368,19 +375,32 @@ class _BoardWidgetState extends State<BoardWidget>
           ),
         ),
 
-        // ── Leyenda del bombardeo (historia) ──────────────
+        // ── Leyenda del bombardeo (historia / modos catástrofe) ──
         if (widget.bombardeo != null)
           Positioned(
             left: 12,
             top: 12,
             child: BombardeoLeyenda(vista: widget.bombardeo!),
+          )
+        // ── Aviso de la próxima catástrofe (meteoritos / apocalipsis) ──
+        else if (widget.modoPartida.tieneCatastrofes)
+          Positioned(
+            left: 12,
+            top: 12,
+            child: CatastrofeAvisoChip(
+              modo: widget.modoPartida,
+              turnoActual: widget.boardState.turnoActual,
+            ),
           ),
 
         // ── Leyenda de la capa de historia (asalto general, túnel) ──
         if (widget.capaHistoria != null && !widget.capaHistoria!.vacia)
           Positioned(
             left: 12,
-            top: widget.bombardeo != null ? 64 : 12,
+            top: (widget.bombardeo != null ||
+                    widget.modoPartida.tieneCatastrofes)
+                ? 64
+                : 12,
             child: HistoriaCapaLeyenda(vista: widget.capaHistoria!),
           ),
 

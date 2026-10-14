@@ -40,6 +40,10 @@ class InformeBatallaScreen extends StatefulWidget {
   /// pestañas con este texto explicativo.
   final String? notaTutorial;
 
+  /// Modo de partida: sirve para nombrar al "jugador" neutro que lanza los
+  /// impactos de la lluvia de meteoritos / apocalipsis (ver modo_partida.dart).
+  final ModoPartida modoPartida;
+
   const InformeBatallaScreen({
     super.key,
     required this.combateLog,
@@ -54,6 +58,7 @@ class InformeBatallaScreen extends StatefulWidget {
     this.ultimaCartaRepartida,
     this.initialTabIndex = 0,
     this.notaTutorial,
+    this.modoPartida = ModoPartida.normal,
   });
 
   @override
@@ -98,6 +103,9 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
   }
 
   String _alias(String uid) {
+    // Impactos de los modos catástrofe: los firma un uid neutro.
+    final evento = aliasEvento(uid, modo: widget.modoPartida);
+    if (evento != null) return evento;
     try {
       return widget.jugadores.firstWhere((j) => j.uid == uid).alias;
     } catch (_) {
