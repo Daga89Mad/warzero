@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:warzero/services/settings_controller.dart';
+import 'package:warzero/views/duelos/duelos_lobby_screen.dart';
 import 'package:warzero/views/lobby_screen.dart';
 import 'package:warzero/views/modo_historia_screen.dart';
 import 'package:warzero/views/retos_screen.dart';
@@ -108,9 +109,15 @@ class ModoJuegoScreen extends StatelessWidget {
               _ModoTile(
                 icon: Icons.sports_kabaddi_outlined,
                 label: 'DUELOS',
-                sublabel: 'Retar a personas de tu lista de amigos',
+                sublabel: 'Dos generales y un Comandante que proteger',
                 accent: const Color(0xFF40C08A),
-                enabled: false,
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const DuelosLobbyScreen(),
+                    ),
+                  );
+                },
               ),
               _ModoTile(
                 icon: Icons.groups_outlined,
