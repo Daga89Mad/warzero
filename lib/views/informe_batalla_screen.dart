@@ -1024,6 +1024,10 @@ class _AccionTile extends StatelessWidget {
         efecto.add(destruidas.isEmpty
             ? 'Impactó sin bajas'
             : 'Destruyó ${destruidas.length} carta(s)');
+        // PC ganados por las cartas enemigas destruidas (3 por carta, como en
+        // combate). El servidor los anota en la entrada del informe.
+        final pcDisparo = (data['pc'] as num?)?.toInt() ?? 0;
+        if (pcDisparo > 0) efecto.add('+$pcDisparo PC');
         break;
       case 'veneno':
         final obj = (data['objetivo'] as String?) ?? '?';

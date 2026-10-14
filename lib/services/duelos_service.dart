@@ -204,6 +204,35 @@ class DuelosJugadorSala {
       );
 }
 
+/// Lo que recibe un jugador al terminar un duelo.
+class DuelosRecompensa {
+  final String resultado;
+  final int pc;
+  final int xp;
+  final int dinero;
+
+  /// Cristales Zero del ejército con el que jugó.
+  final int zero;
+
+  const DuelosRecompensa({
+    required this.resultado,
+    required this.pc,
+    required this.xp,
+    required this.dinero,
+    required this.zero,
+  });
+
+  static DuelosRecompensa? fromMap(Map<String, dynamic>? m) => m == null
+      ? null
+      : DuelosRecompensa(
+          resultado: m['resultado'] as String? ?? '',
+          pc: (m['pc'] as num?)?.toInt() ?? 0,
+          xp: (m['xp'] as num?)?.toInt() ?? 0,
+          dinero: (m['dinero'] as num?)?.toInt() ?? 0,
+          zero: (m['zero'] as num?)?.toInt() ?? 0,
+        );
+}
+
 /// Sala de duelo tal como la devuelve la API (listas, sala y partida).
 class DuelosSala {
   final String id;
@@ -248,6 +277,9 @@ class DuelosSala {
   final int inactividadRival;
   final int turnosInactividadDerrota;
 
+  /// Terminado: lo que has recibido (null hasta que se reparte).
+  final DuelosRecompensa? recompensa;
+
   /// Vista de la partida (solo en GET partida, con el duelo empezado).
   final Map<String, dynamic>? partida;
 
@@ -275,6 +307,7 @@ class DuelosSala {
     this.inactividad = 0,
     this.inactividadRival = 0,
     this.turnosInactividadDerrota = 3,
+    this.recompensa,
     this.partida,
   });
 
@@ -339,6 +372,7 @@ class DuelosSala {
         inactividadRival: (m['inactividadRival'] as num?)?.toInt() ?? 0,
         turnosInactividadDerrota:
             (m['turnosInactividadDerrota'] as num?)?.toInt() ?? 3,
+        recompensa: DuelosRecompensa.fromMap(_mapa(m['recompensa'])),
         partida: _mapa(m['partida']),
       );
 }

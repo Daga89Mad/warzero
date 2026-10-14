@@ -892,7 +892,9 @@ class _DuelosPartidaScreenState extends State<DuelosPartidaScreen> {
     return Column(
       children: [
         _Cabecera(sala: sala, vista: v, yo: _yo, rival: _rival),
-        if (sala.finalizada) _BannerResultado(vista: v, motivo: sala.motivo),
+        if (sala.finalizada)
+          _BannerResultado(
+              vista: v, motivo: sala.motivo, recompensa: sala.recompensa),
         if (_modo != _Modo.ninguno) _bannerModo(),
         // Con clave: los avisos de arriba y los paneles de abajo aparecen y
         // desaparecen, y sin ella Flutter recrearía el tablero (perdiendo el
@@ -1435,6 +1437,7 @@ class _HabilidadEjercitoVista {
 class _JugadorVista {
   final bool propio;
   final String ejercito;
+  final int pc;
   final int disparosRestantes;
   final bool puedeDisparar;
   final _HabilidadEjercitoVista habilidadEjercito;
@@ -1445,6 +1448,7 @@ class _JugadorVista {
   const _JugadorVista({
     required this.propio,
     required this.ejercito,
+    required this.pc,
     required this.disparosRestantes,
     required this.puedeDisparar,
     required this.habilidadEjercito,
@@ -1456,6 +1460,7 @@ class _JugadorVista {
   factory _JugadorVista.fromMap(Map<String, dynamic> m) => _JugadorVista(
         propio: m['propio'] == true,
         ejercito: m['ejercito'] as String? ?? '',
+        pc: _int(m['pc']),
         disparosRestantes: _int(m['disparosRestantes']),
         puedeDisparar: m['puedeDisparar'] == true,
         habilidadEjercito: _HabilidadEjercitoVista.fromMap(
@@ -1679,6 +1684,7 @@ class _Cabecera extends StatelessWidget {
       if (j == null) return const SizedBox.shrink();
       final partes = <String>[
         j.ejercito.toUpperCase(),
+        '${j.pc} PC',
         '🎯 ${j.disparosRestantes}',
         '${j.habilidadEjercito.nombre}: '
             '${j.habilidadEjercito.usada ? 'usada' : 'disponible'}',
@@ -1761,7 +1767,9 @@ class _Cabecera extends StatelessWidget {
 class _BannerResultado extends StatelessWidget {
   final _VistaPartida vista;
   final String motivo;
-  const _BannerResultado({required this.vista, required this.motivo});
+  final DuelosRecompensa? recompensa;
+  const _BannerResultado(
+      {required this.vista, required this.motivo, this.recompensa});
 
   @override
   Widget build(BuildContext context) {
@@ -1798,6 +1806,19 @@ class _BannerResultado extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                   fontSize: 9, color: war.texto, fontFamily: 'Cinzel')),
+        ],
+        if (recompensa != null) ...[
+          const SizedBox(height: 6),
+          Text(
+              '${recompensa!.pc} PC   ·   +${recompensa!.xp} XP   ·   '
+              '+${recompensa!.dinero} dinero   ·   '
+              '+${recompensa!.zero} Cristales Zero',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 9,
+                  color: color,
+                  fontFamily: 'Cinzel',
+                  fontWeight: FontWeight.bold)),
         ],
       ]),
     );
@@ -1959,6 +1980,11 @@ class _AyudaDialog extends StatelessWidget {
       'Combate: gana la casilla quien sume más ataque. Los soldados del '
           'perdedor mueren; sus generales pierden 1 vida y retroceden.',
       'Habilidad de ejército: una vez por partida, desde el turno 2.',
+      'PC: +3 por cada soldado enemigo destruido y +50 por cada general '
+          'enemigo derrotado, en combate, con disparos o con habilidades.',
+      'Al terminar: el ganador recibe 500 XP y 100 de dinero; el perdedor, '
+          '250 XP y 50. Además, 1 Cristal Zero por cada 20 PC y 1 por '
+          'participar (no si te rindes o pierdes por inactividad).',
       '🎯 Disparo lejano: 2 por partida, desde el turno 3, a cualquier '
           'casilla.',
       '🌊 Desde el turno 3 se hunden casillas cada turno (más desde el 10 '
