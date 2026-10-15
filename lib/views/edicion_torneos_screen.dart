@@ -183,6 +183,11 @@ class _EditorTorneoScreenState extends State<_EditorTorneoScreen> {
 
   bool get _esNuevo => _t.id.isEmpty;
 
+  /// Ronda cuyos grupos se muestran (la actual, o la 1 antes del sorteo).
+  int get _rondaVista => _t.rondaActual < 1 ? 1 : _t.rondaActual;
+
+  bool get _enCurso => _t.estado == 'en_curso' && _t.rondaActual > 0;
+
   @override
   void initState() {
     super.initState();
@@ -206,6 +211,8 @@ class _EditorTorneoScreenState extends State<_EditorTorneoScreen> {
                 .toList(),
             premios: o.premios.map((p) => p.copia()).toList(),
             premiosEntregados: o.premiosEntregados,
+            modoTurno: o.modoTurno,
+            plazoArranqueHoras: o.plazoArranqueHoras,
           );
     _nombre = TextEditingController(text: _t.nombre);
     _descripcion = TextEditingController(text: _t.descripcion);
@@ -249,7 +256,7 @@ class _EditorTorneoScreenState extends State<_EditorTorneoScreen> {
     try {
       final r = await Future.wait([
         _svc.inscritos(_t.id),
-        _svc.grupos(_t.id, ronda: 1),
+        _svc.grupos(_t.id, ronda: _rondaVista),
       ]);
       List<PremiadoTorneo>? premiados;
       if (_t.premiosEntregados) {
@@ -472,6 +479,34 @@ class _EditorTorneoScreenState extends State<_EditorTorneoScreen> {
               onChanged: (v) => setState(() => _t.estado = v ?? 'borrador'),
             ),
 
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              value: _t.modoTurno,
+              dropdownColor: war.superficie,
+              style: TextStyle(color: war.texto),
+              decoration: _deco(war, 'Turnos de las partidas'),
+              items: const ['diario', 'turno12h', 'rapida']
+                  .map((m) => DropdownMenuItem(value: m, child: Text(nombreModoTurno(m))))
+                  .toList(),
+              onChanged: (v) => setState(() => _t.modoTurno = v ?? 'diario'),
+            ),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(
+                child: Text(
+                  'Plazo para arrancar cada sala (horas). Pasado, se juega sin '
+                  'quien no haya elegido ejército y los bots rellenan.',
+                  style: TextStyle(fontSize: 11, color: war.textoTenue, height: 1.4),
+                ),
+              ),
+              _Contador(
+                valor: _t.plazoArranqueHoras,
+                min: 1,
+                max: 168,
+                onCambio: (v) => setState(() => _t.plazoArranqueHoras = v),
+              ),
+            ]),
+
             _Seccion(titulo: 'FECHAS'),
             _CampoFecha(
               etiqueta: 'Inicio de inscripción',
@@ -630,20 +665,117 @@ class _EditorTorneoScreenState extends State<_EditorTorneoScreen> {
               .toList(),
         ),
       const SizedBox(height: 12),
-      ElevatedButton.icon(
-        style: ElevatedButton.styleFrom(
-            backgroundColor: _kAcento, foregroundColor: Colors.white),
-        onPressed: _cargandoExtra || (_inscritos?.length ?? 0) < 2 ? null : _sortear,
-        icon: const Icon(Icons.shuffle),
-        label: Text((_grupos?.isNotEmpty ?? false)
-            ? 'REHACER SORTEO RONDA 1'
-            : 'SORTEAR GRUPOS RONDA 1'),
-      ),
+      if (_t.rondaActual <= 1 && !(_grupos?.any((g) => g.tieneSala) ?? false))
+        ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+              backgroundColor: _kAcento, foregroundColor: Colors.white),
+          onPressed: _cargandoExtra || (_inscritos?.length ?? 0) < 2 ? null : _sortear,
+          icon: const Icon(Icons.shuffle),
+          label: Text((_grupos?.isNotEmpty ?? false)
+              ? 'REHACER SORTEO RONDA 1'
+              : 'SORTEAR GRUPOS RONDA 1'),
+        ),
+      if (_enCurso && !_t.premiosEntregados) ...[
+        _Seccion(titulo: 'RONDA ${_t.rondaActual} EN CURSO'),
+        Text(
+          'Las salas se crean solas al llegar el inicio del torneo y la ronda se '
+          'cierra sola cuando terminan todas sus partidas. "Procesar" fuerza una '
+          'revisión ahora; "Cerrar ronda" la da por terminada con el PC actual.',
+          style: TextStyle(fontSize: 11, color: war.textoTenue, height: 1.4),
+        ),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                  foregroundColor: _kAcento, side: const BorderSide(color: _kAcento)),
+              onPressed: _cargandoExtra ? null : _procesar,
+              icon: const Icon(Icons.sync, size: 18),
+              label: const Text('PROCESAR'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: _kAcento, foregroundColor: Colors.white),
+              onPressed: _cargandoExtra ? null : _cerrarRonda,
+              icon: const Icon(Icons.flag, size: 18),
+              label: Text(_t.rondaActual >= _t.rondas.length ? 'CERRAR FINAL' : 'CERRAR RONDA'),
+            ),
+          ),
+        ]),
+      ],
       if (_grupos != null && _grupos!.isNotEmpty) ...[
-        _Seccion(titulo: 'GRUPOS · RONDA 1'),
-        GruposTorneoLista(grupos: _grupos!, ronda: _t.rondas.isNotEmpty ? _t.rondas.first : null),
+        _Seccion(titulo: 'GRUPOS · RONDA $_rondaVista'),
+        GruposTorneoLista(
+          grupos: _grupos!,
+          ronda: _rondaVista <= _t.rondas.length ? _t.rondas[_rondaVista - 1] : null,
+        ),
       ],
     ];
+  }
+
+  Future<void> _procesar() async {
+    setState(() => _cargandoExtra = true);
+    try {
+      final g = await _svc.procesar(_t.id);
+      if (!mounted) return;
+      setState(() {
+        _grupos = g.where((x) => x.ronda == _rondaVista).toList();
+        _cambiado = true;
+      });
+      _snack('Torneo procesado.');
+      _recargarTorneo();
+    } catch (e) {
+      _snack('$e');
+    } finally {
+      if (mounted) setState(() => _cargandoExtra = false);
+    }
+  }
+
+  Future<void> _cerrarRonda() async {
+    final ultima = _t.rondaActual >= _t.rondas.length;
+    final ok = await _confirmar(
+      ultima ? 'Cerrar la final' : 'Cerrar ronda ${_t.rondaActual}',
+      'Las partidas que no hayan terminado contarán con el PC que lleven ahora. '
+          '${ultima ? 'Se calculará la clasificación final y se repartirán los premios.' : 'Se sorteará la ronda siguiente con los clasificados.'}'
+          '\n\nNo se puede deshacer.',
+    );
+    if (!ok) return;
+    setState(() => _cargandoExtra = true);
+    try {
+      final t = await _svc.cerrarRonda(_t.id);
+      if (!mounted) return;
+      setState(() {
+        _t.rondaActual = t.rondaActual;
+        _t.estado = t.estado;
+        _t.premiosEntregados = t.premiosEntregados;
+        _cambiado = true;
+      });
+      _snack(t.premiosEntregados ? 'Torneo finalizado y premios repartidos.' : 'Ronda cerrada.');
+    } catch (e) {
+      _snack('$e');
+    } finally {
+      if (mounted) setState(() => _cargandoExtra = false);
+    }
+    _cargarExtra();
+  }
+
+  /// Relee estado/ronda del torneo (pueden cambiar al procesar).
+  Future<void> _recargarTorneo() async {
+    try {
+      final lista = await _svc.listarAdmin();
+      final v = lista.where((x) => x.torneo?.id == _t.id).firstOrNull;
+      if (v?.torneo == null || !mounted) return;
+      final cambioRonda = v!.torneo!.rondaActual != _t.rondaActual;
+      setState(() {
+        _t.rondaActual = v.torneo!.rondaActual;
+        _t.estado = v.torneo!.estado;
+        _t.premiosEntregados = v.torneo!.premiosEntregados;
+      });
+      if (cambioRonda || _t.premiosEntregados) _cargarExtra();
+    } catch (_) {}
   }
 }
 

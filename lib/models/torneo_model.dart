@@ -215,6 +215,13 @@ class TorneoModel {
   List<PremioTorneo> premios;
   bool premiosEntregados;
 
+  /// Modo de turno de las salas del torneo: rapida | diario | turno12h.
+  String modoTurno;
+
+  /// Horas que tiene cada sala para arrancar; pasado el plazo se quita a quien
+  /// no eligió ejército y los bots rellenan.
+  int plazoArranqueHoras;
+
   TorneoModel({
     this.id = '',
     this.nombre = '',
@@ -227,6 +234,8 @@ class TorneoModel {
     List<RondaTorneo>? rondas,
     List<PremioTorneo>? premios,
     this.premiosEntregados = false,
+    this.modoTurno = 'diario',
+    this.plazoArranqueHoras = 24,
   })  : rondas = rondas ?? [RondaTorneo(numero: 1)],
         premios = premios ?? [];
 
@@ -248,6 +257,8 @@ class TorneoModel {
                 PremioTorneo.fromJson(Map<String, dynamic>.from(e as Map)))
             .toList(),
         premiosEntregados: j['premiosEntregados'] == true,
+        modoTurno: j['modoTurno']?.toString() ?? 'diario',
+        plazoArranqueHoras: _int(j['plazoArranqueHoras'], 24),
       );
 
   Map<String, dynamic> toJson() => {
@@ -260,7 +271,11 @@ class TorneoModel {
         'estado': estado,
         'rondas': rondas.map((r) => r.toJson()).toList(),
         'premios': premios.map((p) => p.toJson()).toList(),
+        'modoTurno': modoTurno,
+        'plazoArranqueHoras': plazoArranqueHoras,
       };
+
+  String get modoTurnoNombre => nombreModoTurno(modoTurno);
 
   String get estadoNombre {
     switch (estado) {
@@ -337,7 +352,16 @@ class GrupoTorneo {
   final List<String> jugadores;
   final List<String> alias;
   final bool descansa;
+
+  /// pendiente | jugando | terminada | descansa
   final String estado;
+
+  /// Id de la sala real (Partidas/{id} o Duelos/{id}); vacío hasta que el
+  /// torneo empieza.
+  final String salaId;
+
+  /// PC de cada jugador al terminar (uid → PC).
+  final Map<String, int> resultados;
 
   const GrupoTorneo({
     required this.id,
@@ -351,6 +375,8 @@ class GrupoTorneo {
     required this.alias,
     required this.descansa,
     required this.estado,
+    this.salaId = '',
+    this.resultados = const {},
   });
 
   factory GrupoTorneo.fromJson(Map<String, dynamic> j) => GrupoTorneo(
@@ -365,11 +391,95 @@ class GrupoTorneo {
         alias: ((j['alias'] as List?) ?? []).map((e) => '$e').toList(),
         descansa: j['descansa'] == true,
         estado: j['estado']?.toString() ?? '',
+        salaId: j['salaId']?.toString() ?? '',
+        resultados: ((j['resultados'] as Map?) ?? {})
+            .map((k, v) => MapEntry('$k', _int(v))),
       );
+
+  bool get tieneSala => salaId.isNotEmpty;
+  bool get terminada => estado == 'terminada';
+
+  /// PC de [uid] en esta partida (null si aún no ha terminado).
+  int? pcDe(String? uid) => uid == null || !terminada ? null : resultados[uid] ?? 0;
 
   /// Nombre a mostrar del jugador i (alias o uid).
   String nombre(int i) =>
       i < alias.length && alias[i].isNotEmpty ? alias[i] : jugadores[i];
+}
+
+/// Fila de la clasificación de una ronda.
+class FilaClasificacion {
+  final int puesto;
+  final String uid;
+  final String alias;
+  final int pc;
+  final int jugadas;
+  final int total;
+  final bool clasificado;
+
+  const FilaClasificacion({
+    required this.puesto,
+    required this.uid,
+    required this.alias,
+    required this.pc,
+    required this.jugadas,
+    required this.total,
+    required this.clasificado,
+  });
+
+  factory FilaClasificacion.fromJson(Map<String, dynamic> j) => FilaClasificacion(
+        puesto: _int(j['puesto']),
+        uid: j['uid']?.toString() ?? '',
+        alias: j['alias']?.toString() ?? '',
+        pc: _int(j['pc']),
+        jugadas: _int(j['jugadas']),
+        total: _int(j['total']),
+        clasificado: j['clasificado'] == true,
+      );
+
+  String get nombre => alias.isNotEmpty ? alias : uid;
+}
+
+/// Clasificación de una ronda: CERRADA (definitiva) o PROVISIONAL (en curso,
+/// con las partidas ya terminadas).
+class ClasificacionTorneo {
+  final int ronda;
+  final bool cerrada;
+  final bool esFinal;
+  final int clasifican;
+  final List<FilaClasificacion> filas;
+
+  const ClasificacionTorneo({
+    required this.ronda,
+    required this.cerrada,
+    required this.esFinal,
+    required this.clasifican,
+    required this.filas,
+  });
+
+  static const vacia = ClasificacionTorneo(
+      ronda: 0, cerrada: false, esFinal: false, clasifican: 0, filas: []);
+
+  factory ClasificacionTorneo.fromJson(Map<String, dynamic> j) => ClasificacionTorneo(
+        ronda: _int(j['ronda']),
+        cerrada: j['cerrada'] == true,
+        esFinal: j['final'] == true,
+        clasifican: _int(j['clasifican']),
+        filas: ((j['filas'] as List?) ?? [])
+            .map((e) => FilaClasificacion.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList(),
+      );
+}
+
+String nombreModoTurno(String m) {
+  switch (m) {
+    case 'rapida':
+      return 'Rápida (30 s)';
+    case 'turno12h':
+      return 'Turnos de 12 h';
+    default:
+      return 'Diario (00:00 UTC)';
+  }
 }
 
 /// Formato corto dd/MM/yyyy HH:mm (sin depender de intl).

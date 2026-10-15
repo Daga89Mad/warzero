@@ -73,6 +73,23 @@ class TorneosService {
     return _grupos(_jsonOk(res));
   }
 
+  /// Clasificación de [ronda] (o de la ronda en curso). Nunca lanza.
+  Future<ClasificacionTorneo> clasificacion(String torneoId, {int? ronda}) async {
+    try {
+      final q = ronda != null ? '?ronda=$ronda' : '';
+      final res = await _enviar(
+        (h) => http.get(
+            Uri.parse('$baseUrl/warzero/torneos/$torneoId/clasificacion$q'),
+            headers: h),
+        etiqueta: 'clasificacion',
+      );
+      return ClasificacionTorneo.fromJson(_jsonOk(res));
+    } catch (e) {
+      debugPrint('[WZ][torneos] clasificacion error: $e');
+      return ClasificacionTorneo.vacia;
+    }
+  }
+
   // ───────────────────────────────────────────────────────────
   // EDITOR
   // ───────────────────────────────────────────────────────────
@@ -129,6 +146,28 @@ class TorneosService {
       etiqueta: 'admin/sortear',
     );
     return _grupos(_jsonOk(res));
+  }
+
+  /// Pasada del motor: crea salas, aplica plazos y cierra la ronda si toca.
+  Future<List<GrupoTorneo>> procesar(String id) async {
+    final res = await _enviar(
+      (h) => http.post(Uri.parse('$baseUrl/admin/torneos/$id/procesar'),
+          headers: h),
+      etiqueta: 'admin/procesar',
+    );
+    return _grupos(_jsonOk(res));
+  }
+
+  /// Cierra YA la ronda en curso (las partidas sin terminar cuentan con su PC
+  /// actual). Devuelve el torneo actualizado.
+  Future<TorneoModel> cerrarRonda(String id) async {
+    final res = await _enviar(
+      (h) => http.post(Uri.parse('$baseUrl/admin/torneos/$id/cerrar-ronda'),
+          headers: h),
+      etiqueta: 'admin/cerrar-ronda',
+    );
+    return TorneoModel.fromJson(
+        Map<String, dynamic>.from(_jsonOk(res)['torneo'] as Map));
   }
 
   /// Premios ya repartidos (tras finalizar el torneo).
