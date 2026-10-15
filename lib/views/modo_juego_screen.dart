@@ -2,18 +2,82 @@
 
 import 'package:flutter/material.dart';
 
+import 'package:warzero/models/torneo_model.dart';
 import 'package:warzero/services/settings_controller.dart';
+import 'package:warzero/services/torneos_service.dart';
 import 'package:warzero/views/duelos/duelos_lobby_screen.dart';
 import 'package:warzero/views/lobby_screen.dart';
 import 'package:warzero/views/modo_historia_screen.dart';
 import 'package:warzero/views/retos_screen.dart';
+import 'package:warzero/views/torneos_screen.dart';
 
 /// Pantalla intermedia tras pulsar JUGAR.
-class ModoJuegoScreen extends StatelessWidget {
+class ModoJuegoScreen extends StatefulWidget {
   const ModoJuegoScreen({super.key});
 
   @override
+  State<ModoJuegoScreen> createState() => _ModoJuegoScreenState();
+}
+
+class _ModoJuegoScreenState extends State<ModoJuegoScreen> {
+  final _torneos = TorneosService();
+
+  /// null = cargando.
+  TorneoVigente? _torneo;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargarTorneo();
+  }
+
+  Future<void> _cargarTorneo() async {
+    final v = await _torneos.vigente();
+    if (mounted) setState(() => _torneo = v);
+  }
+
+  /// Texto bajo el botón TORNEOS, si está habilitado y texto del candado.
+  ({String sublabel, bool enabled, String lock}) _estadoTorneo() {
+    final v = _torneo;
+    if (v == null) {
+      return (sublabel: 'Consultando torneos…', enabled: false, lock: 'CARGANDO');
+    }
+    final t = v.torneo;
+    if (t == null) {
+      return (sublabel: 'No hay torneos', enabled: false, lock: 'NO HAY TORNEOS');
+    }
+    final fechas = 'Inscripción ${fechaCortaTorneo(t.inicioInscripcion)}'
+        ' – ${fechaCortaTorneo(t.finInscripcion)}';
+    if (v.inscripcionPendiente) {
+      return (
+        sublabel: '${t.nombre}\n$fechas',
+        enabled: false,
+        lock: 'ABRE EL ${fechaCortaTorneo(t.inicioInscripcion)}',
+      );
+    }
+    if (v.inscripcionAbierta) {
+      return (
+        sublabel: v.inscrito ? '${t.nombre}\nYa estás inscrito' : '${t.nombre}\n$fechas',
+        enabled: true,
+        lock: '',
+      );
+    }
+    // Inscripción cerrada: solo entra quien participa (para ver sus grupos).
+    if (v.inscrito) {
+      return (
+        sublabel: v.gruposSorteados
+            ? '${t.nombre}\nGrupos sorteados'
+            : '${t.nombre}\nEmpieza ${fechaCortaTorneo(t.inicioTorneo)}',
+        enabled: true,
+        lock: '',
+      );
+    }
+    return (sublabel: '${t.nombre}\n$fechas', enabled: false, lock: 'INSCRIPCIÓN CERRADA');
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final torneo = _estadoTorneo();
     final war = context.war;
 
     return Scaffold(
@@ -89,14 +153,17 @@ class ModoJuegoScreen extends StatelessWidget {
               _ModoTile(
                 icon: Icons.emoji_events_outlined,
                 label: 'TORNEOS',
-                sublabel: 'Compite contra otros jugadores',
+                sublabel: torneo.sublabel,
                 accent: const Color(0xFFE04444),
-                onTap: () {
-                  Navigator.of(context).push(
+                enabled: torneo.enabled,
+                lockText: torneo.lock,
+                onTap: () async {
+                  await Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (_) => const LobbyScreen(),
+                      builder: (_) => TorneosScreen(inicial: _torneo),
                     ),
                   );
+                  _cargarTorneo();
                 },
               ),
               _ModoTile(
@@ -142,6 +209,9 @@ class _ModoTile extends StatelessWidget {
   final VoidCallback? onTap;
   final bool enabled;
 
+  /// Texto del candado cuando está deshabilitado.
+  final String lockText;
+
   const _ModoTile({
     required this.icon,
     required this.label,
@@ -149,6 +219,7 @@ class _ModoTile extends StatelessWidget {
     required this.accent,
     this.onTap,
     this.enabled = true,
+    this.lockText = 'PRÓXIMAMENTE',
   });
 
   @override
@@ -253,8 +324,10 @@ class _ModoTile extends StatelessWidget {
                         children: [
                           Icon(Icons.lock_outline, size: 12, color: accent),
                           const SizedBox(width: 5),
-                          Text(
-                            'PRÓXIMAMENTE',
+                          Flexible(
+                           child: Text(
+                            lockText,
+                            textAlign: TextAlign.center,
                             style: TextStyle(
                               fontFamily: 'Cinzel',
                               fontSize: 8,
@@ -262,6 +335,7 @@ class _ModoTile extends StatelessWidget {
                               fontWeight: FontWeight.bold,
                               color: accent,
                             ),
+                           ),
                           ),
                         ],
                       ),

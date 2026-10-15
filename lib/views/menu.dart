@@ -24,6 +24,7 @@ import 'package:warzero/views/edicion_mapas_screen.dart';
 import 'package:warzero/views/edicion_bots_screen.dart';
 import 'package:warzero/views/edicion_tienda_screen.dart';
 import 'package:warzero/views/edicion_trofeos_screen.dart';
+import 'package:warzero/views/edicion_torneos_screen.dart';
 import 'package:warzero/views/admin_cuentas_screen.dart';
 
 class MenuScreen extends StatelessWidget {
@@ -259,6 +260,17 @@ class MenuScreen extends StatelessWidget {
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => const EdicionTrofeosScreen()),
+                        ),
+                      ),
+                    if (puedeEditar)
+                      _MenuTile(
+                        icon: Icons.military_tech_outlined,
+                        label: 'ED. TORNEOS',
+                        sublabel: 'Fechas, rondas\ny sorteo de grupos',
+                        accent: const Color(0xFFE04444),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const EdicionTorneosScreen()),
                         ),
                       ),
                     if (puedeEditar)
