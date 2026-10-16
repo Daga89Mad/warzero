@@ -1,7 +1,10 @@
 // lib/views/apertura_sobre_screen.dart
 
 import 'package:flutter/material.dart';
+import '../models/carta_model.dart';
 import '../services/settings_controller.dart';
+import '../services/warzero_api.dart';
+import '../widgets/card_detail_overlay.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AperturaSobreScreen
@@ -23,6 +26,10 @@ import '../services/settings_controller.dart';
 //     fondo a pantalla completa en cada frame del brillo.
 //   • Las animaciones de aparición se calculan una sola vez (no se crean
 //     CurvedAnimation nuevas por celda en cada build).
+//
+// Al pulsar una carta revelada se abre en grande (showCardDetail) con todos
+// sus atributos. Las cartas completas se piden al catálogo en UNA sola llamada
+// en cuanto se abre el sobre, así al pulsar ya están listas.
 // ─────────────────────────────────────────────────────────────────────────────
 class AperturaSobreScreen extends StatefulWidget {
   final List<Map<String, dynamic>> cartas;
@@ -58,6 +65,18 @@ class _AperturaSobreScreenState extends State<AperturaSobreScreen>
   late final List<Animation<double>> _revealAnims;
 
   bool _abierto = false;
+
+  final _api = WarZeroApi();
+
+  /// Cartas completas del catálogo (cartaId → CartaModel). Se pide una sola
+  /// vez al abrir el sobre; el detalle espera a este mismo Future.
+  Future<Map<String, CartaModel>>? _catalogo;
+
+  /// Evoluciones ya resueltas para el detalle (idEvolucion → carta).
+  final Map<String, CartaModel?> _evoluciones = {};
+
+  /// Evita abrir dos detalles con toques rápidos mientras se carga.
+  bool _abriendoDetalle = false;
 
   // Ancho de decodificación de las miniaturas, en píxeles físicos. Se calcula
   // una sola vez, cuando ya tenemos MediaQuery disponible.
@@ -135,6 +154,85 @@ class _AperturaSobreScreenState extends State<AperturaSobreScreen>
   void _abrir() {
     setState(() => _abierto = true);
     _reveal.forward();
+    // Precarga en segundo plano; si falla, el error se gestiona al pulsar.
+    _cargarCatalogo().ignore();
+  }
+
+  // ── Detalle de carta ─────────────────────────────────────────
+
+  Future<Map<String, CartaModel>> _cargarCatalogo() {
+    return _catalogo ??= () async {
+      final ids = widget.cartas
+          .map((c) => c['cartaId']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet()
+          .toList();
+      final lista = await _api.obtenerCartas(ids);
+      return {for (final c in lista) c.id: c};
+    }();
+  }
+
+  Future<CartaModel?> _resolverEvolucion(String idEvolucion) async {
+    if (_evoluciones.containsKey(idEvolucion)) {
+      return _evoluciones[idEvolucion];
+    }
+    try {
+      final lista = await _api.obtenerCartas([idEvolucion]);
+      final c = lista.isEmpty ? null : lista.first;
+      _evoluciones[idEvolucion] = c;
+      return c;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _abrirDetalle(Map<String, dynamic> datos) async {
+    if (_abriendoDetalle) return;
+    final id = datos['cartaId']?.toString() ?? '';
+    if (id.isEmpty) return;
+    _abriendoDetalle = true;
+    try {
+      CartaModel? carta;
+      try {
+        carta = (await _cargarCatalogo())[id];
+      } catch (_) {
+        // Si falló la carga, se reintenta en el siguiente toque.
+        _catalogo = null;
+      }
+      if (!mounted) return;
+      if (carta == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('No se pudo cargar la carta. Inténtalo de nuevo.',
+              style: TextStyle(fontFamily: 'Cinzel', fontSize: 10)),
+          backgroundColor: Color(0xFF7A1010),
+        ));
+        return;
+      }
+
+      // La imagen del sobre es la skin que ha tocado: se muestra esa.
+      final imagen = datos['imagen']?.toString() ?? '';
+      if (imagen.isNotEmpty) carta = carta.copyWith(imagen: imagen);
+
+      // Precarga del arte a resolución completa (la miniatura del sobre está
+      // reducida), con tope de espera para no bloquear si la red va lenta.
+      if (carta.imagen.isNotEmpty) {
+        try {
+          await precacheImage(NetworkImage(carta.imagen), context)
+              .timeout(const Duration(milliseconds: 1500));
+        } catch (_) {}
+      }
+      if (!mounted) return;
+
+      await showCardDetail(
+        context,
+        carta,
+        resolveEvolucion: _resolverEvolucion,
+        esLegendaria:
+            (datos['skinLegendaria']?.toString() ?? '').isNotEmpty,
+      );
+    } finally {
+      _abriendoDetalle = false;
+    }
   }
 
   @override
@@ -300,7 +398,21 @@ class _AperturaSobreScreenState extends State<AperturaSobreScreen>
                 fontSize: 8,
                 letterSpacing: 3,
                 color: war.textoTenue)),
-        const SizedBox(height: 14),
+        const SizedBox(height: 6),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.touch_app, size: 11, color: war.textoTenue),
+            const SizedBox(width: 4),
+            Text('TOCA UNA CARTA PARA VERLA EN GRANDE',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 7,
+                    letterSpacing: 1.5,
+                    color: war.textoTenue)),
+          ],
+        ),
+        const SizedBox(height: 8),
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(16),
@@ -325,11 +437,15 @@ class _AperturaSobreScreenState extends State<AperturaSobreScreen>
                 // El contenido va como `child`: NO se reconstruye en cada frame
                 // de la animación (solo se reaplica Opacity/scale). Además cada
                 // carta en su RepaintBoundary para no propagar repintados.
-                child: RepaintBoundary(
-                  child: _CartaRevelada(
-                    carta: widget.cartas[i],
-                    acento: widget.acento,
-                    thumbW: _thumbW,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _abrirDetalle(widget.cartas[i]),
+                  child: RepaintBoundary(
+                    child: _CartaRevelada(
+                      carta: widget.cartas[i],
+                      acento: widget.acento,
+                      thumbW: _thumbW,
+                    ),
                   ),
                 ),
               );
