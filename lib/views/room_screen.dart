@@ -98,11 +98,16 @@ class _RoomScreenState extends State<RoomScreen> {
     // servidor que rellene los huecos con bots). La navegación al juego la
     // dispara el propio stream cuando `estado` pasa a `en_curso` (ver build).
     //
-    // Solo si quedan huecos libres mostramos el overlay "Buscando bots…"
+    // Si quedan huecos libres, primero se pide confirmación (se rellenarán con
+    // bots) y, si el host acepta, se muestra el overlay "Buscando bots…"
     // mientras el orquestador los rellena. Si la sala ya está completa, arranca
     // de inmediato y no hace falta spinner.
     final huecos = lobby.maxJugadores - lobby.jugadores.length;
     if (huecos > 0) {
+      // Aviso previo: los huecos libres se rellenarán con bots. El host puede
+      // cancelar y seguir esperando a que entren más jugadores humanos.
+      final continuar = await _confirmarRellenoConBots(huecos);
+      if (continuar != true || !mounted) return;
       setState(() => _buscandoBots = true);
     }
     try {
@@ -115,6 +120,58 @@ class _RoomScreenState extends State<RoomScreen> {
           ..showSnackBar(SnackBar(content: Text('No se pudo iniciar: $e')));
       }
     }
+  }
+
+  /// Diálogo de confirmación al iniciar con huecos vacíos: avisa de que se
+  /// rellenarán con bots. Devuelve true si el host quiere continuar.
+  Future<bool?> _confirmarRellenoConBots(int huecos) {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1525),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: Color(0x40C8A860), width: 1),
+        ),
+        title: const Text('HUECOS VACÍOS',
+            style: TextStyle(
+                fontFamily: 'Cinzel',
+                fontSize: 12,
+                color: Color(0xFFC8A860),
+                letterSpacing: 1.2)),
+        content: Text(
+          huecos == 1
+              ? 'Hay 1 hueco vacío en la partida. Si continúas, se rellenará '
+                  'con un bot.\n\n¿Desea continuar?'
+              : 'Hay $huecos huecos vacíos en la partida. Si continúas, se '
+                  'rellenarán con bots.\n\n¿Desea continuar?',
+          style: const TextStyle(
+              fontFamily: 'Cinzel',
+              fontSize: 10,
+              color: Color(0xFF8A9AAA),
+              height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('SEGUIR ESPERANDO',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                    color: Color(0xFF506070))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('CONTINUAR',
+                style: TextStyle(
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                    color: Color(0xFF4ABB58),
+                    fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Salida EXPLÍCITA de la sala (botón de salir de la cabecera). El botón

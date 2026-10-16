@@ -5,8 +5,12 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-import '../models/lobby_model.dart' show EjercitoInfo;
+import '../models/lobby_model.dart'
+    show EjercitoInfo, LobbyModel, ModoTurno;
+import '../models/modo_partida.dart';
+import '../services/admin_bots_service.dart';
 import '../services/ejercito_service.dart';
+import '../services/warzero_api.dart';
 
 /// Pantalla de administración de BOTS (solo editores). Mismo patrón visual que
 /// la edición de Mapas / Historias.
@@ -35,6 +39,11 @@ import '../services/ejercito_service.dart';
 ///   partidasActivas : int      (SOLO LECTURA: lo escribe el backend)
 ///
 /// El `id` del documento ES el uid del bot dentro de la partida (bot_0…bot_49).
+///
+/// ENVIAR A PARTIDA: cada bot tiene un botón que abre la lista de PARTIDAS
+/// PÚBLICAS en espera y permite mandarlo directamente a una de ellas para que
+/// ocupe un hueco (endpoint de editor /admin/bots/enviar). El bot entra esté
+/// activo o no y sin contar su tope de partidas: es una orden explícita.
 class EdicionBotsScreen extends StatefulWidget {
   const EdicionBotsScreen({super.key});
 
@@ -63,6 +72,7 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
 
   final _col = FirebaseFirestore.instance.collection('Bots');
   final _ejercitoService = EjercitoService();
+  final _adminBots = AdminBotsService();
 
   bool _loading = true;
   String? _error;
@@ -514,6 +524,97 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
     );
   }
 
+  /// Abre la hoja con las PARTIDAS PÚBLICAS en espera para mandar a [bot] a
+  /// ocupar un hueco en una de ellas.
+  void _enviarAPartida(_BotResumen bot) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0A1220),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+      ),
+      builder: (_) => _SalasPublicasSheet(
+        bot: bot,
+        accent: _accent,
+        botIds: _bots.map((b) => b.id).toSet(),
+        aliasBots: {for (final b in _bots) b.id: b.alias},
+        onEnviar: (sala) => _confirmarEnvio(bot, sala),
+      ),
+    );
+  }
+
+  /// Pide confirmación y manda el bot a la sala. Devuelve true si se envió
+  /// (la hoja se cierra) y false si se canceló o falló (la hoja sigue abierta).
+  Future<bool> _confirmarEnvio(_BotResumen bot, LobbyModel sala) async {
+    final huecos = sala.maxJugadores - sala.jugadores.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0A1220),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: _accent.withOpacity(0.4)),
+        ),
+        title: const Text(
+          'ENVIAR BOT',
+          style: TextStyle(
+            color: _accent,
+            fontFamily: 'Cinzel',
+            fontSize: 13,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.5,
+          ),
+        ),
+        content: Text(
+          '¿Mandar a ${bot.alias} a la partida "${sala.nombre}"?\n\n'
+          'Ocupará 1 de los $huecos ${huecos == 1 ? "hueco libre" : "huecos libres"} '
+          'y jugará con ${_nombreEjercito(bot.ejercitoId)} '
+          '(${etiquetaDificultad(bot.dificultad)} · ${etiquetaEstilo(bot.estilo)}).'
+          '${bot.activo ? "" : "\n\nEl bot está DESACTIVADO: entrará igualmente en esta partida."}'
+          '${bot.partidasActivas >= bot.maxPartidas ? "\n\nYa está en su máximo de partidas (${bot.maxPartidas}): esta se suma por encima del límite." : ""}',
+          style: const TextStyle(
+            color: Color(0xFFB0B8C0),
+            fontFamily: 'Cinzel',
+            fontSize: 11,
+            height: 1.5,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('CANCELAR',
+                style:
+                    TextStyle(color: Color(0xFF808890), fontFamily: 'Cinzel')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('ENVIAR',
+                style: TextStyle(
+                    color: _accent,
+                    fontFamily: 'Cinzel',
+                    fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return false;
+
+    try {
+      final res = await _adminBots.enviarBotAPartida(
+        botUid: bot.id,
+        lobbyId: sala.id,
+      );
+      if (!mounted) return true;
+      setState(() => bot.partidasActivas = res.partidasActivas);
+      _toast('${bot.alias} va de camino a "${sala.nombre}"');
+      return true;
+    } catch (e) {
+      _toast(e.toString().replaceFirst('Exception: ', ''), error: true);
+      return false;
+    }
+  }
+
   String _nombreEjercito(int id) {
     for (final e in _ejercitos) {
       if (e.id == id) return e.nombre;
@@ -602,6 +703,7 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
                           onEstilo: (v) => _setEstilo(_bots[i], v),
                           onEsBot: (v) => _toggleEsBot(_bots[i], v),
                           onRenombrar: () => _renombrar(_bots[i]),
+                          onEnviarPartida: () => _enviarAPartida(_bots[i]),
                         ),
                       ),
                     ),
@@ -791,7 +893,8 @@ class _EdicionBotsScreenState extends State<EdicionBotsScreen> {
             'los cuarteles enemigos). Toca el lápiz para renombrar. Cada bot juega '
             'con SU ejército: sin asignarlo, el servidor le reparte cartas mezcladas. '
             '"En juego" lo escribe el backend y se refresca cada 20 s. Al desactivar '
-            'un bot deja de entrar a salas nuevas, pero termina las que ya juega.',
+            'un bot deja de entrar a salas nuevas, pero termina las que ya juega. '
+            'ENVIAR A PARTIDA manda ese bot a una partida pública concreta.',
             style: TextStyle(
               color: Color(0xFF8A94A0),
               fontFamily: 'Cinzel',
@@ -907,6 +1010,7 @@ class _BotTile extends StatelessWidget {
   final ValueChanged<String> onEstilo;
   final ValueChanged<bool> onEsBot;
   final VoidCallback onRenombrar;
+  final VoidCallback onEnviarPartida;
 
   const _BotTile({
     required this.bot,
@@ -926,6 +1030,7 @@ class _BotTile extends StatelessWidget {
     required this.onEstilo,
     required this.onEsBot,
     required this.onRenombrar,
+    required this.onEnviarPartida,
   });
 
   @override
@@ -1193,6 +1298,37 @@ class _BotTile extends StatelessWidget {
                       ? () => onEspera(bot.esperaSegundos + stepEspera)
                       : null,
                 ),
+                const SizedBox(height: 8),
+                // ENVIAR A PARTIDA: elegir una partida pública y mandar al bot.
+                GestureDetector(
+                  onTap: onEnviarPartida,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: accent.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: accent.withOpacity(0.45)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.send_outlined, size: 13, color: accent),
+                        const SizedBox(width: 6),
+                        Text(
+                          'ENVIAR A PARTIDA',
+                          style: TextStyle(
+                            color: accent,
+                            fontFamily: 'Cinzel',
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -1200,6 +1336,350 @@ class _BotTile extends StatelessWidget {
             value: on,
             activeColor: accent,
             onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Hoja inferior con las PARTIDAS PÚBLICAS en espera. Permite mandar a [bot]
+/// a ocupar un hueco en una de ellas. Se lee del mismo endpoint que el lobby
+/// (/warzero/publicas); el servidor invalida esa caché tras cada envío.
+class _SalasPublicasSheet extends StatefulWidget {
+  final _BotResumen bot;
+  final Color accent;
+
+  /// Uids de todos los bots del panel (para distinguir bots de humanos).
+  final Set<String> botIds;
+
+  /// uid → alias de los bots, para mostrar quién hay ya en cada sala.
+  final Map<String, String> aliasBots;
+
+  /// Envía el bot a la sala. Devuelve true si se envió (cierra la hoja).
+  final Future<bool> Function(LobbyModel sala) onEnviar;
+
+  const _SalasPublicasSheet({
+    required this.bot,
+    required this.accent,
+    required this.botIds,
+    required this.aliasBots,
+    required this.onEnviar,
+  });
+
+  @override
+  State<_SalasPublicasSheet> createState() => _SalasPublicasSheetState();
+}
+
+class _SalasPublicasSheetState extends State<_SalasPublicasSheet> {
+  final _api = WarZeroApi();
+
+  bool _cargando = true;
+  String? _error;
+  List<LobbyModel> _salas = [];
+
+  /// Sala a la que se está enviando el bot ahora mismo (spinner en su fila).
+  String? _enviandoA;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
+
+  Future<void> _cargar() async {
+    setState(() {
+      _cargando = true;
+      _error = null;
+    });
+    try {
+      final raw = await _api.obtenerPublicas();
+      final lista = <LobbyModel>[];
+      for (final d in raw) {
+        try {
+          final id = d['id'] as String? ?? '';
+          if (id.isEmpty) continue;
+          final l = LobbyModel.fromMap(id, d);
+          if (!l.esPrivada) lista.add(l);
+        } catch (_) {
+          // Documento malformado: se ignora.
+        }
+      }
+      // Primero las que tienen hueco; dentro de cada grupo, la más antigua
+      // primero (mismo criterio que el relleno automático).
+      lista.sort((a, b) {
+        final la = a.estaLleno ? 1 : 0;
+        final lb = b.estaLleno ? 1 : 0;
+        if (la != lb) return la.compareTo(lb);
+        return a.creadoEn.compareTo(b.creadoEn);
+      });
+      if (!mounted) return;
+      setState(() {
+        _salas = lista;
+        _cargando = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e.toString().replaceFirst('Exception: ', '');
+        _cargando = false;
+      });
+    }
+  }
+
+  Future<void> _enviar(LobbyModel sala) async {
+    if (_enviandoA != null) return;
+    setState(() => _enviandoA = sala.id);
+    final ok = await widget.onEnviar(sala);
+    if (!mounted) return;
+    if (ok) {
+      Navigator.of(context).pop();
+    } else {
+      setState(() => _enviandoA = null);
+    }
+  }
+
+  String _hace(DateTime t) {
+    final d = DateTime.now().difference(t);
+    if (d.inMinutes < 1) return 'ahora';
+    if (d.inMinutes < 60) return 'hace ${d.inMinutes} min';
+    if (d.inHours < 24) return 'hace ${d.inHours} h';
+    return 'hace ${d.inDays} d';
+  }
+
+  String _ritmo(ModoTurno m) => switch (m) {
+        ModoTurno.diario => 'Diaria',
+        ModoTurno.turno12h => '12 h',
+        _ => 'Rápida',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = widget.accent;
+    final alto = MediaQuery.of(context).size.height * 0.75;
+    return SafeArea(
+      child: SizedBox(
+        height: alto,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 8, 4),
+              child: Row(
+                children: [
+                  Icon(Icons.public, color: accent, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'PARTIDAS PÚBLICAS',
+                      style: TextStyle(
+                        color: accent,
+                        fontFamily: 'Cinzel',
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.refresh, color: accent, size: 20),
+                    onPressed: _cargando || _enviandoA != null ? null : _cargar,
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Text(
+                'Elige una partida para mandar a ${widget.bot.alias} a ocupar '
+                'un hueco.',
+                style: const TextStyle(
+                  color: Color(0xFF8A94A0),
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                ),
+              ),
+            ),
+            const Divider(color: Color(0xFF1A2436), height: 1),
+            Expanded(child: _cuerpo(accent)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cuerpo(Color accent) {
+    if (_cargando) {
+      return Center(
+          child: CircularProgressIndicator(color: accent, strokeWidth: 2));
+    }
+    if (_error != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'No se pudieron cargar las partidas:\n$_error',
+            textAlign: TextAlign.center,
+            style:
+                const TextStyle(color: Color(0xFFFF6060), fontFamily: 'Cinzel'),
+          ),
+        ),
+      );
+    }
+    if (_salas.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'No hay partidas públicas en espera ahora mismo.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF8A94A0),
+              fontFamily: 'Cinzel',
+              fontSize: 11,
+            ),
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      itemCount: _salas.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 8),
+      itemBuilder: (_, i) => _filaSala(_salas[i], accent),
+    );
+  }
+
+  Widget _filaSala(LobbyModel sala, Color accent) {
+    final yaDentro = sala.jugadores.any((j) => j.uid == widget.bot.id);
+    final humanos =
+        sala.jugadores.where((j) => !widget.botIds.contains(j.uid)).toList();
+    final bots =
+        sala.jugadores.where((j) => widget.botIds.contains(j.uid)).toList();
+    final sinHumanos = humanos.isEmpty;
+    final huecos = sala.maxJugadores - sala.jugadores.length;
+    final enviando = _enviandoA == sala.id;
+
+    String? motivo;
+    if (yaDentro) {
+      motivo = 'Ya está dentro';
+    } else if (sala.estaLleno) {
+      motivo = 'Llena';
+    } else if (sinHumanos) {
+      motivo = 'Sin humanos';
+    }
+    final puede = motivo == null && _enviandoA == null;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0E1626),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: motivo == null
+              ? accent.withOpacity(0.35)
+              : const Color(0xFF1A2436),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  sala.nombre.isEmpty ? sala.id : sala.nombre,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: motivo == null
+                        ? Colors.white
+                        : const Color(0xFF8A94A0),
+                    fontFamily: 'Cinzel',
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '${sala.modoPartida.icono} ${sala.modoPartida.etiqueta} · '
+                  '${_ritmo(sala.modoTurno)} · ${_hace(sala.creadoEn)}',
+                  style: const TextStyle(
+                    color: Color(0xFF8A94A0),
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '👤 ${humanos.map((j) => j.alias).join(", ")}'
+                  '${bots.isEmpty ? "" : "   🤖 ${bots.map((j) => widget.aliasBots[j.uid] ?? j.alias).join(", ")}"}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFB0B8C0),
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                '${sala.jugadores.length}/${sala.maxJugadores}',
+                style: TextStyle(
+                  color: huecos > 0 ? accent : const Color(0xFF6A727C),
+                  fontFamily: 'Cinzel',
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 6),
+              if (enviando)
+                SizedBox(
+                  width: 18,
+                  height: 18,
+                  child:
+                      CircularProgressIndicator(color: accent, strokeWidth: 2),
+                )
+              else if (motivo != null)
+                Text(
+                  motivo,
+                  style: const TextStyle(
+                    color: Color(0xFF6A727C),
+                    fontFamily: 'Cinzel',
+                    fontSize: 9,
+                  ),
+                )
+              else
+                GestureDetector(
+                  onTap: puede ? () => _enviar(sala) : null,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: accent.withOpacity(puede ? 0.15 : 0.05),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: accent.withOpacity(puede ? 0.6 : 0.2)),
+                    ),
+                    child: Text(
+                      'ENVIAR',
+                      style: TextStyle(
+                        color: puede ? accent : const Color(0xFF6A727C),
+                        fontFamily: 'Cinzel',
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
       ),
