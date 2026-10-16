@@ -6,6 +6,10 @@
 // conquistas, energía) para la pestaña RESUMEN del informe y para poder
 // copiarlo y compartirlo.
 //
+// · Las celdas que son CUARTEL se nombran como "Cuartel de X" (o "tu Cuartel")
+//   en vez de por su coordenada.
+// · Cada acción indica si tuvo efecto sobre cartas ENEMIGAS o no.
+//
 // Solo usa lo que el servidor ya publica en el informe (no revela nada nuevo):
 // los movimientos invisibles ya vienen filtrados y la guarnición de una
 // descarga rival se cuenta sin nombrarla, igual que en la pestaña ACCIONES.
@@ -21,10 +25,14 @@ class ResumenTurno {
   final String localUid;
   final String Function(String uid) alias;
 
+  /// Cuarteles de la partida: uid → coordenada.
+  final Map<String, String> cuarteles;
+
   ResumenTurno({
     required this.entrada,
     required this.localUid,
     required this.alias,
+    this.cuarteles = const {},
   });
 
   int get turno => (entrada['turno'] as num?)?.toInt() ?? 0;
@@ -36,6 +44,29 @@ class ResumenTurno {
       .toList();
 
   String _quien(String uid) => uid == localUid ? 'Tú' : alias(uid);
+
+  /// coord → uid del dueño del cuartel. Incluye los cuarteles conquistados
+  /// este turno (su dueño puede haber desaparecido ya de `obeliscos`).
+  late final Map<String, String> _duenoCuartel = () {
+    final m = <String, String>{};
+    for (final kv in cuarteles.entries) {
+      if (kv.value.isNotEmpty) m[kv.value] = kv.key;
+    }
+    for (final q in _lista('conquistasLog')) {
+      if ((q['tipo'] ?? '') != 'conquista_cuartel') continue;
+      final coord = (q['coord'] ?? '').toString();
+      final perd = (q['perdedorUid'] ?? '').toString();
+      if (coord.isNotEmpty && perd.isNotEmpty) m[coord] = perd;
+    }
+    return m;
+  }();
+
+  /// Nombre legible de una celda: "Cuartel de X" / "tu Cuartel" o la coord.
+  String _celda(String coord) {
+    final dueno = _duenoCuartel[coord];
+    if (dueno == null) return coord;
+    return dueno == localUid ? 'tu Cuartel' : 'el Cuartel de ${alias(dueno)}';
+  }
 
   String _nombre(Map c) =>
       (c['Nombre'] ?? c['nombre'] ?? c['cartaNombre'] ?? 'una carta').toString();
@@ -58,6 +89,17 @@ class ResumenTurno {
     return cuenta.entries
         .map((e) => e.value > 1 ? '${e.key} ×${e.value}' : e.key)
         .join(', ');
+  }
+
+  /// "de Itachi y Madara" con los dueños de [cartas].
+  String _duenos(Iterable<Map> cartas) {
+    final us = cartas
+        .map((c) => (c['ownerUid'] ?? '').toString())
+        .where((u) => u.isNotEmpty)
+        .toSet()
+        .map(_quien)
+        .toList();
+    return us.isEmpty ? '' : ' de ${_enumerar(us)}';
   }
 
   // ── secciones ────────────────────────────────────────────────────────────
@@ -88,7 +130,7 @@ class ResumenTurno {
       for (final coord in coords) {
         final cartas = (celdas[coord] as List? ?? const []).whereType<Map>();
         if (cartas.isEmpty) continue;
-        partes.add('${_cartas(cartas)} → $coord');
+        partes.add('${_cartas(cartas)} → ${_celda(coord)}');
       }
       if (partes.isEmpty) continue;
       out.add('${_quien(uid)}: ${partes.join('; ')}.');
@@ -98,54 +140,91 @@ class ResumenTurno {
 
   SeccionResumen _acciones() {
     final out = <String>[];
-    for (final a in _lista('accionesLog')) {
+    final acciones = _lista('accionesLog');
+
+    // Rechazos de escudo: el servidor anota UNA entrada por carta rebotada;
+    // se agrupan por (jugador, celda escudada, celda de vuelta).
+    final rebotes = <String, List<Map<String, dynamic>>>{};
+
+    for (final a in acciones) {
       final uid = (a['uid'] ?? '').toString();
       final quien = _quien(uid);
       final tipo = (a['tipo'] ?? '').toString();
       final hab = (a['habilidadNombre'] ?? '').toString();
-      final obj = (a['objetivo'] ?? a['destino'] ?? a['coord'] ?? '?').toString();
-      final origen = (a['origen'] ?? a['cartaOrigenCoord'] ?? '').toString();
+      final objCoord =
+          (a['objetivo'] ?? a['destino'] ?? a['coord'] ?? '').toString();
+      final obj = objCoord.isEmpty ? '?' : _celda(objCoord);
+      final origenCoord = (a['origen'] ?? a['cartaOrigenCoord'] ?? '').toString();
       final turnos = _int(a['turnosRestantes']);
       final dura = turnos > 0 ? ' durante $turnos turno(s)' : '';
       final conHab = hab.isNotEmpty ? ' ($hab)' : '';
       final destruidas = (a['cartasDestruidas'] as List? ?? const [])
           .whereType<Map>()
           .toList();
+      final enemigasDestruidas = destruidas
+          .where((c) => (c['ownerUid'] ?? '').toString() != uid)
+          .toList();
+      final propiasDestruidas = destruidas
+          .where((c) => (c['ownerUid'] ?? '').toString() == uid)
+          .toList();
+
+      // Cartas enemigas alcanzadas por veneno/parálisis (servidor nuevo). Si el
+      // campo no está (partidas antiguas) no se puede afirmar nada.
+      final afectadasRaw = a['cartasAfectadas'];
+      final afectadas = afectadasRaw is List
+          ? afectadasRaw.whereType<Map>().toList()
+          : null;
+      String efectoAfectadas() {
+        if (afectadas == null) return '';
+        if (afectadas.isEmpty) {
+          return ' Sin efecto: no había cartas enemigas en la celda al resolver.';
+        }
+        return ' Afectó a ${_cartas(afectadas)}${_duenos(afectadas)}.';
+      }
 
       switch (tipo) {
         case 'disparo':
-          final desde = origen.isNotEmpty ? ' desde $origen' : '';
-          if (destruidas.isEmpty) {
-            out.add('$quien disparó$conHab$desde contra $obj sin causar bajas.');
+          final desde = origenCoord.isNotEmpty ? ' desde ${_celda(origenCoord)}' : '';
+          var txt = '$quien disparó$conHab$desde contra $obj.';
+          if (enemigasDestruidas.isEmpty) {
+            txt += ' Sin efecto sobre cartas enemigas';
+            txt += destruidas.isEmpty ? ' (la celda estaba vacía).' : '.';
           } else {
-            final victimas = destruidas
-                .map((c) => (c['ownerUid'] ?? '').toString())
-                .where((u) => u.isNotEmpty)
-                .toSet()
-                .map(_quien)
-                .toList();
             final pc = _int(a['pc']);
-            out.add('$quien disparó$conHab$desde contra $obj y destruyó '
-                '${_cartas(destruidas)}'
-                '${victimas.isNotEmpty ? ' de ${_enumerar(victimas)}' : ''}'
-                '${pc > 0 ? ' (+$pc PC)' : ''}.');
+            txt += ' Destruyó ${_cartas(enemigasDestruidas)}'
+                '${_duenos(enemigasDestruidas)}'
+                '${pc > 0 ? ' (+$pc PC)' : ''}.';
           }
+          if (propiasDestruidas.isNotEmpty) {
+            txt += ' También cayeron cartas propias: '
+                '${_cartas(propiasDestruidas)}.';
+          }
+          out.add(txt);
           break;
         case 'teletransporte':
           out.add('$quien teletransportó ${a['cartaNombre'] ?? 'una carta'} '
-              'de ${a['cartaOrigenCoord'] ?? '?'} a ${a['destino'] ?? '?'}.');
+              'de ${_celda((a['cartaOrigenCoord'] ?? '?').toString())} '
+              'a ${_celda((a['destino'] ?? '?').toString())}. '
+              'Sin efecto directo sobre cartas enemigas.');
           break;
         case 'veneno':
           final mag = _int(a['magnitud']);
           out.add('$quien envenenó $obj$conHab'
-              '${mag > 0 ? ' (−$mag defensa a los rivales)' : ''}$dura.');
+              '${mag > 0 ? ' (−$mag defensa a los rivales)' : ''}$dura.'
+              '${efectoAfectadas()}');
           break;
         case 'paralisis':
-          out.add('$quien paralizó las cartas rivales de $obj$conHab$dura.');
+          out.add('$quien lanzó una parálisis sobre $obj$conHab$dura.'
+              '${efectoAfectadas()}');
           break;
         case 'escudo':
-          out.add('$quien levantó un escudo en $obj$conHab$dura: '
-              'la celda queda protegida frente a habilidades.');
+          out.add('$quien levantó un escudo en $obj$conHab$dura. '
+              'No afecta a cartas: protege la celda frente a habilidades y '
+              'movimientos rivales.');
+          break;
+        case 'escudoBloqueoMovimiento':
+          final clave = '$uid|$objCoord|$origenCoord';
+          (rebotes[clave] ??= []).add(a);
           break;
         case 'potFuerza':
         case 'potDefensa':
@@ -156,25 +235,34 @@ class ResumenTurno {
                   ? 'defensa'
                   : 'movimiento';
           final mag = _int(a['magnitud']);
-          out.add('$quien potenció la $que en $obj$conHab'
-              '${mag != 0 ? ' (+$mag)' : ''}$dura.');
+          out.add('$quien potenció la $que de sus cartas en $obj$conHab'
+              '${mag != 0 ? ' (+$mag)' : ''}$dura. '
+              'Efecto sobre cartas propias, no sobre enemigas.');
           break;
         case 'descarga':
-          final coord = (a['coord'] ?? '?').toString();
-          final propias = uid == localUid
-              ? destruidas
-              : destruidas
+          final coord = (a['coord'] ?? objCoord).toString();
+          final enemigasVisibles = uid == localUid
+              ? enemigasDestruidas
+              : enemigasDestruidas
                   .where((c) => (c['ownerUid'] ?? '').toString() == localUid)
                   .toList();
-          final ocultas = destruidas.length - propias.length;
-          var txt = '$quien descargó su cuartel en $coord: ';
+          var txt = '$quien descargó ${_celda(coord)}: ';
           if (destruidas.isEmpty) {
             txt += 'estaba vacío, sin bajas.';
+          } else if (enemigasDestruidas.isEmpty) {
+            txt += 'murieron ${destruidas.length} carta(s), todas propias; '
+                'sin efecto sobre cartas enemigas.';
           } else {
-            txt += 'murieron ${destruidas.length} carta(s)';
-            if (propias.isNotEmpty) txt += ' (${_cartas(propias)})';
-            if (ocultas > 0 && uid != localUid) {
-              txt += ', $ocultas de ellas de su guarnición (ocultas)';
+            txt += 'destruyó ${enemigasDestruidas.length} carta(s) enemiga(s)';
+            if (enemigasVisibles.isNotEmpty) {
+              txt += ' (${_cartas(enemigasVisibles)}'
+                  '${_duenos(enemigasVisibles)})';
+            }
+            final propias = propiasDestruidas.length;
+            if (propias > 0) {
+              txt += uid == localUid
+                  ? ' y $propias tuya(s) (${_cartas(propiasDestruidas)})'
+                  : ' y $propias de su guarnición (ocultas)';
             }
             txt += '.';
           }
@@ -183,11 +271,30 @@ class ResumenTurno {
         case 'fallida':
         case 'descarga_fallida':
           final motivo = (a['motivo'] ?? 'no se pudo resolver').toString();
-          out.add('La acción de $quien$conHab sobre $obj falló: $motivo.');
+          final sobre = objCoord.isNotEmpty ? ' sobre $obj' : '';
+          out.add('La acción de $quien$conHab$sobre falló: $motivo. '
+              'Sin efecto sobre cartas enemigas.');
           break;
         default:
-          out.add('$quien usó ${hab.isNotEmpty ? hab : tipo} sobre $obj.');
+          out.add('$quien usó ${hab.isNotEmpty ? hab : tipo}'
+              '${objCoord.isNotEmpty ? ' sobre $obj' : ''}.');
       }
+    }
+
+    for (final grupo in rebotes.values) {
+      final a = grupo.first;
+      final quien = _quien((a['uid'] ?? '').toString());
+      final destino = _celda((a['objetivo'] ?? '?').toString());
+      final vuelta = _celda((a['origen'] ?? '?').toString());
+      final nombres = grupo
+          .map((e) => (e['cartaNombre'] ?? '').toString())
+          .where((n) => n.isNotEmpty)
+          .toList();
+      final que = nombres.isNotEmpty
+          ? _cartas(nombres.map((n) => {'Nombre': n}))
+          : '${grupo.length} carta(s)';
+      out.add('Un escudo en $destino rechazó el movimiento de $quien: '
+          '$que vuelve(n) a $vuelta.');
     }
     return SeccionResumen('Acciones', out);
   }
@@ -223,7 +330,9 @@ class ResumenTurno {
       }).toList();
 
       final esObelisco = c['esConquistaObelisco'] == true;
-      var txt = 'Combate en $coord${esObelisco ? ' (obelisco)' : ''}: '
+      final lugar = _celda(coord);
+      var txt = 'Combate en $lugar'
+          '${esObelisco && lugar == coord ? ' (obelisco)' : ''}: '
           '${_enumerar(bandos)}. ';
       if (ganador.isEmpty) {
         txt += 'Sin vencedor: todos los bandos cayeron o empataron.';
@@ -250,14 +359,16 @@ class ResumenTurno {
     final out = <String>[];
     for (final q in _lista('conquistasLog')) {
       final conq = _quien((q['conquistadorUid'] ?? '').toString());
-      final perd = _quien((q['perdedorUid'] ?? '').toString());
+      final perdUid = (q['perdedorUid'] ?? '').toString();
+      final perd = _quien(perdUid);
       final coord = (q['coord'] ?? '?').toString();
       final tipo = (q['tipo'] ?? '').toString();
       if (tipo == 'conquista_cuartel') {
-        out.add('$conq conquistó el cuartel de $perd en $coord: '
-            '$perd queda eliminado.');
+        final cuartel = perdUid == localUid ? 'tu Cuartel' : 'el Cuartel de $perd';
+        out.add('$conq conquistó $cuartel: '
+            '${perdUid == localUid ? 'quedas eliminado' : '$perd queda eliminado'}.');
       } else {
-        out.add('$conq conquistó $coord a $perd.');
+        out.add('$conq conquistó ${_celda(coord)} a $perd.');
       }
     }
     for (final e in _lista('expulsionesLog')) {

@@ -47,6 +47,10 @@ class InformeBatallaScreen extends StatefulWidget {
   /// impactos de la lluvia de meteoritos / apocalipsis (ver modo_partida.dart).
   final ModoPartida modoPartida;
 
+  /// Cuarteles de la partida (uid → coordenada). El RESUMEN los nombra como
+  /// "Cuartel de X" en vez de por su coordenada.
+  final Map<String, String> cuarteles;
+
   const InformeBatallaScreen({
     super.key,
     required this.combateLog,
@@ -62,6 +66,7 @@ class InformeBatallaScreen extends StatefulWidget {
     this.initialTabIndex = 0,
     this.notaTutorial,
     this.modoPartida = ModoPartida.normal,
+    this.cuarteles = const {},
   });
 
   @override
@@ -316,6 +321,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                       entrada: _entradaSeleccionada,
                       localUid: widget.localUid,
                       alias: _alias,
+                      cuarteles: widget.cuarteles,
                     ),
                   ),
                 ],

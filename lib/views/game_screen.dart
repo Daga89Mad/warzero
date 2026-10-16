@@ -2117,6 +2117,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           rayoCoords: rayoCoords.toList(),
           ultimaCartaRepartida: _ultimaCartaRepartida,
           modoPartida: _modoPartida,
+          cuarteles: Map<String, String>.from(_obeliscosPorJugador),
         ),
       ))
           .whenComplete(() {
@@ -3644,6 +3645,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         // mostrar la carta repartida (antes solo la pasaba el informe en vivo).
         ultimaCartaRepartida: _ultimaCartaRepartida,
         modoPartida: _modoPartida,
+        cuarteles: Map<String, String>.from(_obeliscosPorJugador),
       ),
     ))
         .whenComplete(() {
