@@ -1,14 +1,16 @@
 // lib/views/informe_batalla_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/lobby_model.dart';
 import '../models/carta_model.dart';
 import '../services/settings_controller.dart';
+import '../services/resumen_turno.dart';
 import '../widgets/carta_rota_animation.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PANTALLA INFORME DE BATALLA
-// Pestañas: COMBATES · ZERO · MOVIMIENTOS · CARTA
+// Pestañas: COMBATES · ACCIONES · ZERO · CARTA · MOVIMIENTOS · RESUMEN
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Colores semánticos fijos (lenguaje del juego, iguales en todos los temas).
@@ -33,7 +35,8 @@ class InformeBatallaScreen extends StatefulWidget {
   /// Carta nueva recibida este turno (null si aún no se ha repartido).
   final CartaModel? ultimaCartaRepartida;
 
-  /// Pestaña inicial: 0 COMBATES · 1 ACCIONES · 2 ZERO · 3 CARTA · 4 MOVIMIENTOS.
+  /// Pestaña inicial: 0 COMBATES · 1 ACCIONES · 2 ZERO · 3 CARTA ·
+  /// 4 MOVIMIENTOS · 5 RESUMEN.
   final int initialTabIndex;
 
   /// Nota guía opcional (tutorial). Si se indica, se muestra un banner bajo las
@@ -128,6 +131,23 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
     }
   }
 
+  /// Entrada completa del historial del turno seleccionado (incluye
+  /// conquistas, expulsiones y economía). Si no está en el historial, se
+  /// reconstruye con lo que tiene la pantalla.
+  Map<String, dynamic> get _entradaSeleccionada {
+    for (final e in widget.historial) {
+      if ((e['turno'] as num?)?.toInt() == _selectedTurno) return e;
+    }
+    return {
+      'turno': _selectedTurno,
+      'combateLog': _combateActual,
+      'movimientosLog': _movActual,
+      'farmeoLog': _farmeoActual,
+      'accionesLog': _accionesActual,
+      'rayoCoords': _rayoActual,
+    };
+  }
+
   List<_TurnoInforme> get _opciones {
     final result = <_TurnoInforme>[];
 
@@ -183,8 +203,8 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
     final opciones = _opciones;
 
     return DefaultTabController(
-      length: 5,
-      initialIndex: widget.initialTabIndex.clamp(0, 4),
+      length: 6,
+      initialIndex: widget.initialTabIndex.clamp(0, 5),
       child: Scaffold(
         backgroundColor: war.fondo,
         appBar: AppBar(
@@ -244,6 +264,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
             indicatorWeight: 1.5,
             labelColor: war.primario,
             unselectedLabelColor: war.textoTenue,
+            isScrollable: true,
             labelStyle: const TextStyle(
                 fontFamily: 'Cinzel', fontSize: 9, letterSpacing: 1.5),
             tabs: const [
@@ -252,6 +273,7 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
               Tab(text: 'ZERO'),
               Tab(text: 'CARTA'),
               Tab(text: 'MOVIMIENTOS'),
+              Tab(text: 'RESUMEN'),
             ],
           ),
         ),
@@ -289,12 +311,95 @@ class _InformeBatallaScreenState extends State<InformeBatallaScreen> {
                     alias: _alias,
                     colorZona: _colorZona,
                   ),
+                  _ResumenTab(
+                    resumen: ResumenTurno(
+                      entrada: _entradaSeleccionada,
+                      localUid: widget.localUid,
+                      alias: _alias,
+                    ),
+                  ),
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TAB RESUMEN: crónica en texto del turno (copiable)
+// ─────────────────────────────────────────────────────────────────────────────
+class _ResumenTab extends StatelessWidget {
+  final ResumenTurno resumen;
+  const _ResumenTab({required this.resumen});
+
+  @override
+  Widget build(BuildContext context) {
+    final war = context.war;
+    final secciones = resumen.generar();
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text('CRÓNICA DEL TURNO ${resumen.turno}',
+                  style: TextStyle(
+                      fontFamily: 'Cinzel',
+                      fontSize: 11,
+                      letterSpacing: 1.5,
+                      color: war.primario)),
+            ),
+            IconButton(
+              tooltip: 'Copiar resumen',
+              icon: Icon(Icons.copy, size: 18, color: war.primario),
+              onPressed: () async {
+                await Clipboard.setData(
+                    ClipboardData(text: resumen.comoTexto()));
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Resumen copiado')),
+                );
+              },
+            ),
+          ],
+        ),
+        for (final s in secciones) ...[
+          const SizedBox(height: 12),
+          Text(s.titulo.toUpperCase(),
+              style: TextStyle(
+                  fontFamily: 'Cinzel',
+                  fontSize: 10,
+                  letterSpacing: 1.5,
+                  color: war.textoTenue)),
+          const SizedBox(height: 6),
+          for (final l in s.lineas)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, right: 8),
+                    child: Container(
+                      width: 4,
+                      height: 4,
+                      decoration: BoxDecoration(
+                          color: war.primario, shape: BoxShape.circle),
+                    ),
+                  ),
+                  Expanded(
+                    child: SelectableText(l,
+                        style: TextStyle(
+                            fontSize: 13, height: 1.4, color: war.texto)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ],
     );
   }
 }
