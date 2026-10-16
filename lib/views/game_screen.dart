@@ -14,6 +14,7 @@ import 'alianza_screen.dart';
 import '../services/combate_service.dart';
 import 'informe_batalla_screen.dart';
 import 'revision_turno_screen.dart';
+import 'repeticion_turnos_screen.dart';
 import '../models/lobby_model.dart';
 import '../widgets/board_widget.dart';
 import '../widgets/bombardeo_overlay.dart';
@@ -3656,6 +3657,27 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     });
   }
 
+  /// Abre la repetición animada de los últimos turnos resueltos (los que
+  /// guarda el servidor en `historialCombates`, hasta 5). No hace lecturas
+  /// extra: usa el historial que ya llega por el stream de la partida.
+  void _abrirRepeticionTurnos() {
+    if (_historialCombates.isEmpty) return;
+    final alias = <String, String>{
+      for (final j in _currentLobby?.jugadores ?? const <LobbyJugador>[])
+        j.uid: j.alias,
+    };
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RepeticionTurnosScreen(
+        config: _config,
+        historial: List<Map<String, dynamic>>.from(_historialCombates),
+        localUid: widget.localPlayerUid,
+        playerColors: _playerColors,
+        obeliscosPorJugador: Map<String, String>.from(_obeliscosPorJugador),
+        aliasPorUid: alias,
+      ),
+    ));
+  }
+
   void _revisarAlianzas(Map<String, dynamic> data) {
     final raw = data['alianzas'];
     _alianzas = raw is Map ? Map<String, dynamic>.from(raw) : {};
@@ -6799,6 +6821,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   onCuartel: _abrirCuartel,
                   puedeInforme: _boardState.turnoActual > 1,
                   onInforme: _abrirInformeBatalla,
+                  puedeRepeticion: _historialCombates.isNotEmpty,
+                  onRepeticion: _abrirRepeticionTurnos,
                   puedePuntuaciones: true,
                   onPuntuaciones: _abrirPuntuaciones,
                   // En historia las alianzas vienen dadas (aliado permanente

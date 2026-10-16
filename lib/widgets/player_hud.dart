@@ -40,6 +40,11 @@ class PartidaTopBar extends StatelessWidget {
   final VoidCallback onCuartel;
   final bool puedeInforme;
   final VoidCallback onInforme;
+
+  /// Repetición animada de los últimos turnos. Opcional: si es null el ítem
+  /// no se muestra (p. ej. en el tutorial).
+  final bool puedeRepeticion;
+  final VoidCallback? onRepeticion;
   final bool puedePuntuaciones;
   final VoidCallback onPuntuaciones;
   final bool puedeAlianza;
@@ -61,6 +66,8 @@ class PartidaTopBar extends StatelessWidget {
     required this.onCuartel,
     required this.puedeInforme,
     required this.onInforme,
+    this.puedeRepeticion = false,
+    this.onRepeticion,
     required this.puedePuntuaciones,
     required this.onPuntuaciones,
     required this.puedeAlianza,
@@ -94,6 +101,9 @@ class PartidaTopBar extends StatelessWidget {
               if (v == '__salir__') onSalir();
               if (v == '__cuartel__' && puedeCuartel) onCuartel();
               if (v == '__informe__' && puedeInforme) onInforme();
+              if (v == '__repeticion__' && puedeRepeticion) {
+                onRepeticion?.call();
+              }
               if (v == '__puntuaciones__' && puedePuntuaciones)
                 onPuntuaciones();
               if (v == '__alianza__' && puedeAlianza) onAlianza();
@@ -130,6 +140,18 @@ class PartidaTopBar extends StatelessWidget {
                   enabled: puedeInforme,
                 ),
               ),
+              if (onRepeticion != null)
+                PopupMenuItem<String>(
+                  value: '__repeticion__',
+                  enabled: puedeRepeticion,
+                  height: 40,
+                  child: _FilaAccion(
+                    icon: Icons.slow_motion_video,
+                    label: 'TURNOS ANTERIORES',
+                    color: const Color(0xFF6AD0C0),
+                    enabled: puedeRepeticion,
+                  ),
+                ),
               PopupMenuItem<String>(
                 value: '__puntuaciones__',
                 enabled: puedePuntuaciones,
