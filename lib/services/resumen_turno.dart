@@ -105,6 +105,7 @@ class ResumenTurno {
   // ── secciones ────────────────────────────────────────────────────────────
   List<SeccionResumen> generar() {
     final secciones = <SeccionResumen>[
+      _comprasRobosSacrificios(),
       _movimientos(),
       _acciones(),
       _combates(),
@@ -117,6 +118,100 @@ class ResumenTurno {
           'Turno tranquilo', ['No hubo movimientos, acciones ni combates.']));
     }
     return secciones;
+  }
+
+  /// Compras de GENERALES, ROBOS de carta y SACRIFICIOS del turno, sacados
+  /// del libro de economía (`economiaLog`; solo partidas con el servidor
+  /// nuevo). Las cartas que roba un RIVAL no se nombran (su mano es privada);
+  /// las tuyas sí. Generales y sacrificios se nombran siempre: el general sale
+  /// al tablero y la carta sacrificada ya no está en ninguna mano.
+  SeccionResumen _comprasRobosSacrificios() {
+    final out = <String>[];
+    final eco =
+        Map<String, dynamic>.from(entrada['economiaLog'] as Map? ?? const {});
+    for (final kv in eco.entries) {
+      final uid = kv.key;
+      final esYo = uid == localUid;
+      final quien = _quien(uid);
+      final e = Map<String, dynamic>.from(kv.value as Map? ?? const {});
+      final movs = (e['movimientos'] as List? ?? const [])
+          .whereType<Map>()
+          .map((m) => Map<String, dynamic>.from(m))
+          .toList();
+
+      // Generales devueltos con "deshacer": no cuentan como comprados.
+      final deshechos = movs
+          .where((m) => m['concepto'] == 'deshacer')
+          .expand((m) => (m['especialesQuitadas'] as List? ?? const []))
+          .map((x) => x.toString())
+          .toSet();
+
+      int robos = 0, precioRobos = 0, energiaSacrificio = 0;
+      final robadas = <String>[];
+      final sacrificadas = <String>[];
+      for (final m in movs) {
+        // Generales.
+        final esp = (m['especial'] ?? '').toString();
+        if (esp.isNotEmpty && !deshechos.contains(esp)) {
+          final nombre = (m['especialNombre'] ?? '').toString();
+          final coste = _int(m['especialCoste']);
+          out.add('$quien ${esYo ? 'compraste' : 'compró'} el general '
+              '${nombre.isNotEmpty ? nombre : '(sin nombre)'}'
+              '${coste > 0 ? ' por $coste de energía' : ''}.');
+        }
+        // Robos.
+        final r = _int(m['robos']);
+        if (r > 0) {
+          robos += r;
+          precioRobos += _int(m['precioRobos']);
+          robadas.addAll((m['cartasRobadasNombres'] as List? ?? const [])
+              .map((x) => x.toString())
+              .where((x) => x.isNotEmpty));
+        }
+        // Sacrificios.
+        final sac = (m['sacrificadas'] as List? ?? const []);
+        if (sac.isNotEmpty) {
+          final nombres = (m['sacrificadasNombres'] as List? ?? const [])
+              .map((x) => x.toString())
+              .where((x) => x.isNotEmpty)
+              .toList();
+          if (nombres.length == sac.length) {
+            sacrificadas.addAll(nombres);
+          } else {
+            sacrificadas.addAll(List.filled(sac.length, 'una carta'));
+          }
+          energiaSacrificio += _int(m['energiaSacrificio']);
+        }
+      }
+
+      if (robos > 0) {
+        final precio = precioRobos > 0 ? ' por $precioRobos de energía' : '';
+        if (esYo && robadas.isNotEmpty) {
+          out.add('Robaste ${_enumerar(_contarNombres(robadas))}$precio.');
+        } else {
+          out.add('$quien ${esYo ? 'robaste' : 'robó'} '
+              '${robos == 1 ? 'una carta' : '$robos cartas'}$precio.');
+        }
+      }
+      if (sacrificadas.isNotEmpty) {
+        out.add('$quien ${esYo ? 'sacrificaste' : 'sacrificó'} '
+            '${_enumerar(_contarNombres(sacrificadas))}'
+            '${energiaSacrificio > 0 ? ' y ${esYo ? 'recuperaste' : 'recuperó'} '
+                '$energiaSacrificio de energía' : ''}.');
+      }
+    }
+    return SeccionResumen('Compras, robos y sacrificios', out);
+  }
+
+  /// ["Misil", "Misil", "Escudo"] → ["Misil ×2", "Escudo"].
+  List<String> _contarNombres(List<String> nombres) {
+    final cuenta = <String, int>{};
+    for (final n in nombres) {
+      cuenta[n] = (cuenta[n] ?? 0) + 1;
+    }
+    return cuenta.entries
+        .map((e) => e.value > 1 ? '${e.key} ×${e.value}' : e.key)
+        .toList();
   }
 
   SeccionResumen _movimientos() {

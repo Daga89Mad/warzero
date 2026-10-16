@@ -664,6 +664,11 @@ class WarZeroApi {
     int? robosDelta,
     List<String>? mano,
     List<String>? mazoRestante,
+    // Libro de economía (informativo): qué fue este movimiento.
+    String? concepto,
+    List<String>? sacrificadas,
+    int? energiaSacrificio,
+    List<String>? cartasRobadas,
   }) async {
     final res = await _enviarConReintentos(
       () => http.post(
@@ -677,6 +682,10 @@ class WarZeroApi {
           if (robosDelta != null) 'robosDelta': robosDelta,
           if (mano != null) 'mano': mano,
           if (mazoRestante != null) 'mazoRestante': mazoRestante,
+          if (concepto != null) 'concepto': concepto,
+          if (sacrificadas != null) 'sacrificadas': sacrificadas,
+          if (energiaSacrificio != null) 'energiaSacrificio': energiaSacrificio,
+          if (cartasRobadas != null) 'cartasRobadas': cartasRobadas,
         }),
       ),
       etiqueta: 'stats',
@@ -686,6 +695,12 @@ class WarZeroApi {
     debugPrint('[WZ][api] POST stats status=${res.statusCode}');
     if (res.statusCode >= 200 && res.statusCode < 300) {
       final j = jsonDecode(res.body) as Map<String, dynamic>;
+      // El servidor puede RECHAZAR la petición entera (p. ej. un robo mal
+      // pagado o un 4º general): responde 200 con ok=false y no aplica nada.
+      if (j['ok'] == false) {
+        throw StatsRechazadas(
+            (j['error'] as String?) ?? 'Operación rechazada por el servidor');
+      }
       return (j['energies'] as num?)?.toInt();
     }
     throw Exception('actualizarStats HTTP ${res.statusCode}: ${res.body}');
@@ -1048,4 +1063,12 @@ class WarZeroApi {
     }
     throw Exception('obtenerRanking HTTP ${res.statusCode}: ${res.body}');
   }
+}
+
+/// El servidor rechazó un POST /warzero/stats (ok=false): no se aplicó nada.
+class StatsRechazadas implements Exception {
+  final String mensaje;
+  StatsRechazadas(this.mensaje);
+  @override
+  String toString() => mensaje;
 }

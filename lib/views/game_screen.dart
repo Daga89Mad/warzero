@@ -977,6 +977,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           lobbyId: widget.lobbyId!,
           uid: widget.localPlayerUid,
           energiesDelta: -coste,
+          concepto: 'evolucion',
         );
       } catch (e) {
         if (!mounted) return;
@@ -3584,6 +3585,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             lobbyId: widget.lobbyId!,
             uid: widget.localPlayerUid,
             energiesDelta: -coste,
+            concepto: 'despliegue',
           )
           .catchError((_) => null); // fire-and-forget; undo restaura si cancela
     }
@@ -3999,6 +4001,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           uid: widget.localPlayerUid,
           energiesDelta: -coste,
           especialComprada: carta.id,
+          concepto: 'general',
         );
       } catch (e) {
         // Revertir si falla la persistencia.
@@ -4101,8 +4104,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           uid: widget.localPlayerUid,
           energiesDelta: -precio,
           robosDelta: 1,
+          concepto: 'robo',
+          cartasRobadas: [carta.id],
         );
-      } catch (_) {
+      } catch (e) {
         // Revertir si falla la persistencia.
         if (mounted) {
           setState(() {
@@ -4114,7 +4119,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             _robosComprados -= 1;
           });
         }
-        return fallo('Error al robar. Inténtalo de nuevo.');
+        return fallo(e is StatsRechazadas
+            ? e.mensaje
+            : 'Error al robar. Inténtalo de nuevo.');
       }
     }
 
@@ -5205,6 +5212,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
           energiesDelta: recompensa,
           mano: _handInicial.map((c) => c.id).toList(),
           mazoRestante: _mazoRestante.map((c) => c.id).toList(),
+          concepto: 'sacrificio',
+          sacrificadas: [carta.id],
+          energiaSacrificio: recompensa,
         );
       } catch (_) {
         // Revertir si falla la persistencia.
