@@ -1,0 +1,33 @@
+:root {
+  --fondo: #0b0d10;
+  --panel: #14181d;
+  --texto: #e6e8eb;
+  --tenue: #9aa3ad;
+  --acento: #f2c230;
+  --borde: #262c33;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--fondo); color: var(--texto); }
+body {
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 1.8rem; line-height: 1.25; margin: 0 0 4px; color: var(--acento); letter-spacing: .02em; }
+h2 { font-size: 1.15rem; margin: 32px 0 8px; color: var(--acento); }
+a { color: var(--acento); }
+.fecha, .volver { color: var(--tenue); font-size: .9rem; margin: 0 0 24px; }
+.volver { margin-bottom: 8px; }
+.volver a { color: var(--tenue); text-decoration: none; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-size: .95rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px; border-bottom: 1px solid var(--borde); }
+th { color: var(--tenue); font-weight: 600; }
+td:first-child { width: 34%; font-weight: 600; }
+.tarjeta { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 16px 20px; margin: 16px 0; }
+.tarjeta h2 { margin-top: 0; }
+@media (max-width: 520px) {
+  table, thead, tbody, tr, th, td { display: block; }
+  thead { display: none; }
+  td { border: 0; padding: 4px 0; }
+  td:first-child { width: auto; padding-top: 12px; }
+  tr { border-bottom: 1px solid var(--borde); padding-bottom: 8px; }
+}
